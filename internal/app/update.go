@@ -317,6 +317,9 @@ func (a *App) CheckUpdates(ctx context.Context) {
 	}
 }
 
+// keepPerChannel: so viele Releases je Kanal hält der Cache (die Seite zeigt 3, „Mehr“ den Rest).
+const keepPerChannel = 20
+
 // updateCacheKey: letzter Stand der Releases in der kv-Tabelle, damit ein Neustart nicht erneut GitHub fragt.
 const updateCacheKey = "update-releases"
 
@@ -396,6 +399,15 @@ func (a *App) fetchReleases(ctx context.Context, force bool) ([]release, string)
 		fresh = append(fresh, release{Version: strings.TrimPrefix(r.Tag, "v"), Channel: channel, Date: date, Notes: r.Body, URL: r.URL, Published: r.Published})
 	}
 	sort.SliceStable(fresh, func(i, k int) bool { return fresh[i].Published > fresh[k].Published })
+	// Gespeichert werden je Kanal nur die letzten keepPerChannel Releases; ältere sind nicht relevant.
+	kept, count := []release{}, map[string]int{}
+	for _, r := range fresh {
+		if count[r.Channel] < keepPerChannel {
+			kept = append(kept, r)
+			count[r.Channel]++
+		}
+	}
+	fresh = kept
 	c.releases = fresh
 	if b, err := json.Marshal(storedReleases{At: c.at.UnixMilli(), Repo: repo, Releases: fresh}); err == nil {
 		if err := a.DB.Set(updateCacheKey, string(b)); err != nil {
@@ -527,9 +539,6 @@ func (a *App) handleUpdate(w http.ResponseWriter, r *http.Request) {
 	out["geprueft"] = a.updates.at.UnixMilli()
 	a.updates.mu.Unlock()
 	list, rec, curChannel := a.channelView(releases)
-	if len(list) > 3 {
-		list = list[:3] // die letzten 3 des gewählten Kanals
-	}
 	out["versionen"], out["aktuell_kanal"] = list, curChannel
 	newIn := map[string]bool{}
 	for _, ch := range []string{"stable", "beta", "nightly"} {

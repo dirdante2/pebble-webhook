@@ -2652,6 +2652,7 @@ async function zeigeUpdate() {
   const KANAL_TEXT = { stable: tx('stable – Langzeit-Versionen'), beta: tx('beta – neue Funktionen, noch nicht ausgereift'), nightly: tx('nightly – jede Änderung, ungetestet') };
   let u = null;
   let reiter = 'updates';
+  let alle = false; // „Mehr“: alle gespeicherten Versionen des Kanals statt der letzten 3
   const zeigeLog = (titel, text) => {
     document.querySelector('dialog.logblatt')?.remove();
     const d = document.createElement('dialog');
@@ -2694,7 +2695,8 @@ async function zeigeUpdate() {
       <nav class="btn-group unter" aria-label="Kanal">${(u.kanaele || []).map((k) => T`<button class="btn${k === u.kanal ? ' aktiv' : ''}" data-kanal="${k}" aria-pressed="${k === u.kanal}">${k}${u.kanal_neu?.[k] ? T` <span class="kanalneu" title="Neuere Version als die installierte">${updateSymbol}</span>` : ''}</button>`).join('')}</nav>
       <p class="leise">${esc(KANAL_TEXT[u.kanal] || '')}</p>
       ${wechsel ? T`<div class="hinweis warn">${esc(tx('Installiert ist {0} aus {1}. Zum Wechsel auf {2} die neueste Version dort installieren.', u.aktuell, tx(u.aktuell_kanal), u.kanal))}</div>` : ''}
-      ${liste.length ? liste.map(zeile).join('') : u.fehler ? '' : T('<p class="leise">In diesem Kanal gibt es noch keine Version.</p>')}
+      ${liste.length ? (alle ? liste : liste.slice(0, 3)).map(zeile).join('') : u.fehler ? '' : T('<p class="leise">In diesem Kanal gibt es noch keine Version.</p>')}
+      ${!alle && liste.length > 3 ? T`<div class="leiste"><button class="btn" data-mehr-versionen="1">Mehr (${liste.length - 3})</button></div>` : ''}
       ${liste.length && !liste.some((r) => r.neu) ? T('<p class="leise">Keine neuere Version als die installierte in diesem Kanal.</p>') : ''}
       ${u.installierbar ? T('<p class="leise">Vor jedem Wechsel werden Programm und Datenbank gesichert.</p>') : T('<div class="hinweis">Installieren aus der App braucht die Installation per <code>install.sh</code>; sonst das Skript mit <code>--version</code> ausführen.</div>')}
       <p class="leise">${esc(u.quelle || 'aus')}${u.geprueft ? T` · geprüft ${zeit(u.geprueft)}` : ''}</p>
@@ -2725,11 +2727,13 @@ async function zeigeUpdate() {
       return r ? zeigeLog(r.version, r.aenderungen) : zeigeLog(u.aktuell, u.aktuell_aenderungen);
     }
     if (b.dataset.reiter) { reiter = b.dataset.reiter; return laden(false); }
+    if (b.dataset.mehrVersionen) { alle = true; return laden(false); }
     b.disabled = true;
     try {
       if (b.dataset.pruefen) { await laden(true); return ladeZaehler(); }
       if (b.dataset.kanal) {
         if (b.dataset.kanal === u.kanal) return;
+        alle = false;
         await api('/api/update/kanal', { method: 'POST', body: { kanal: b.dataset.kanal } });
         ladeZaehler();
         return laden(false);

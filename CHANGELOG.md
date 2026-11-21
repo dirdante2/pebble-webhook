@@ -7,6 +7,11 @@ Version numbers X.Y.Z:
 - **Y** – a new feature (e.g. appointments, multiple languages, theme choice with day/night mode).
 - **Z** – all other UI changes and small bug fixes; safe to install or roll back at any time.
 
+## [1.27.10] - 2026-11-22
+
+### Changed
+- Updates: the cache keeps the last 20 releases per channel; older ones are dropped. The page shows 3, "Mehr" shows the rest of the chosen channel.
+
 ## [1.27.9] - 2026-11-22
 
 ### Changed
