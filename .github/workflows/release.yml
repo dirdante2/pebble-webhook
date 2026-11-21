@@ -1,0 +1,90 @@
+# Builds and publishes releases for the three update channels:
+#   nightly – every push to main: X.Y.Z-nightly.YYYYMMDDHHMM (VERSION file + build time), pre-release, newest 10 kept
+#   beta    – tag vX.Y.Z-beta.N: pre-release, notes from the RELEASES.md section X.Y.Z-beta.N (required)
+#   stable  – tag vX.Y.Z: release, notes from the RELEASES.md section X.Y.Z (required)
+name: release
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Version and notes
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          # section "## [X]" of a notes file, without its heading
+          section() { awk -v h="## [$1]" 'index($0, h) == 1 {f=1; next} /^## \[/ {f=0} f' "$2" | sed '/./,$!d'; }
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+            [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-beta\.[0-9]+)?$ ]] || { echo "tag must be vX.Y.Z or vX.Y.Z-beta.N"; exit 1; }
+            # beta and stable: the summarised section from RELEASES.md (required)
+            section "$VERSION" RELEASES.md > notes.md
+            [ -s notes.md ] || { echo "RELEASES.md has no section ## [$VERSION]"; exit 1; }
+            PRE=$([[ "$VERSION" == *-* ]] && echo true || echo false)
+          else
+            VERSION="$(cat VERSION)-nightly.$(date -u +%Y%m%d%H%M)"
+            # nightly: the CHANGELOG.md section of this version, else the commit messages since the last nightly
+            section "$(cat VERSION)" CHANGELOG.md > notes.md
+            if [ ! -s notes.md ]; then
+              LAST="$(git tag -l 'v*-nightly.*' --sort=-creatordate | head -1)"
+              { echo "Nightly build of ${GITHUB_SHA::7} – untested."; echo
+                git log --no-merges --format='- %s' ${LAST:+$LAST..}HEAD | head -40; } > notes.md
+            fi
+            PRE=true
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$PRE" >> "$GITHUB_OUTPUT"
+
+      - name: Build
+        shell: bash
+        run: |
+          set -euo pipefail
+          go vet ./...
+          mkdir -p out
+          for ARCH in amd64 arm64; do
+            CGO_ENABLED=0 GOOS=linux GOARCH=$ARCH go build -trimpath \
+              -ldflags "-s -w -X 'main.version=${{ steps.meta.outputs.version }}'" \
+              -o out/pebble-webhook-linux-$ARCH ./cmd/pebble-webhook
+          done
+          cp install.sh out/
+          (cd out && sha256sum pebble-webhook-linux-* install.sh > SHA256SUMS)
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          V="${{ steps.meta.outputs.version }}"
+          FLAGS=()
+          [ "${{ steps.meta.outputs.prerelease }}" = true ] && FLAGS+=(--prerelease --latest=false)
+          gh release create "v$V" out/* --title "$V" --notes-file notes.md --target "$GITHUB_SHA" "${FLAGS[@]}"
+
+      - name: Keep the newest 10 nightlies
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          gh release list --limit 200 --json tagName,createdAt --jq '.[] | select(.tagName | contains("-nightly.")) | .tagName' \
+            | tail -n +11 | xargs -r -n1 gh release delete --yes --cleanup-tag

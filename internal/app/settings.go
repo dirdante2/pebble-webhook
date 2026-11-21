@@ -1,0 +1,297 @@
+package app
+
+import (
+	"context"
+	"crypto/subtle"
+	"fmt"
+	"log"
+	"net/http"
+	"os"
+	"strings"
+	"sync"
+	"syscall"
+	"time"
+
+	"pebble-webhook/internal/config"
+	"pebble-webhook/internal/store"
+)
+
+// Einstellungen: alle Werte außer den Start-Werten liegen in der Datenbank (kv „einstellung:…“) und werden
+// über die Web-Oberfläche gepflegt – beim ersten Start im Einrichtungsassistenten, danach unter Status →
+// Einstellungen. Nach dem Speichern beendet sich der Dienst; systemd startet ihn mit den neuen Werten neu.
+
+// ErrNotConfigured: es gibt noch keine Einstellungen (Ersteinrichtung nötig).
+var ErrNotConfigured = fmt.Errorf("noch nicht eingerichtet")
+
+// LoadSettings liest die Einstellungen aus der Datenbank. Gibt es noch keine, übernimmt es einmalig die Werte
+// einer alten env-Datei (Umgebung), sofern dort eine öffentliche Adresse steht.
+func LoadSettings(db *store.Store, boot config.Bootstrap) (*config.Config, error) {
+	values, err := db.Settings()
+	if err != nil {
+		return nil, err
+	}
+	if values["PUBLIC_URL"] == "" {
+		imported := map[string]string{}
+		for _, f := range config.Fields {
+			if v := strings.TrimSpace(os.Getenv(f.Key)); v != "" {
+				imported[f.Key] = v
+			}
+		}
+		if imported["PUBLIC_URL"] == "" {
+			return nil, ErrNotConfigured
+		}
+		if err := db.SaveSettings(imported); err != nil {
+			return nil, err
+		}
+		log.Printf("Einstellungen: %d Werte aus der env-Datei übernommen; gepflegt werden sie ab jetzt in der Web-App", len(imported))
+		values = imported
+	}
+	return config.FromValues(boot, func(k string) string { return values[k] })
+}
+
+// restartSoon beendet den Dienst kurz nach der Antwort; systemd (Restart=always) startet ihn neu.
+func restartSoon() {
+	go func() {
+		time.Sleep(800 * time.Millisecond)
+		log.Printf("Einstellungen gespeichert: Neustart")
+		syscall.Kill(os.Getpid(), syscall.SIGTERM)
+	}()
+}
+
+// settingsView liefert die Felder mit den gespeicherten Werten; Geheimnisse nur als „gesetzt“.
+func settingsView(values map[string]string, generate bool) []map[string]any {
+	out := make([]map[string]any, 0, len(config.Fields))
+	for _, f := range config.Fields {
+		v, set := values[f.Key]
+		m := map[string]any{"key": f.Key, "gruppe": f.Group, "name": f.Label, "hilfe": f.Help, "art": f.Kind,
+			"vorgabe": f.Default, "pflicht": f.Required, "auswahl": f.Choices}
+		switch {
+		case f.Kind == "secret":
+			m["gesetzt"] = set && v != ""
+			m["wert"] = ""
+			if generate && f.Generate && !(set && v != "") {
+				m["wert"] = config.NewSecret() // im Assistenten vorgeschlagen; sichtbar, damit man ihn in die Pebble-App übernimmt
+			}
+		case set:
+			m["wert"] = v
+		default:
+			m["wert"] = f.Default
+		}
+		out = append(out, m)
+	}
+	return out
+}
+
+// mergeSettings übernimmt die eingegebenen Werte: nur bekannte Schlüssel; ein leeres Geheimnis behält den alten Wert.
+func mergeSettings(old, in map[string]string) map[string]string {
+	merged := map[string]string{}
+	for k, v := range old {
+		merged[k] = v
+	}
+	for _, f := range config.Fields {
+		v, ok := in[f.Key]
+		if !ok {
+			continue
+		}
+		v = strings.TrimSpace(v)
+		if f.Kind == "secret" && v == "" {
+			continue
+		}
+		if f.Kind == "url" {
+			v = strings.TrimRight(v, "/")
+		}
+		merged[f.Key] = v
+	}
+	return merged
+}
+
+// --- Status → Einstellungen (angemeldet) ---
+
+func (a *App) handleSettings(w http.ResponseWriter, r *http.Request) {
+	values, err := a.DB.Settings()
+	if err != nil {
+		writeErr(w, 500, "speicher", "Datenbankfehler")
+		return
+	}
+	writeJSON(w, 200, map[string]any{"felder": settingsView(values, false)})
+}
+
+func (a *App) handleSettingsSave(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Werte map[string]string `json:"werte"`
+	}
+	if readJSON(r, &in) != nil || in.Werte == nil {
+		writeErr(w, 400, "ungueltig", "Werte nicht lesbar")
+		return
+	}
+	old, err := a.DB.Settings()
+	if err != nil {
+		writeErr(w, 500, "speicher", "Datenbankfehler")
+		return
+	}
+	merged := mergeSettings(old, in.Werte)
+	boot := config.Bootstrap{Listen: a.Cfg.Listen, DataDir: a.Cfg.DataDir, AudioDir: a.Cfg.AudioDir}
+	if _, err := config.FromValues(boot, func(k string) string { return merged[k] }); err != nil {
+		writeErr(w, 400, "ungueltig", strings.TrimPrefix(err.Error(), "Konfiguration: "))
+		return
+	}
+	if err := a.DB.SaveSettings(merged); err != nil {
+		writeErr(w, 500, "speicher", "Speichern fehlgeschlagen")
+		return
+	}
+	writeJSON(w, 200, map[string]any{"ok": true, "neustart": true})
+	restartSoon()
+}
+
+// --- Ersteinrichtung (Dienst ohne Einstellungen) ---
+
+const setupCodeKey = "ersteinrichtung:code"
+
+// SetupCode liefert den Einmal-Code des Einrichtungsassistenten; legt ihn beim ersten Aufruf an.
+func SetupCode(db *store.Store) (string, error) {
+	code, err := db.Get(setupCodeKey)
+	if err != nil || code != "" {
+		return code, err
+	}
+	code = config.NewSecret()[:24]
+	return code, db.Set(setupCodeKey, code)
+}
+
+// SetupServer bedient den Einrichtungsassistenten, solange keine gültigen Einstellungen vorliegen.
+type SetupServer struct {
+	DB      *store.Store
+	Boot    config.Bootstrap
+	Version string
+	LoadErr error // warum der Dienst nicht normal startet (nil = noch nie eingerichtet)
+
+	rateMu sync.Mutex
+	fails  int
+}
+
+func (s *SetupServer) Handler() http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { fmt.Fprintln(w, "ersteinrichtung") })
+	mux.HandleFunc("GET /api/sitzung", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, 200, map[string]any{"angemeldet": false, "eingerichtet": false, "ersteinrichtung": true})
+	})
+	mux.HandleFunc("GET /api/ersteinrichtung", s.handleGet)
+	mux.HandleFunc("POST /api/ersteinrichtung/openai", s.handleCheckOpenAI)
+	mux.HandleFunc("POST /api/ersteinrichtung", s.handleSave)
+	mux.HandleFunc("/", staticHandler())
+	return securityHeaders(mux)
+}
+
+// codeOK prüft den Einmal-Code; nach 20 Fehlversuchen ist bis zum Neustart Schluss.
+func (s *SetupServer) codeOK(code string) bool {
+	s.rateMu.Lock()
+	defer s.rateMu.Unlock()
+	if s.fails >= 20 {
+		return false
+	}
+	want, err := s.DB.Get(setupCodeKey)
+	if err != nil || want == "" || subtle.ConstantTimeCompare([]byte(code), []byte(want)) != 1 {
+		s.fails++
+		return false
+	}
+	return true
+}
+
+func (s *SetupServer) handleGet(w http.ResponseWriter, r *http.Request) {
+	if !s.codeOK(r.URL.Query().Get("code")) {
+		writeErr(w, http.StatusForbidden, "code", "Der Einrichtungs-Code fehlt oder ist falsch. Er steht im Log des Dienstes (pebble ersteinrichtung).")
+		return
+	}
+	values, err := s.DB.Settings()
+	if err != nil {
+		writeErr(w, 500, "speicher", "Datenbankfehler")
+		return
+	}
+	resp := map[string]any{"felder": settingsView(values, true), "version": s.Version}
+	if s.LoadErr != nil && s.LoadErr != ErrNotConfigured {
+		resp["fehler"] = strings.TrimPrefix(s.LoadErr.Error(), "Konfiguration: ")
+	}
+	writeJSON(w, 200, resp)
+}
+
+// handleCheckOpenAI prüft einen API-Schlüssel mit einem Abruf der Modell-Liste.
+func (s *SetupServer) handleCheckOpenAI(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Code    string `json:"code"`
+		Key     string `json:"key"`
+		BaseURL string `json:"base_url"`
+	}
+	if readJSON(r, &in) != nil || r.Header.Get("X-App") != "1" || !s.codeOK(in.Code) {
+		writeErr(w, http.StatusForbidden, "code", "Nicht erlaubt")
+		return
+	}
+	err := checkOpenAI(r.Context(), in.BaseURL, in.Key)
+	writeJSON(w, 200, map[string]any{"ok": err == nil, "fehler": errText(err)})
+}
+
+func (s *SetupServer) handleSave(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Code  string            `json:"code"`
+		Werte map[string]string `json:"werte"`
+	}
+	if readJSON(r, &in) != nil || r.Header.Get("X-App") != "1" || !s.codeOK(in.Code) {
+		writeErr(w, http.StatusForbidden, "code", "Der Einrichtungs-Code fehlt oder ist falsch")
+		return
+	}
+	old, err := s.DB.Settings()
+	if err != nil {
+		writeErr(w, 500, "speicher", "Datenbankfehler")
+		return
+	}
+	merged := mergeSettings(old, in.Werte)
+	if _, err := config.FromValues(s.Boot, func(k string) string { return merged[k] }); err != nil {
+		writeErr(w, 400, "ungueltig", strings.TrimPrefix(err.Error(), "Konfiguration: "))
+		return
+	}
+	if err := s.DB.SaveSettings(merged); err != nil {
+		writeErr(w, 500, "speicher", "Speichern fehlgeschlagen")
+		return
+	}
+	s.DB.Set(setupCodeKey, "")
+	resp := map[string]any{"ok": true, "adresse": merged["PUBLIC_URL"]}
+	// Ohne Passkey geht es direkt zur Passkey-Einrichtung (Einmal-Link, nach dem Neustart unter der öffentlichen Adresse).
+	if keys, _ := s.DB.Passkeys(); len(keys) == 0 {
+		if token, err := s.DB.NewEnrollToken(enrollTTL); err == nil {
+			resp["weiter"] = merged["PUBLIC_URL"] + "/einrichten#" + token
+		}
+	}
+	writeJSON(w, 200, resp)
+	restartSoon()
+}
+
+func errText(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
+}
+
+// checkOpenAI ruft GET /models mit dem Schlüssel ab.
+func checkOpenAI(ctx context.Context, base, key string) error {
+	if key == "" {
+		return fmt.Errorf("kein Schlüssel")
+	}
+	if base == "" {
+		base = "https://api.openai.com/v1"
+	}
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, "GET", strings.TrimRight(base, "/")+"/models", nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+key)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return fmt.Errorf("OpenAI antwortet %d", resp.StatusCode)
+	}
+	return nil
+}

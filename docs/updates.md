@@ -1,0 +1,44 @@
+# Updates
+
+## Channels
+
+| Channel | What you get | Versions |
+|---|---|---|
+| `stable` (default) | long-term releases | `X.Y.Z` |
+| `beta` | new features that are not mature yet | `X.Y.Z-beta.N` |
+| `nightly` | every change as soon as it is pushed, untested | `X.Y.Z-nightly.YYYYMMDDHHMM` |
+
+Only releases of the active channel are offered. Switch the channel with the dropdown on *Status → Updates* (applies immediately) or under *Status → Konfiguration*.
+
+## In the web app
+
+The service checks the GitHub releases of the update source in the background every 4 hours. A new version of the active channel shows a dot on the menu button, an arrow next to *Updates* in the menu and a card on the status page; it opens *Updates*, which also shows the installed version with its change notes and
+
+- lists every newer version of your channel with its change notes and installs it with one click,
+- offers *Ältere Version installieren* to roll back to any older release (down to 1.14.0, the first version that keeps its settings in the database).
+
+How it works: the service writes `update-request` to its data directory; the systemd path unit `pebble-webhook-update.path` starts `install.sh --apply-request` as root. The installer stops the service, backs up the database to `/var/lib/pebble-webhook/backup/pebble-<old version>-<time>/` (the newest 5 are kept), downloads the release, verifies `SHA256SUMS`, replaces the binary and starts the service. Progress and errors are shown on the page; details in `journalctl -u pebble-webhook-update`.
+
+## On the command line
+
+```bash
+sudo bash /usr/local/lib/pebble-webhook/install.sh                         # latest stable
+sudo bash /usr/local/lib/pebble-webhook/install.sh --version 1.15.0        # any release, also to roll back
+sudo bash /usr/local/lib/pebble-webhook/install.sh --version 1.16.0-beta.1
+```
+
+To restore a database backup: stop the service, copy the files from the backup folder back to `/var/lib/pebble-webhook/`, start the service.
+
+## Releases (maintainers)
+
+Releases are built by GitHub Actions (`.github/workflows/release.yml`) for linux amd64 and arm64, with `install.sh` and `SHA256SUMS`:
+
+- **nightly**: every push to `main` → pre-release `vX.Y.Z-nightly.<time>` (X.Y.Z from the `VERSION` file, notes = the CHANGELOG.md section of that version, else the commit messages since the last nightly). The newest 10 are kept.
+- **beta**: push a tag `vX.Y.Z-beta.N` → pre-release, notes from `## [X.Y.Z-beta.N]` in RELEASES.md (required).
+- **stable**: push a tag `vX.Y.Z` → release, notes from `## [X.Y.Z]` in RELEASES.md (required).
+
+Version numbers: **X** = breaking for database or app (new database needed or hard to roll back, e.g. migrations that change columns), **Y** = new feature, **Z** = other UI changes and small fixes that can be installed or rolled back freely. Roll back only within the same X.
+
+Every version needs a section `## [X.Y.Z] - YYYY-MM-DD` in [CHANGELOG.md](../CHANGELOG.md) with short bullet points (New / Changed / Fixed); `deploy/deploy.sh` refuses to deploy without it.
+
+Beta and stable releases get a summarised section in [RELEASES.md](../RELEASES.md): only what lasts since the previous beta/stable – intermediate steps and fixes of things new in the same span are left out. The update page shows these summaries on the beta and stable channels and every single version on nightly ("Frühere Änderungen"). Bump `VERSION` with every change so nightlies sort above the last release.

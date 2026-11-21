@@ -1,0 +1,248 @@
+package app
+
+import (
+	"bytes"
+	"crypto/hmac"
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"io"
+	"mime"
+	"mime/multipart"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"time"
+
+	"pebble-webhook/internal/store"
+)
+
+const signatureWindow = 300 // Sekunden
+
+// VerifySignature prüft die Pebble-Signatur über Kopfdaten und Rohkörper.
+func VerifySignature(secret, timestamp, delivery, trigger string, isTest bool, body []byte, signature string, now time.Time) error {
+	ts, err := strconv.ParseInt(timestamp, 10, 64)
+	if err != nil {
+		return errBadTimestamp
+	}
+	if d := now.Unix() - ts; d > signatureWindow || d < -signatureWindow {
+		return errExpired
+	}
+	test := "0"
+	if isTest {
+		test = "1"
+	}
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write([]byte("v1\n" + timestamp + "\n" + delivery + "\n" + trigger + "\n" + test + "\n"))
+	mac.Write(body)
+	want := hex.EncodeToString(mac.Sum(nil))
+	if !hmac.Equal([]byte(want), []byte(strings.ToLower(strings.TrimSpace(signature)))) {
+		return errBadSignature
+	}
+	return nil
+}
+
+var (
+	errBadTimestamp = errors.New("Zeitstempel ungültig")
+	errExpired      = errors.New("Anfrage abgelaufen")
+	errBadSignature = errors.New("Signatur ungültig")
+)
+
+func hookReply(w http.ResponseWriter, status int, msg string) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(status)
+	fmt.Fprintf(w, `{"status":%q}`+"\n", msg)
+}
+
+// handleHook nimmt eine Pebble-Aufnahme an: prüfen, dauerhaft speichern, erst dann 2xx.
+func (a *App) handleHook(w http.ResponseWriter, r *http.Request) {
+	if !a.allow("hook:"+a.clientIP(r), a.Cfg.HookRatePerMin) {
+		hookReply(w, http.StatusTooManyRequests, "zu viele Anfragen")
+		return
+	}
+	token := r.Header.Get(a.Cfg.HookTokenHeader)
+	if subtle.ConstantTimeCompare([]byte(token), []byte(a.Cfg.HookToken)) != 1 {
+		hookReply(w, http.StatusUnauthorized, "nicht angemeldet")
+		return
+	}
+	if v := r.Header.Get("X-Index-Webhook-Version"); v != "1" {
+		hookReply(w, http.StatusBadRequest, "Webhook-Version nicht unterstützt")
+		return
+	}
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, a.Cfg.HookMaxBytes))
+	if err != nil {
+		hookReply(w, http.StatusRequestEntityTooLarge, "Aufnahme zu groß")
+		return
+	}
+	delivery := strings.TrimSpace(r.Header.Get("X-Index-Delivery"))
+	trigger := strings.TrimSpace(r.Header.Get("X-Index-Trigger"))
+	isTest := r.Header.Get("X-Index-Test") == "true"
+	if delivery == "" || len(delivery) > 200 || trigger == "" {
+		hookReply(w, http.StatusBadRequest, "Zustellungskennung oder Geste fehlt")
+		return
+	}
+	switch err := VerifySignature(a.Cfg.HookSecret, r.Header.Get("X-Index-Timestamp"), delivery, trigger, isTest, body,
+		r.Header.Get("X-Index-Signature"), time.Now()); err {
+	case nil:
+	case errBadTimestamp:
+		hookReply(w, http.StatusBadRequest, err.Error())
+		return
+	default:
+		hookReply(w, http.StatusUnauthorized, err.Error())
+		return
+	}
+
+	known, err := a.DB.DeliveryKnown(delivery)
+	if err != nil {
+		logf("hook: Datenbank: %v", err)
+		hookReply(w, http.StatusInternalServerError, "Speicherfehler")
+		return
+	}
+	if known {
+		hookReply(w, http.StatusOK, "bereits angenommen")
+		return
+	}
+
+	fields, audio, audioMime, err := parseMultipart(r.Header.Get("Content-Type"), body)
+	if err != nil {
+		hookReply(w, http.StatusBadRequest, "Formular nicht lesbar")
+		return
+	}
+	now := store.Now()
+	j := &store.Job{ID: store.NewID(), DeliveryID: delivery, Source: "pebble", Trigger: trigger, IsTest: isTest || fields["test"] == "true",
+		ReceivedAt: now, RecordedAt: now, PebbleText: strings.TrimSpace(fields["transcription"]), State: store.StateNew}
+	if ms, err := strconv.ParseInt(fields["recordedAt"], 10, 64); err == nil && ms > 0 {
+		j.RecordedAt = ms
+	}
+	switch {
+	case j.IsTest || trigger == "test-event":
+		// Test-Event: nur anzeigen, nichts verarbeiten.
+		j.IsTest, j.Mode, j.State = true, "test", store.StateDone
+		j.Transcript, j.TranscriptSource, j.Title = j.PebbleText, "pebble", "Test-Event"
+	case trigger == "single-click-hold":
+		j.Mode = a.Cfg.TriggerSingle
+	case trigger == "double-click-hold":
+		j.Mode = a.Cfg.TriggerDouble
+	default:
+		// Unbekannte Geste: sichtbar abweisen statt still verwerfen.
+		j.FailedAt = now
+		j.Mode, j.Failed, j.Error = "unbekannt", true, "Unbekannte Geste „"+store.Preview(trigger, 60)+"“ – keine Aktion zugeordnet"
+	}
+	if !j.IsTest && len(audio) == 0 && j.PebbleText == "" {
+		hookReply(w, http.StatusBadRequest, "weder Audio noch Transkript")
+		return
+	}
+	if len(audio) > 0 {
+		path, err := a.saveAudio(j.ID, audio, audioMime)
+		if err != nil {
+			logf("hook: Audio speichern: %v", err)
+			hookReply(w, http.StatusInsufficientStorage, "Speicher nicht verfügbar")
+			return
+		}
+		j.AudioPath, j.AudioMime = path, audioMime
+	}
+	created, err := a.DB.InsertJob(j)
+	if err != nil || !created {
+		if j.AudioPath != "" {
+			os.Remove(j.AudioPath)
+		}
+		if err != nil {
+			logf("hook: Auftrag speichern: %v", err)
+			hookReply(w, http.StatusInternalServerError, "Speicherfehler")
+			return
+		}
+		hookReply(w, http.StatusOK, "bereits angenommen")
+		return
+	}
+	a.changed(j.ID)
+	a.Wake()
+	hookReply(w, http.StatusOK, "angenommen")
+}
+
+// parseMultipart liest Textfelder und den Audio-Teil aus dem Rohkörper.
+func parseMultipart(contentType string, body []byte) (fields map[string]string, audio []byte, audioMime string, err error) {
+	mt, params, err := mime.ParseMediaType(contentType)
+	if err != nil || !strings.HasPrefix(mt, "multipart/") || params["boundary"] == "" {
+		return nil, nil, "", errors.New("kein Multipart")
+	}
+	fields = map[string]string{}
+	mr := multipart.NewReader(bytes.NewReader(body), params["boundary"])
+	for {
+		part, err := mr.NextPart()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, nil, "", err
+		}
+		data, err := io.ReadAll(part)
+		if err != nil {
+			return nil, nil, "", err
+		}
+		if part.FormName() == "audio" {
+			audio = data
+			audioMime = part.Header.Get("Content-Type")
+			if audioMime == "" {
+				audioMime = "audio/mp4"
+			}
+		} else if len(data) <= 1<<20 {
+			fields[part.FormName()] = string(data)
+		}
+	}
+	return fields, audio, audioMime, nil
+}
+
+func audioExt(mimeType string) string {
+	mt, _, _ := mime.ParseMediaType(mimeType)
+	switch mt {
+	case "audio/webm", "video/webm":
+		return ".webm"
+	case "audio/ogg":
+		return ".ogg"
+	case "audio/wav", "audio/x-wav":
+		return ".wav"
+	case "audio/mpeg":
+		return ".mp3"
+	}
+	return ".m4a"
+}
+
+// saveAudio schreibt die Aufnahme dauerhaft (fsync) unter AUDIO_DIR/JJJJ/MM/<id>.<ext>.
+func (a *App) saveAudio(id string, data []byte, mimeType string) (string, error) {
+	free, err := freeBytes(a.Cfg.AudioDir)
+	if err != nil {
+		return "", err
+	}
+	if free < a.Cfg.MinFreeBytes+uint64(len(data)) {
+		return "", fmt.Errorf("nur noch %d MB frei", free>>20)
+	}
+	dir := filepath.Join(a.Cfg.AudioDir, time.Now().Format("2006/01"))
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		return "", err
+	}
+	path := filepath.Join(dir, id+audioExt(mimeType))
+	tmp := path + ".tmp"
+	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o640)
+	if err != nil {
+		return "", err
+	}
+	_, err = f.Write(data)
+	if err == nil {
+		err = f.Sync()
+	}
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		err = os.Rename(tmp, path)
+	}
+	if err != nil {
+		os.Remove(tmp)
+		return "", err
+	}
+	return path, nil
+}

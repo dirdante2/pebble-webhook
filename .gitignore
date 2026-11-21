@@ -1,0 +1,7 @@
+/bin/
+.env
+*.db
+*.db-*
+/lokal/
+# Tests bleiben lokal (Arbeitsregel: Testdateien nie committen)
+*_test.go
