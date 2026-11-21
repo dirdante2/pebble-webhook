@@ -7,6 +7,11 @@ Version numbers X.Y.Z:
 - **Y** – a new feature (e.g. appointments, multiple languages, theme choice with day/night mode).
 - **Z** – all other UI changes and small bug fixes; safe to install or roll back at any time.
 
+## [1.28.0] - 2026-11-22
+
+### New
+- Automatic update: once a day at a chosen time (default 04:00) the newest version of the update channel is installed if it is newer than the running one; a backup is taken first. Switched on or off on the update page (default on), the time is set under Configuration (`AUTO_UPDATE`, `AUTO_UPDATE_TIME`). The page shows the last run.
+
 ## [1.27.11] - 2026-11-22
 
 ### New

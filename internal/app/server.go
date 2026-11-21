@@ -88,6 +88,7 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("GET /api/update", s(a.handleUpdate))
 	mux.HandleFunc("POST /api/update", s(a.handleUpdateInstall))
 	mux.HandleFunc("POST /api/update/zurueck", s(a.handleUpdateRestore))
+	mux.HandleFunc("POST /api/update/auto", s(a.handleUpdateAuto))
 	mux.HandleFunc("POST /api/update/kanal", s(a.handleUpdateChannel))
 	mux.HandleFunc("GET /api/pebble", s(a.handlePebbleSetup))
 	mux.HandleFunc("GET /api/kosten", s(a.handleCosts))

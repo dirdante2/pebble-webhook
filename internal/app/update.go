@@ -45,6 +45,7 @@ type updateCache struct {
 	releases []release // neueste zuerst
 	err      string
 	channel  string // aktiver Kanal; leer = aus der Einstellung
+	auto     int8   // automatisches Update: 0 = aus der Einstellung, 1 = an, 2 = aus (in der App umgeschaltet)
 }
 
 // updateInterval: so oft prüft der Dienst im Hintergrund auf neue Versionen.
@@ -106,7 +107,7 @@ func (a *App) updateChannel() string {
 type channelRelease struct {
 	release
 	Installed bool `json:"installiert"`
-	Newer     bool `json:"neu"` // später veröffentlicht als die installierte Version gebaut bzw. veröffentlicht wurde
+	Newer     bool `json:"neu"`       // später veröffentlicht als die installierte Version gebaut bzw. veröffentlicht wurde
 	Cached    bool `json:"vorhanden"` // liegt im lokalen Vorrat, Wechsel ohne Download
 }
 
@@ -541,7 +542,7 @@ func (a *App) handleUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	out := map[string]any{"aktuell": current, "quelle": a.Cfg.UpdateRepo, "kanal": a.updateChannel(), "kanaele": []string{"stable", "beta", "nightly"},
 		"installierbar": updateInstallable(), "status": a.updateStatus(), "versionen": []channelRelease{},
-		"mindestens": "1.14.0", "staende": a.savedStates(), "aktuell_aenderungen": now, "alle_aenderungen": allNotes}
+		"mindestens": "1.14.0", "staende": a.savedStates(), "auto": a.autoUpdateOn(), "auto_zeit": a.Cfg.AutoUpdateTime, "auto_letzt": func() string { v, _ := a.DB.Get(autoUpdateKey); return v }(), "aktuell_aenderungen": now, "alle_aenderungen": allNotes}
 	if a.Cfg.UpdateRepo == "" {
 		out["fehler"] = i18n.T("Update-Prüfung ist aus (Einstellung Update-Quelle)")
 		writeJSON(w, 200, out)
@@ -567,6 +568,29 @@ func (a *App) handleUpdate(w http.ResponseWriter, r *http.Request) {
 		out["neueste"] = rec
 	}
 	writeJSON(w, 200, out)
+}
+
+// handleUpdateAuto schaltet das automatische Update: gespeichert in den Einstellungen, wirksam sofort.
+func (a *App) handleUpdateAuto(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Aktiv bool `json:"aktiv"`
+	}
+	if readJSON(r, &in) != nil {
+		writeErr(w, 400, "ungueltig", "Angabe nicht lesbar")
+		return
+	}
+	v, mode := "inaktiv", int8(2)
+	if in.Aktiv {
+		v, mode = "aktiv", 1
+	}
+	if err := a.DB.SaveSettings(map[string]string{"AUTO_UPDATE": v}); err != nil {
+		writeErr(w, 500, "speicher", "Speichern fehlgeschlagen")
+		return
+	}
+	a.updates.mu.Lock()
+	a.updates.auto = mode
+	a.updates.mu.Unlock()
+	a.handleUpdate(w, r)
 }
 
 // handleUpdateChannel wechselt den Kanal: gespeichert in den Einstellungen, wirksam sofort (ohne Neustart).
@@ -613,11 +637,77 @@ func (a *App) handleUpdateInstall(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 404, "fehlt", "Version nicht gefunden")
 		return
 	}
-	line := a.Cfg.UpdateRepo + " " + strings.TrimPrefix(in.Version, "v") + "\n"
-	os.WriteFile(filepath.Join(a.Cfg.DataDir, "update-status"), []byte("requested "+strings.TrimPrefix(in.Version, "v")+"\n"), 0o640)
-	if err := os.WriteFile(filepath.Join(a.Cfg.DataDir, "update-request"), []byte(line), 0o640); err != nil {
+	if err := a.requestInstall(in.Version); err != nil {
 		writeErr(w, 500, "speicher", "Anfrage nicht schreibbar")
 		return
 	}
 	writeJSON(w, 200, map[string]any{"ok": true})
+}
+
+// requestInstall beauftragt den Updater (Path-Unit) mit einer Version.
+func (a *App) requestInstall(version string) error {
+	v := strings.TrimPrefix(version, "v")
+	os.WriteFile(filepath.Join(a.Cfg.DataDir, "update-status"), []byte("requested "+v+"\n"), 0o640)
+	return os.WriteFile(filepath.Join(a.Cfg.DataDir, "update-request"), []byte(a.Cfg.UpdateRepo+" "+v+"\n"), 0o640)
+}
+
+// autoUpdateOn: automatisches Update an (Einstellung AUTO_UPDATE, in der App umschaltbar ohne Neustart).
+func (a *App) autoUpdateOn() bool {
+	a.updates.mu.Lock()
+	defer a.updates.mu.Unlock()
+	switch a.updates.auto {
+	case 1:
+		return true
+	case 2:
+		return false
+	}
+	return a.Cfg.AutoUpdate
+}
+
+const autoUpdateKey = "auto-update-letzt" // „2026-11-22 1.27.12 …“: letzter Lauf und sein Ergebnis
+
+// AutoUpdate läuft im Hintergrund: einmal am Tag zur Uhrzeit AUTO_UPDATE_TIME die neueste Version des
+// gewählten Kanals installieren, wenn sie neuer ist als die laufende (der Installer sichert vorher).
+func (a *App) AutoUpdate(ctx context.Context) {
+	t := time.NewTicker(time.Minute)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case now := <-t.C:
+			if !a.autoUpdateOn() || a.Cfg.UpdateRepo == "" || now.Format("15:04") != a.Cfg.AutoUpdateTime {
+				continue
+			}
+			today := now.Format("2006-01-02")
+			if last, _ := a.DB.Get(autoUpdateKey); strings.HasPrefix(last, today) {
+				continue
+			}
+			a.DB.Set(autoUpdateKey, today+" "+a.runAutoUpdate(ctx))
+		}
+	}
+}
+
+func (a *App) runAutoUpdate(ctx context.Context) string {
+	releases, errMsg := a.fetchReleases(ctx, true)
+	if errMsg != "" {
+		logf("Automatisches Update: %s", errMsg)
+		return "fehler " + errMsg
+	}
+	_, rec, _ := a.channelView(releases)
+	switch {
+	case rec == "":
+		return "aktuell"
+	case !updateInstallable():
+		logf("Automatisches Update: %s verfügbar, aber kein Updater installiert", rec)
+		return "fehler kein Updater"
+	case strings.HasPrefix(a.updateStatus(), "requested") || strings.HasPrefix(a.updateStatus(), "running"):
+		return "läuft schon"
+	}
+	if err := a.requestInstall(rec); err != nil {
+		logf("Automatisches Update: %v", err)
+		return "fehler " + err.Error()
+	}
+	logf("Automatisches Update: installiere %s (Kanal %s)", rec, a.updateChannel())
+	return "installiert " + rec
 }

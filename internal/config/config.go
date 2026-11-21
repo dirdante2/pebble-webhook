@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"pebble-webhook/internal/i18n"
 )
@@ -72,9 +73,11 @@ type Config struct {
 	JoplinPassword string
 	JoplinRoot     string
 
-	VAPIDSubject  string
-	UpdateRepo    string // GitHub owner/repo für die Update-Prüfung; leer = aus
-	UpdateChannel string // stable | beta | nightly
+	VAPIDSubject   string
+	UpdateRepo     string // GitHub owner/repo für die Update-Prüfung; leer = aus
+	UpdateChannel  string // stable | beta | nightly
+	AutoUpdate     bool   // täglich zur Uhrzeit AutoUpdateTime die neueste Version des Kanals installieren
+	AutoUpdateTime string // HH:MM
 }
 
 // LoadFile setzt Variablen aus einer KEY=VALUE-Datei, ohne vorhandene zu überschreiben.
@@ -271,9 +274,11 @@ func FromValues(boot Bootstrap, lookup func(string) string) (*Config, error) {
 		JoplinPassword: str("JOPLIN_PASSWORD", ""),
 		JoplinRoot:     str("JOPLIN_NOTEBOOK", "Sprachnotizen"),
 
-		VAPIDSubject:  str("VAPID_SUBJECT", ""),
-		UpdateRepo:    str("UPDATE_REPO", "dirdante2/pebble-webhook"),
-		UpdateChannel: str("UPDATE_CHANNEL", "stable"),
+		VAPIDSubject:   str("VAPID_SUBJECT", ""),
+		UpdateRepo:     str("UPDATE_REPO", "dirdante2/pebble-webhook"),
+		UpdateChannel:  str("UPDATE_CHANNEL", "stable"),
+		AutoUpdate:     str("AUTO_UPDATE", "aktiv") == "aktiv",
+		AutoUpdateTime: str("AUTO_UPDATE_TIME", "04:00"),
 	}
 	if c.UpdateRepo == "aus" {
 		c.UpdateRepo = ""
@@ -322,6 +327,9 @@ func FromValues(boot Bootstrap, lookup func(string) string) (*Config, error) {
 	}
 	if c.VAPIDSubject != "" && !strings.HasPrefix(c.VAPIDSubject, "mailto:") && !strings.HasPrefix(c.VAPIDSubject, "https://") {
 		errs = append(errs, i18n.T("Kontakt für Web-Push: mailto:… oder https://…"))
+	}
+	if _, err := time.Parse("15:04", c.AutoUpdateTime); err != nil || len(c.AutoUpdateTime) != 5 {
+		errs = append(errs, i18n.T("Uhrzeit automatisches Update: HH:MM, z. B. 04:00"))
 	}
 	if c.UpdateRepo != "" && !repoRe.MatchString(c.UpdateRepo) {
 		errs = append(errs, i18n.T("Update-Quelle: owner/repo oder aus"))

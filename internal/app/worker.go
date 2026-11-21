@@ -19,6 +19,7 @@ var backoff = []time.Duration{30 * time.Second, 2 * time.Minute, 10 * time.Minut
 // ein Neustart setzt also beim letzten fertigen Schritt fort.
 func (a *App) Run(ctx context.Context) {
 	go a.CheckUpdates(ctx)
+	go a.AutoUpdate(ctx)
 	a.Cleanup()
 	lastCleanup := time.Now()
 	for {

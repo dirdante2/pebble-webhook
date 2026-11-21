@@ -2699,6 +2699,11 @@ async function zeigeUpdate() {
       ${!alle && liste.length > 3 ? T`<div class="leiste"><button class="btn" data-mehr-versionen="1">Mehr (${liste.length - 3})</button></div>` : ''}
       ${liste.length && !liste.some((r) => r.neu) ? T('<p class="leise">Keine neuere Version als die installierte in diesem Kanal.</p>') : ''}
       ${u.installierbar ? T('<p class="leise">Vor jedem Wechsel werden Programm und Datenbank gesichert.</p>') : T('<div class="hinweis">Installieren aus der App braucht die Installation per <code>install.sh</code>; sonst das Skript mit <code>--version</code> ausführen.</div>')}
+      <h2>Automatisches Update</h2>
+      <nav class="btn-group unter" aria-label="Automatisches Update">${[[true, tx('An')], [false, tx('Aus')]].map(([an, n]) => T`<button class="btn${u.auto === an ? ' aktiv' : ''}" data-auto="${an ? '1' : '0'}" aria-pressed="${u.auto === an}">${n}</button>`).join('')}</nav>
+      <p class="leise">${u.auto ? esc(tx('Täglich um {0} die neueste Version aus {1} installieren, wenn sie neuer ist (vorher Backup).', u.auto_zeit, u.kanal)) : tx('Aus – Updates nur von Hand.')}
+        <a class="konfedit" href="/status/einstellungen/AUTO_UPDATE_TIME" aria-label="${esc(tx('Uhrzeit ändern'))}" title="${esc(tx('Uhrzeit ändern'))}">${STIFT}</a></p>
+      ${u.auto_letzt ? T`<p class="leise">${esc(tx('Letzter Lauf: {0}', u.auto_letzt))}</p>` : ''}
       <p class="leise">${esc(u.quelle || 'aus')}${u.geprueft ? T` · geprüft ${zeit(u.geprueft)}` : ''}</p>
       <div class="leiste"><button class="btn" data-pruefen="1">Jetzt prüfen</button></div>`;
     const backups = T`<p class="leise">Vor jedem Update und Versionswechsel: Programm und Datenbank der Version, die lief. Zurückwechseln ersetzt beides; was seitdem dazukam, fehlt danach. Backups älter als 30 Tage werden gelöscht.</p>
@@ -2731,6 +2736,10 @@ async function zeigeUpdate() {
     b.disabled = true;
     try {
       if (b.dataset.pruefen) { await laden(true); return ladeZaehler(); }
+      if (b.dataset.auto) {
+        await api('/api/update/auto', { method: 'POST', body: { aktiv: b.dataset.auto === '1' } });
+        return laden(false);
+      }
       if (b.dataset.kanal) {
         if (b.dataset.kanal === u.kanal) return;
         alle = false;
