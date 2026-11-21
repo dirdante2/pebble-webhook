@@ -2673,34 +2673,34 @@ async function zeigeUpdate() {
     const liste = u.versionen || [];
     const laeuft = /^(requested|running)/.test(u.status || '');
     // Installiert ist eine Version aus einem anderen Kanal (oder ein eigener Build): die neueste des gewählten Kanals ist der Wechsel.
-    const wechsel = u.neueste && u.aktuell_kanal !== u.kanal;
+    const wechsel = liste.length > 0 && u.aktuell_kanal !== u.kanal;
     const status = !u.status ? '' : u.status.startsWith('error') ? T`<div class="hinweis schlecht">Letztes Update: ${esc(u.status)}</div>`
       : laeuft ? T`<div class="hinweis warn">Update läuft (${esc(u.status)}) …</div>` : '';
     const zeile = (r) => {
-      const neueste = r.version === u.neueste;
+      const neueste = r === liste[0];
       const knopf = u.installierbar && !r.installiert
         ? T`<button class="btn klein${neueste ? ' haupt' : ''}" data-installieren="${esc(r.version)}"${laeuft ? ' disabled' : ''}>Installieren</button>` : '';
       return T`<div class="karte versionzeile"><div class="versionkopf"><strong>${esc(r.version)}</strong>
-          ${r.installiert ? T('<span class="badge fertig">installiert</span>') : neueste ? (wechsel ? T('<span class="badge in_arbeit">neueste</span>') : T('<span class="badge in_arbeit">neu</span>')) : ''}
+          ${r.installiert ? T('<span class="badge fertig">installiert</span>') : ''}${neueste ? '<span class="badge neutral">latest</span>' : ''}${r.neu ? '<span class="badge in_arbeit">new</span>' : ''}
           <span class="leise">${esc(r.datum || '')}</span></div>
         <div class="versionknoepfe"><button class="btn klein" data-log="${esc(r.version)}">Änderungen</button>${knopf}</div></div>`;
     };
     const kopf = T`<h1>Updates</h1>
       <nav class="btn-group unter" aria-label="Updates">${[['updates', tx('Updates')], ['backups', tx('Backups')]].map(([k, n]) => T`<button class="btn${k === reiter ? ' aktiv' : ''}" data-reiter="${k}" aria-pressed="${k === reiter}">${n}${k === 'backups' ? ` <span class="zaehler still">${(u.staende || []).length}</span>` : ''}</button>`).join('')}</nav>
       ${status}${u.fehler ? T`<div class="hinweis warn">${esc(u.fehler)}</div>` : ''}`;
-    const updates = T`<div class="karte versionzeile aktuell"><div class="versionkopf"><span class="leise">Installiert</span><strong class="versiongross">${esc(u.aktuell)}</strong><span class="badge neutral">${esc(tx(u.aktuell_kanal || ''))}</span></div>
+    const updates = T`<div class="karte versionzeile aktuell"><div class="versionkopf"><span class="leise">Installiert</span><span class="versionzeile1"><span class="badge neutral">${esc(tx(u.aktuell_kanal || ''))}</span><strong class="versiongross">${esc(u.aktuell)}</strong></span></div>
         <div class="versionknoepfe"><button class="btn klein" data-log="">Änderungen</button></div></div>
       <h2>Kanal</h2>
-      <nav class="btn-group unter" aria-label="Kanal">${(u.kanaele || []).map((k) => T`<button class="btn${k === u.kanal ? ' aktiv' : ''}" data-kanal="${k}" aria-pressed="${k === u.kanal}">${k}</button>`).join('')}</nav>
+      <nav class="btn-group unter" aria-label="Kanal">${(u.kanaele || []).map((k) => T`<button class="btn${k === u.kanal ? ' aktiv' : ''}" data-kanal="${k}" aria-pressed="${k === u.kanal}">${k}${u.kanal_neu?.[k] ? T` <span class="kanalneu" title="Neuere Version als die installierte">${updateSymbol}</span>` : ''}</button>`).join('')}</nav>
       <p class="leise">${esc(KANAL_TEXT[u.kanal] || '')}</p>
       ${wechsel ? T`<div class="hinweis warn">${esc(tx('Installiert ist {0} aus {1}. Zum Wechsel auf {2} die neueste Version dort installieren.', u.aktuell, tx(u.aktuell_kanal), u.kanal))}</div>` : ''}
       ${liste.length ? liste.map(zeile).join('') : u.fehler ? '' : T('<p class="leise">In diesem Kanal gibt es noch keine Version.</p>')}
-      ${liste.length && !u.neueste ? T('<p class="leise">Die installierte Version ist die neueste im Kanal.</p>') : ''}
+      ${liste.length && !liste.some((r) => r.neu) ? T('<p class="leise">Keine neuere Version als die installierte in diesem Kanal.</p>') : ''}
       ${u.installierbar ? T('<p class="leise">Vor jedem Wechsel werden Programm und Datenbank gesichert.</p>') : T('<div class="hinweis">Installieren aus der App braucht die Installation per <code>install.sh</code>; sonst das Skript mit <code>--version</code> ausführen.</div>')}
       <p class="leise">${esc(u.quelle || 'aus')}${u.geprueft ? T` · geprüft ${zeit(u.geprueft)}` : ''}</p>
       <div class="leiste"><button class="btn" data-pruefen="1">Jetzt prüfen</button></div>`;
     const backups = T`<p class="leise">Vor jedem Update und Versionswechsel: Programm und Datenbank der Version, die lief. Zurückwechseln ersetzt beides; was seitdem dazukam, fehlt danach. Backups älter als 30 Tage werden gelöscht.</p>
-      ${(u.staende || []).length ? u.staende.map((st) => T`<div class="karte versionzeile"><div class="versionkopf"><strong>${esc(st.version)}</strong>${st.kanal ? T`<span class="badge neutral">${esc(tx(st.kanal))}</span>` : ''}<span class="leise">${zeit(st.zeit)}</span></div>
+      ${(u.staende || []).length ? u.staende.map((st) => T`<div class="karte versionzeile"><div class="versionkopf">${st.kanal ? T`<span class="badge neutral">${esc(tx(st.kanal))}</span>` : ''}<strong>${esc(st.version)}</strong><span class="leise">${zeit(st.zeit)}</span></div>
           <div class="versionknoepfe">${st.vollstaendig ? (u.installierbar ? T`<button class="btn klein" data-zurueck="${esc(st.name)}" data-version="${esc(st.version)}"${laeuft ? ' disabled' : ''}>Zurückwechseln</button>` : '')
     : T('<span class="leise">nur Datenbank</span>')}</div></div>`).join('') : T('<p class="leise">Noch keine Backups.</p>')}`;
     seite.innerHTML = kopf + (reiter === 'backups' ? backups : updates);

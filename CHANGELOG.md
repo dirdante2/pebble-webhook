@@ -7,6 +7,12 @@ Version numbers X.Y.Z:
 - **Y** – a new feature (e.g. appointments, multiple languages, theme choice with day/night mode).
 - **Z** – all other UI changes and small bug fixes; safe to install or roll back at any time.
 
+## [1.27.9] - 2026-11-22
+
+### Changed
+- Updates: the newest version of a channel is labelled "latest"; "new" only marks versions released later than the installed one (compared by date, since channel numbers are independent). Channel buttons show an arrow icon when that channel has something newer.
+- The channel badge stands left of the version (installed version and backups).
+
 ## [1.27.8] - 2026-11-22
 
 ### Changed

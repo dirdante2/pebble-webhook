@@ -106,6 +106,39 @@ func (a *App) updateChannel() string {
 type channelRelease struct {
 	release
 	Installed bool `json:"installiert"`
+	Newer     bool `json:"neu"` // später veröffentlicht als die installierte Version gebaut bzw. veröffentlicht wurde
+}
+
+var buildStampRe = regexp.MustCompile(`\(Build (\d{8}-\d{4})`)
+
+// installedTime: wann die laufende Version entstand – Veröffentlichung des passenden Releases, sonst der
+// Build-Stempel („(Build 20261122-0016, …)“), der Zeitstempel einer nightly, zuletzt der Installationszeitpunkt.
+// Die Nummern der Kanäle hängen nicht zusammen; „neuer“ heißt deshalb später entstanden.
+func (a *App) installedTime(releases []release) time.Time {
+	current := strings.Fields(a.Version + " ")[0]
+	ch := a.installedChannel()
+	for _, rel := range releases {
+		if rel.Version == current && rel.Channel == ch {
+			if t, err := time.Parse(time.RFC3339, rel.Published); err == nil {
+				return t
+			}
+		}
+	}
+	if m := buildStampRe.FindStringSubmatch(a.Version); m != nil {
+		if t, err := time.ParseInLocation("20060102-1504", m[1], time.Local); err == nil {
+			// Eigener Build: der Commit (und damit die nightly daraus) folgt meist erst Minuten danach.
+			return t.Add(30 * time.Minute)
+		}
+	}
+	if m := semverRe.FindStringSubmatch(current); m != nil && m[4] == "nightly" && len(m[5]) == 12 {
+		if t, err := time.Parse("200601021504", m[5]); err == nil {
+			return t
+		}
+	}
+	if fi, err := os.Stat(filepath.Join(a.Cfg.DataDir, "installed-channel")); err == nil {
+		return fi.ModTime()
+	}
+	return time.Time{}
 }
 
 // channelList: Versionen eines Kanals, neueste Veröffentlichung zuerst (die Nummern der Kanäle hängen nicht
@@ -113,6 +146,7 @@ type channelRelease struct {
 func (a *App) channelList(releases []release, channel string) []channelRelease {
 	current := strings.Fields(a.Version + " ")[0]
 	curChannel := a.installedChannel()
+	since := a.installedTime(releases)
 	list := []channelRelease{}
 	for _, rel := range releases {
 		if rel.Channel != channel {
@@ -123,7 +157,12 @@ func (a *App) channelList(releases []release, channel string) []channelRelease {
 			continue
 		}
 		// Installiert ist sie nur, wenn Nummer und Kanal stimmen (jeder Kanal kann dieselbe Nummer tragen).
-		list = append(list, channelRelease{release: rel, Installed: rel.Version == current && rel.Channel == curChannel})
+		installed := rel.Version == current && rel.Channel == curChannel
+		newer := false
+		if t, err := time.Parse(time.RFC3339, rel.Published); err == nil && !since.IsZero() {
+			newer = !installed && t.After(since.Add(time.Minute)) // eine Minute Spielraum für Build und Veröffentlichung
+		}
+		list = append(list, channelRelease{release: rel, Installed: installed, Newer: newer})
 	}
 	sort.SliceStable(list, func(i, k int) bool { return list[i].Published > list[k].Published })
 	return list
@@ -132,8 +171,8 @@ func (a *App) channelList(releases []release, channel string) []channelRelease {
 // channelView: Versionen des gewählten Kanals; empfohlen ist die neueste, sofern sie nicht schon läuft.
 func (a *App) channelView(releases []release) (list []channelRelease, recommended string, installedChannel string) {
 	list = a.channelList(releases, a.updateChannel())
-	if len(list) > 0 && !list[0].Installed {
-		recommended = list[0].Version
+	if len(list) > 0 && list[0].Newer {
+		recommended = list[0].Version // nur wirklich Neueres meldet ein Update
 	}
 	return list, recommended, a.installedChannel()
 }
@@ -492,6 +531,13 @@ func (a *App) handleUpdate(w http.ResponseWriter, r *http.Request) {
 		list = list[:3] // die letzten 3 des gewählten Kanals
 	}
 	out["versionen"], out["aktuell_kanal"] = list, curChannel
+	newIn := map[string]bool{}
+	for _, ch := range []string{"stable", "beta", "nightly"} {
+		for _, r := range a.channelList(releases, ch) {
+			newIn[ch] = newIn[ch] || r.Newer
+		}
+	}
+	out["kanal_neu"] = newIn
 	if rec != "" {
 		out["neueste"] = rec
 	}
