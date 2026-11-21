@@ -90,11 +90,6 @@ func (a version) less(b version) bool {
 	return false
 }
 
-// channelAllows: es zählt nur der aktive Kanal.
-func channelAllows(setting, channel string) bool {
-	return setting == channel
-}
-
 // updateChannel liefert den aktiven Kanal (in der App umschaltbar, ohne Neustart).
 func (a *App) updateChannel() string {
 	a.updates.mu.Lock()
@@ -105,35 +100,55 @@ func (a *App) updateChannel() string {
 	return a.updates.channel
 }
 
-// newerReleases: Versionen des aktiven Kanals, die neuer sind als die laufende (neueste zuerst).
-func (a *App) newerReleases(releases []release) (newer, older []release) {
+// channelRelease ist eine Version des gewählten Kanals mit ihrem Verhältnis zur installierten.
+type channelRelease struct {
+	release
+	Relation string `json:"verhaeltnis"` // neuer | aelter | installiert
+}
+
+// channelView: alle Versionen des gewählten Kanals (neueste zuerst, nicht älter als minRollback) und die
+// empfohlene – die neueste des Kanals, wenn sie neuer ist oder die installierte aus einem anderen Kanal stammt
+// (Kanalwechsel: von nightly auf stable soll die stable installiert werden, auch wenn ihre Nummer kleiner ist).
+func (a *App) channelView(releases []release) (list []channelRelease, recommended string, installedChannel string) {
 	channel := a.updateChannel()
-	cur, _, curOK := parseVersion(a.Version)
-	newer, older = []release{}, []release{}
+	cur, curChannel, curOK := parseVersion(a.Version)
+	current := strings.Fields(a.Version + " ")[0]
+	list = []channelRelease{}
 	for _, rel := range releases {
-		if !channelAllows(channel, rel.Channel) {
+		if rel.Channel != channel {
 			continue
 		}
 		v, _, _ := parseVersion(rel.Version)
+		if v.less(minRollback) {
+			continue
+		}
+		rc := channelRelease{release: rel, Relation: "neuer"}
 		switch {
-		case !curOK || cur.less(v):
-			newer = append(newer, rel)
-		case v.less(cur) && !v.less(minRollback):
-			older = append(older, rel)
+		case !curOK:
+		case rel.Version == current || (curChannel != rel.Channel && v[0] == cur[0] && v[1] == cur[1] && v[2] == cur[2]):
+			// gleiche Version; ein Build ohne Kanal-Endung (z. B. eigener Deploy) gilt als gleich zur Kanal-Version derselben Nummer
+			rc.Relation = "installiert"
+		case v.less(cur):
+			rc.Relation = "aelter"
+		}
+		list = append(list, rc)
+	}
+	if len(list) > 0 {
+		top := list[0]
+		if top.Relation == "neuer" || (top.Relation == "aelter" && curOK && curChannel != channel) {
+			recommended = top.Version
 		}
 	}
-	return newer, older
+	return list, recommended, curChannel
 }
 
-// AvailableUpdate: neueste Version des Kanals aus der letzten Prüfung, ohne GitHub zu fragen ("" = keine).
+// AvailableUpdate: empfohlene Version des Kanals aus der letzten Prüfung, ohne GitHub zu fragen ("" = keine).
 func (a *App) AvailableUpdate() string {
 	a.updates.mu.Lock()
 	releases := a.updates.releases
 	a.updates.mu.Unlock()
-	if newer, _ := a.newerReleases(releases); len(newer) > 0 {
-		return newer[0].Version
-	}
-	return ""
+	_, rec, _ := a.channelView(releases)
+	return rec
 }
 
 // CheckUpdates läuft im Hintergrund: beim Start und dann alle updateInterval.
@@ -293,7 +308,8 @@ func releaseNotes(current, channel string) (now string, earlier []noteSection, s
 			if !ok || !okCur {
 				continue
 			}
-			if s.Version == current || (v == cur && now == "") {
+			// Vorabversionen (1.26.1-nightly.N) gehören zum Abschnitt ihrer Nummer (## [1.26.1]).
+			if s.Version == current || (v[0] == cur[0] && v[1] == cur[1] && v[2] == cur[2] && (v == cur || cur[3] < 2) && now == "") {
 				if now == "" {
 					now = s.Text
 				}
@@ -319,7 +335,7 @@ func (a *App) handleUpdate(w http.ResponseWriter, r *http.Request) {
 	current := strings.Fields(a.Version + " ")[0]
 	now, earlier, source := releaseNotes(current, a.updateChannel())
 	out := map[string]any{"aktuell": current, "quelle": a.Cfg.UpdateRepo, "kanal": a.updateChannel(), "kanaele": []string{"stable", "beta", "nightly"},
-		"installierbar": updateInstallable(), "status": a.updateStatus(), "neuer": []release{}, "aeltere": []release{},
+		"installierbar": updateInstallable(), "status": a.updateStatus(), "versionen": []channelRelease{},
 		"mindestens": "1.14.0", "aktuell_aenderungen": now, "fruehere": earlier, "notizen": source}
 	if a.Cfg.UpdateRepo == "" {
 		out["fehler"] = i18n.T("Update-Prüfung ist aus (Einstellung Update-Quelle)")
@@ -333,10 +349,10 @@ func (a *App) handleUpdate(w http.ResponseWriter, r *http.Request) {
 	a.updates.mu.Lock()
 	out["geprueft"] = a.updates.at.UnixMilli()
 	a.updates.mu.Unlock()
-	newer, older := a.newerReleases(releases)
-	out["neuer"], out["aeltere"] = newer, older
-	if len(newer) > 0 {
-		out["neueste"] = newer[0].Version
+	list, rec, curChannel := a.channelView(releases)
+	out["versionen"], out["aktuell_kanal"] = list, curChannel
+	if rec != "" {
+		out["neueste"] = rec
 	}
 	writeJSON(w, 200, out)
 }
