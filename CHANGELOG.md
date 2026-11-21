@@ -7,6 +7,11 @@ Version numbers X.Y.Z:
 - **Y** – a new feature (e.g. appointments, multiple languages, theme choice with day/night mode).
 - **Z** – all other UI changes and small bug fixes; safe to install or roll back at any time.
 
+## [1.27.11] - 2026-11-22
+
+### New
+- Downloaded releases stay on the server (DATA_DIR/releases); switching back to one does not download it again (checksums are still verified). The update page marks them "lokal". Releases unused for 30 days are deleted, like backups.
+
 ## [1.27.10] - 2026-11-22
 
 ### Changed

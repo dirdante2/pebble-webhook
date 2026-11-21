@@ -2682,7 +2682,7 @@ async function zeigeUpdate() {
       const knopf = u.installierbar && !r.installiert
         ? T`<button class="btn klein${neueste ? ' haupt' : ''}" data-installieren="${esc(r.version)}"${laeuft ? ' disabled' : ''}>Installieren</button>` : '';
       return T`<div class="karte versionzeile"><div class="versionkopf"><strong>${esc(r.version)}</strong>
-          ${r.installiert ? T('<span class="badge fertig">installiert</span>') : ''}${neueste ? '<span class="badge neutral">latest</span>' : ''}${r.neu ? '<span class="badge in_arbeit">new</span>' : ''}
+          ${r.installiert ? T('<span class="badge fertig">installiert</span>') : ''}${neueste ? '<span class="badge neutral">latest</span>' : ''}${r.neu ? '<span class="badge in_arbeit">new</span>' : ''}${r.vorhanden && !r.installiert ? T('<span class="badge neutral" title="Liegt lokal vor, Wechsel ohne Download">lokal</span>') : ''}
           <span class="leise">${esc(r.datum || '')}</span></div>
         <div class="versionknoepfe"><button class="btn klein" data-log="${esc(r.version)}">Änderungen</button>${knopf}</div></div>`;
     };

@@ -107,6 +107,7 @@ type channelRelease struct {
 	release
 	Installed bool `json:"installiert"`
 	Newer     bool `json:"neu"` // später veröffentlicht als die installierte Version gebaut bzw. veröffentlicht wurde
+	Cached    bool `json:"vorhanden"` // liegt im lokalen Vorrat, Wechsel ohne Download
 }
 
 var buildStampRe = regexp.MustCompile(`\(Build (\d{8}-\d{4})`)
@@ -162,7 +163,8 @@ func (a *App) channelList(releases []release, channel string) []channelRelease {
 		if t, err := time.Parse(time.RFC3339, rel.Published); err == nil && !since.IsZero() {
 			newer = !installed && t.After(since.Add(time.Minute)) // eine Minute Spielraum für Build und Veröffentlichung
 		}
-		list = append(list, channelRelease{release: rel, Installed: installed, Newer: newer})
+		_, errCached := os.Stat(filepath.Join(a.Cfg.DataDir, "releases", rel.Version, "SHA256SUMS"))
+		list = append(list, channelRelease{release: rel, Installed: installed, Newer: newer, Cached: errCached == nil})
 	}
 	sort.SliceStable(list, func(i, k int) bool { return list[i].Published > list[k].Published })
 	return list
@@ -234,8 +236,22 @@ func (a *App) savedStates() []savedState {
 // backupRetention: Backups älter als das löscht die tägliche Bereinigung (und der Installer beim nächsten Update).
 const backupRetention = 30 * 24 * time.Hour
 
-// cleanBackups löscht Backups älter als backupRetention; das jüngste bleibt immer.
+// cleanBackups löscht Backups älter als backupRetention (das jüngste bleibt immer) und heruntergeladene
+// Releases im lokalen Vorrat (DATA_DIR/releases), die so lange nicht mehr genutzt wurden.
 func (a *App) cleanBackups() {
+	cache := filepath.Join(a.Cfg.DataDir, "releases")
+	entries, _ := os.ReadDir(cache)
+	for _, e := range entries {
+		fi, err := e.Info()
+		if err != nil || !e.IsDir() || time.Since(fi.ModTime()) < backupRetention {
+			continue
+		}
+		if err := os.RemoveAll(filepath.Join(cache, e.Name())); err != nil {
+			logf("Release-Vorrat: %s: %v", e.Name(), err)
+			continue
+		}
+		logf("Release-Vorrat: %s gelöscht (30 Tage nicht genutzt)", e.Name())
+	}
 	states := a.savedStates()
 	for i, st := range states {
 		if i == 0 || time.Since(time.UnixMilli(st.At)) < backupRetention {

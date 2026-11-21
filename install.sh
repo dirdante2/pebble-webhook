@@ -78,16 +78,31 @@ trap 'rm -rf "$TMP"' EXIT
 # --- 1. get the program ---
 case "$MODE" in
     release)
-        command -v curl >/dev/null || { apt-get update -q && apt-get install -yq curl ca-certificates; }
-        if [ -n "$VERSION" ]; then BASE="https://github.com/$REPO/releases/download/v$VERSION"
-        else BASE="https://github.com/$REPO/releases/latest/download"; fi
-        echo "Downloading pebble-webhook ${VERSION:-latest} ($ARCH) from github.com/$REPO …"
-        curl -fsSL -o "$TMP/pebble-webhook-linux-$ARCH" "$BASE/pebble-webhook-linux-$ARCH"
-        curl -fsSL -o "$TMP/install.sh" "$BASE/install.sh"
-        curl -fsSL -o "$TMP/SHA256SUMS" "$BASE/SHA256SUMS"
+        # Downloaded releases stay in DATA_DIR/releases/<version> (unused for 30 days → deleted), so switching
+        # back and forth between versions does not download them again. Checksums are verified either way.
+        CACHE=""
+        [ -n "$VERSION" ] && CACHE="$DATA_DIR/releases/$VERSION"
+        if [ -n "$CACHE" ] && [ -f "$CACHE/SHA256SUMS" ] && [ -f "$CACHE/pebble-webhook-linux-$ARCH" ] && [ -f "$CACHE/install.sh" ]; then
+            echo "Using pebble-webhook $VERSION ($ARCH) from the local cache"
+            cp -p "$CACHE/pebble-webhook-linux-$ARCH" "$CACHE/install.sh" "$CACHE/SHA256SUMS" "$TMP/"
+            touch "$CACHE"
+        else
+            command -v curl >/dev/null || { apt-get update -q && apt-get install -yq curl ca-certificates; }
+            if [ -n "$VERSION" ]; then BASE="https://github.com/$REPO/releases/download/v$VERSION"
+            else BASE="https://github.com/$REPO/releases/latest/download"; fi
+            echo "Downloading pebble-webhook ${VERSION:-latest} ($ARCH) from github.com/$REPO …"
+            curl -fsSL -o "$TMP/pebble-webhook-linux-$ARCH" "$BASE/pebble-webhook-linux-$ARCH"
+            curl -fsSL -o "$TMP/install.sh" "$BASE/install.sh"
+            curl -fsSL -o "$TMP/SHA256SUMS" "$BASE/SHA256SUMS"
+        fi
         (cd "$TMP" && grep -E " (pebble-webhook-linux-$ARCH|install.sh)\$" SHA256SUMS | sha256sum -c --quiet -) \
             || { echo "checksum mismatch" >&2; exit 1; }
         [ "$(grep -cE " (pebble-webhook-linux-$ARCH|install.sh)\$" "$TMP/SHA256SUMS")" = 2 ] || { echo "checksums missing" >&2; exit 1; }
+        if [ -n "$CACHE" ] && [ ! -f "$CACHE/SHA256SUMS" ]; then
+            install -d -o pebble -g pebble -m 0750 "$DATA_DIR/releases" "$CACHE" 2>/dev/null || install -d -m 0750 "$DATA_DIR/releases" "$CACHE"
+            cp -p "$TMP/pebble-webhook-linux-$ARCH" "$TMP/install.sh" "$TMP/SHA256SUMS" "$CACHE/"
+        fi
+        [ -d "$DATA_DIR/releases" ] && find "$DATA_DIR/releases" -mindepth 1 -maxdepth 1 -type d -mtime +30 -exec rm -rf {} +
         install -m 0755 "$TMP/pebble-webhook-linux-$ARCH" "$TMP/pebble-webhook"
         ;;
     source)
@@ -113,6 +128,7 @@ esac
 # --- 2. user, directories, start values ---
 id pebble >/dev/null 2>&1 || useradd --system --home-dir "$DATA_DIR" --shell /usr/sbin/nologin pebble
 install -d -o pebble -g pebble -m 0750 "$DATA_DIR" "$DATA_DIR/audio"
+[ -d "$DATA_DIR/releases" ] && chown -R pebble:pebble "$DATA_DIR/releases"
 install -d -o root -g pebble -m 0750 /etc/pebble-webhook
 install -d -m 0755 "$LIB_DIR"
 if [ ! -f /etc/pebble-webhook/env ]; then
