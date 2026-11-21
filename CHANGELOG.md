@@ -7,6 +7,20 @@ Version numbers X.Y.Z:
 - **Y** – a new feature (e.g. appointments, multiple languages, theme choice with day/night mode).
 - **Z** – all other UI changes and small bug fixes; safe to install or roll back at any time.
 
+## [1.27.1] - 2026-11-21
+
+### Fixed
+- English: appointment times no longer show a stray space before the full stop; the menu says "Appointments" (the filter bar keeps the short "Dates").
+
+### Changed
+- README and screenshots in English.
+
+## [1.27.0] - 2026-11-21
+
+### New
+- Language setting German/English (`LANGUAGE`): chosen in the setup wizard (preset from the browser language, switches the wizard at once) and under Status → Configuration.
+- English covers the web app, server messages, push notifications, MCP answers and tool descriptions, Joplin note headings, date formats, and what the AI writes; transcription follows the language. Existing entries stay as they are.
+
 ## [1.26.1] - 2026-11-21
 
 ### Fixed

@@ -14,6 +14,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"pebble-webhook/internal/i18n"
 )
 
 // OAuth 2.1 für den MCP-Server (Claude, ChatGPT und andere Connectoren):
@@ -228,7 +230,7 @@ func (a *App) handleOAuthRegister(w http.ResponseWriter, r *http.Request) {
 		name = string([]rune(name)[:80])
 	}
 	if name == "" {
-		name = "Unbenannte App"
+		name = i18n.T("Unbenannte App")
 	}
 	c := &oauthClient{ID: oauthRandom(18), Name: name, RedirectURIs: in.RedirectURIs, AuthMethod: in.AuthMethod, Created: time.Now().UnixMilli()}
 	secret := ""
@@ -332,7 +334,7 @@ func (a *App) handleOAuthAuthorize(w http.ResponseWriter, r *http.Request) {
 		}
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.WriteHeader(400)
-		fmt.Fprintln(w, "Verbindung nicht möglich: "+desc)
+		fmt.Fprintln(w, i18n.T("Verbindung nicht möglich:")+" "+i18n.T(desc))
 		return
 	}
 	http.Redirect(w, r, "/verbinden?"+q.Encode(), http.StatusFound)

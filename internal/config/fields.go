@@ -21,6 +21,8 @@ type Field struct {
 
 // Fields: alle Einstellungen außer den Start-Werten (LISTEN, DATA_DIR, AUDIO_DIR).
 var Fields = []Field{
+	{Key: "LANGUAGE", Group: "Sprache", Label: "Sprache", Help: "Sprache der Web-App, der Meldungen und der Texte, die die KI schreibt; auch die Transkription richtet sich danach. Bestehende Einträge bleiben, wie sie sind.", Kind: "choice", Default: "de", Choices: []string{"de", "en"}},
+
 	{Key: "PUBLIC_URL", Group: "Adresse", Label: "Öffentliche Adresse", Help: "https-Adresse der Web-App ohne Slash am Ende; bestimmt die Passkey-Domain. Später ändern macht alle Passkeys ungültig.", Kind: "url", Required: true},
 	{Key: "TRUSTED_PROXY", Group: "Adresse", Label: "Reverse-Proxy", Help: "IP des Proxys davor; nur von dort wird X-Real-IP geglaubt. Leer = keiner.", Kind: "text"},
 

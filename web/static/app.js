@@ -5,34 +5,90 @@ const nav = document.getElementById('nav');
 const menue = document.getElementById('menue');
 const menueKnopf = document.getElementById('menueknopf');
 
+// ---------- Sprache ----------
+// Deutsch steht im Code; für Englisch liefert der Server das Wörterbuch (deutscher Text → englischer) in index.html mit.
+// tx('Text {0}', x) übersetzt einen Text; T`<p>Text</p>` und T('<p>…</p>') übersetzen die Textstücke und Attribute
+// title/aria-label/placeholder/alt fester HTML-Teile – eingesetzte Werte (Nutzerdaten) bleiben unberührt.
+const SPRACHE = document.documentElement.lang === 'en' ? 'en' : 'de';
+const LOCALE = SPRACHE === 'en' ? 'en-GB' : 'de-DE';
+const WOERTER = (() => { try { return Object.assign(Object.create(null), JSON.parse(document.getElementById('woerter')?.textContent || '{}')); } catch { return Object.create(null); } })();
+const UEBERSETZT = Object.keys(WOERTER).length > 0;
+function tx(s, ...a) {
+  const k = UEBERSETZT ? s.trim() : '';
+  const r = k in WOERTER ? s.replace(k, WOERTER[k]) : s;
+  return a.length ? r.replace(/\{(\d)\}/g, (_, i) => a[i]) : r;
+}
+// i18n:teile-anfang
+const I18N_ATTR = /(\s(?:title|aria-label|placeholder|alt)=")([^"]*)(")/g;
+function uebersetzeTeile(teile, nachschlagen) {
+  let inTag = false, q = '';
+  const attr = (s) => s.replace(I18N_ATTR, (m, a, v, z) => { const u = v.trim() ? nachschlagen(v.trim()) : undefined; return u != null ? a + v.replace(v.trim(), u) + z : m; });
+  return teile.map((s) => {
+    let out = '', text = '', tag = '';
+    const flush = () => {
+      if (!text) return;
+      const k = text.trim();
+      const u = k ? nachschlagen(k) : undefined;
+      out += u != null ? text.replace(k, u) : text;
+      text = '';
+    };
+    for (const c of s) {
+      if (inTag) {
+        tag += c;
+        if (q) { if (c === q) q = ''; } else if (c === '"') q = c; else if (c === '>') { inTag = false; out += attr(tag); tag = ''; }
+      } else if (c === '<') { flush(); inTag = true; tag = c; } else text += c;
+    }
+    flush();
+    return out + attr(tag);
+  });
+}
+// i18n:teile-ende
+const tCache = new WeakMap(), tHtml = new Map();
+const tSuche = (k) => WOERTER[k];
+function T(teile, ...werte) {
+  if (typeof teile === 'string') {
+    if (!UEBERSETZT) return teile;
+    if (!tHtml.has(teile)) tHtml.set(teile, uebersetzeTeile([teile], tSuche)[0]);
+    return tHtml.get(teile);
+  }
+  let fest = teile;
+  if (UEBERSETZT) {
+    fest = tCache.get(teile);
+    if (!fest) { fest = uebersetzeTeile([...teile], tSuche); tCache.set(teile, fest); }
+  }
+  let s = fest[0];
+  for (let i = 0; i < werte.length; i++) s += werte[i] + fest[i + 1];
+  return s;
+}
+
 // ---------- Hilfen ----------
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const zeit = (ms) => new Date(ms).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+const zeit = (ms) => new Date(ms).toLocaleString(LOCALE, { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
 // Datum und Uhrzeit ohne Jahr, für die Karten im Verlauf.
-const kurz = (ms) => new Date(ms).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
-const uhr = (ms) => new Date(ms).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
-const tag = (ms) => new Date(ms).toLocaleDateString('de-DE', { weekday: 'long', day: '2-digit', month: '2-digit', year: 'numeric' });
+const kurz = (ms) => new Date(ms).toLocaleString(LOCALE, { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+const uhr = (ms) => new Date(ms).toLocaleTimeString(LOCALE, { hour: '2-digit', minute: '2-digit' });
+const tag = (ms) => new Date(ms).toLocaleDateString(LOCALE, { weekday: 'long', day: '2-digit', month: '2-digit', year: 'numeric' });
 const neueId = () => (crypto.randomUUID ? crypto.randomUUID() : Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, '0')).join(''));
 
 // „diktat“ ist der interne Name der Art; angezeigt wird sie als Notiz (Nutzervorgabe 15.11.2026).
-const MODUS = { diktat: 'Notiz', planung: 'Planung', test: 'Test', unbekannt: 'Unbekannte Geste' };
-const STATUS = { fertig: 'fertig', in_arbeit: 'in Arbeit', wiederholung: 'wird wiederholt', fehler: 'Fehler', leer: 'keine Sprache' };
+const MODUS = { diktat: tx('Notiz'), planung: tx('Planung'), test: tx('Test'), unbekannt: tx('Unbekannte Geste') };
+const STATUS = { fertig: tx('fertig'), in_arbeit: tx('in Arbeit'), wiederholung: tx('wird wiederholt'), fehler: tx('Fehler'), leer: tx('keine Sprache') };
 // Termin: „Di 25.11., 10:00“ bzw. „Di 25.11., ganztägig“; heute und morgen beim Namen.
 const terminZeit = (t) => {
   const d = new Date(t.beginn), h = new Date();
   const morgen = new Date(h.getFullYear(), h.getMonth(), h.getDate() + 1);
-  const name = d.toDateString() === h.toDateString() ? 'heute' : d.toDateString() === morgen.toDateString() ? 'morgen'
-    : d.toLocaleDateString('de-DE', { weekday: 'short', day: '2-digit', month: '2-digit' }).replace('.,', '');
-  return `${name}, ${t.ganztag ? 'ganztägig' : uhr(t.beginn)}`;
+  const name = d.toDateString() === h.toDateString() ? tx('heute') : d.toDateString() === morgen.toDateString() ? tx('morgen')
+    : d.toLocaleDateString(LOCALE, { weekday: 'short', day: '2-digit', month: '2-digit' }).replace('.,', '');
+  return `${name}, ${t.ganztag ? tx('ganztägig') : uhr(t.beginn)}`;
 };
 // „Erinnerung“, wenn nur ein Erinnerungszeitpunkt gesagt ist („erinnere mich in 10 Minuten“), sonst „Termin“.
-const terminArt = (t) => (t.erinnerung === t.beginn ? 'Erinnerung' : 'Termin');
-const fragenText = (n) => (n === 1 ? '1 Frage' : `${n} Fragen`);
+const terminArt = (t) => (t.erinnerung === t.beginn ? tx('Erinnerung') : tx('Termin'));
+const fragenText = (n) => (n === 1 ? tx('1 Frage') : tx('{0} Fragen', n));
 const frageText = (f) => (typeof f === 'string' ? f : f.frage);
 const ZUORDNUNG = {
-  schluesselwort: 'per Schlüsselwort „Weiter“ fortgesetzt', ki: 'von der KI einer offenen Planung zugeordnet', neu: 'als neue Planung angelegt',
-  web: 'Antwort aus der Web-App', umgehaengt: 'von Hand umgehängt', neu_weil_geschlossen: 'neue Planung, weil das Ziel inzwischen geschlossen war',
+  schluesselwort: tx('per Schlüsselwort „Weiter“ fortgesetzt'), ki: tx('von der KI einer offenen Planung zugeordnet'), neu: tx('als neue Planung angelegt'),
+  web: tx('Antwort aus der Web-App'), umgehaengt: tx('von Hand umgehängt'), neu_weil_geschlossen: tx('neue Planung, weil das Ziel inzwischen geschlossen war'),
 };
 
 let meldungTimer;
@@ -50,7 +106,7 @@ class ApiFehler extends Error {
 class NetzFehler extends Error {}
 
 async function api(pfad, opt = {}) {
-  const kopf = { 'X-App': '1', ...(opt.headers || {}) };
+  const kopf = { 'X-App': '1', 'X-Sprache': SPRACHE, ...(opt.headers || {}) };
   let body = opt.body;
   if (body && !(body instanceof FormData) && typeof body !== 'string') {
     body = JSON.stringify(body);
@@ -64,14 +120,14 @@ async function api(pfad, opt = {}) {
     antwort = await fetch(pfad, { method: opt.method || 'GET', headers: kopf, body, credentials: 'same-origin', keepalive });
   } catch (e) {
     setzeNetz(false);
-    throw new NetzFehler('Keine Verbindung');
+    throw new NetzFehler(tx('Keine Verbindung'));
   }
   setzeNetz(true);
   let daten = null;
   try { daten = await antwort.json(); } catch (e) { /* leer */ }
   if (!antwort.ok) {
     if (antwort.status === 401 && !pfad.startsWith('/api/auth/')) geheZu('/anmelden', true);
-    throw new ApiFehler(antwort.status, daten?.code || '', daten?.fehler || `Fehler ${antwort.status}`);
+    throw new ApiFehler(antwort.status, daten?.code || '', daten?.fehler || T`Fehler ${antwort.status}`);
   }
   return daten;
 }
@@ -81,14 +137,14 @@ function md(text) {
   const inline = (s) => esc(s)
     .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
     .replace(/`([^`]+)`/g, '<code>$1</code>')
-    .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, T('<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>'));
   const aus = [];
   let liste = null, tabelle = null;
   const zu = () => {
-    if (liste) { aus.push(`<${liste.art}>${liste.punkte.map((p) => `<li>${p}</li>`).join('')}</${liste.art}>`); liste = null; }
+    if (liste) { aus.push(`<${liste.art}>${liste.punkte.map((p) => T`<li>${p}</li>`).join('')}</${liste.art}>`); liste = null; }
     if (tabelle) {
       const [kopf, ...rest] = tabelle;
-      aus.push(`<table><thead><tr>${kopf.map((z) => `<th>${z}</th>`).join('')}</tr></thead><tbody>${rest.map((r) => `<tr>${r.map((z) => `<td>${z}</td>`).join('')}</tr>`).join('')}</tbody></table>`);
+      aus.push(T`<table><thead><tr>${kopf.map((z) => T`<th>${z}</th>`).join('')}</tr></thead><tbody>${rest.map((r) => T`<tr>${r.map((z) => T`<td>${z}</td>`).join('')}</tr>`).join('')}</tbody></table>`);
       tabelle = null;
     }
   };
@@ -190,15 +246,15 @@ async function sendeAusgang() {
           form.set('zeit', String(p.zeit));
           if (p.audio) form.set('audio', p.audio, 'antwort');
           else form.set('text', p.text);
-          await api(p.planung ? `/api/planungen/${p.planung}/antwort` : '/api/planungen', { method: 'POST', body: form });
+          await api(p.planung ? T`/api/planungen/${p.planung}/antwort` : '/api/planungen', { method: 'POST', body: form });
         } else if (p.typ === 'notizantwort') {
-          await api(`/api/eintraege/${p.eintrag}/antwort`, { method: 'POST', body: { antworten: p.antworten } });
+          await api(T`/api/eintraege/${p.eintrag}/antwort`, { method: 'POST', body: { antworten: p.antworten } });
         } else if (p.typ === 'schliessen') {
-          await api(`/api/planungen/${p.planung}/schliessen`, { method: 'POST' });
+          await api(T`/api/planungen/${p.planung}/schliessen`, { method: 'POST' });
         } else if (p.typ === 'neustart') {
-          await api(`/api/eintraege/${p.eintrag}/neustart`, { method: 'POST' });
+          await api(T`/api/eintraege/${p.eintrag}/neustart`, { method: 'POST' });
         } else if (p.typ === 'haken') {
-          await api(`/api/listenpunkte/${p.punkt}/haken`, { method: 'POST' });
+          await api(T`/api/listenpunkte/${p.punkt}/haken`, { method: 'POST' });
         }
         await loesche('ausgang', p.client_id);
       } catch (e) {
@@ -293,7 +349,7 @@ async function zeige() {
     aktuell = { name, arg: m[1] };
     if (name === 'verlauf') aktuell.zurueck = DETAIL.includes(vorher);
     // Unterseiten (Tags, Antwort …) und der Wechsel Runde → Planung behalten die Herkunft.
-    if (name === 'eintrag' || name === 'planung') { if (vorher === 'liste') herkunft = `/liste/${vorherArg}`; else if (vorher === 'listen') herkunft = vorherArg ? `/listen/gruppe/${vorherArg}` : '/listen'; else if (!DETAIL.includes(vorher)) herkunft = null; }
+    if (name === 'eintrag' || name === 'planung') { if (vorher === 'liste') herkunft = T`/liste/${vorherArg}`; else if (vorher === 'listen') herkunft = vorherArg ? T`/listen/gruppe/${vorherArg}` : '/listen'; else if (!DETAIL.includes(vorher)) herkunft = null; }
     if (name !== 'verlauf') window.scrollTo(0, 0);
     const offen = name === 'anmelden' || name === 'einrichten' || name === 'ersteinrichtung';
     menueKnopf.hidden = offen;
@@ -313,12 +369,12 @@ async function zeige() {
       await fn(...m.slice(1));
     } catch (e) {
       // Nur melden, wenn die Seite noch offen ist: ein spät gescheiterter Abruf überschreibt sonst die nächste Ansicht.
-      if (aktuell === diese && !(e instanceof ApiFehler && e.status === 401)) seite.innerHTML = `<div class="hinweis schlecht">${esc(e.message)}</div>`;
+      if (aktuell === diese && !(e instanceof ApiFehler && e.status === 401)) seite.innerHTML = T`<div class="hinweis schlecht">${esc(e.message)}</div>`;
     }
     return;
   }
   aktuell = null;
-  seite.innerHTML = '<p class="leer">Seite nicht gefunden.</p><p class="mitte"><a class="btn" href="/">Zum Verlauf</a></p>';
+  seite.innerHTML = T('<p class="leer">Seite nicht gefunden.</p><p class="mitte"><a class="btn" href="/">Zum Verlauf</a></p>');
 }
 
 document.addEventListener('click', (e) => {
@@ -344,7 +400,7 @@ const sucheStarten = (sofort) => {
   clearTimeout(suchTimer);
   suchTimer = setTimeout(() => {
     const q = suchFeld.value.trim();
-    const ziel = q ? `/suche?q=${encodeURIComponent(q)}` : '/suche';
+    const ziel = q ? T`/suche?q=${encodeURIComponent(q)}` : '/suche';
     // Tippen auf der Suchseite ersetzt den Verlaufseintrag statt für jeden Buchstaben einen neuen anzulegen.
     geheZu(ziel, aktuell?.name === 'suche');
   }, sofort ? 0 : 350);
@@ -375,8 +431,8 @@ function markiere(text, q) {
 // Ein Wort für den Stand eines Eintrags: Verarbeitung, Termin, Planung, Liste.
 function standText(e) {
   if (e.status && e.status !== 'fertig') return [STATUS[e.status] || e.status, e.status === 'fehler' ? 'fehler' : 'in_arbeit'];
-  if (e.termin) return e.termin.bestaetigt ? ['erledigt', 'fertig'] : e.termin.verpasst ? ['verpasst', 'fehler'] : [terminZeit(e.termin), 'neutral'];
-  if (e.typ === 'planung') return e.planung_status === 'offen' ? ['offen', 'in_arbeit'] : ['abgeschlossen', 'fertig'];
+  if (e.termin) return e.termin.bestaetigt ? [tx('erledigt'), 'fertig'] : e.termin.verpasst ? [tx('verpasst'), 'fehler'] : [terminZeit(e.termin), 'neutral'];
+  if (e.typ === 'planung') return e.planung_status === 'offen' ? [tx('offen'), 'in_arbeit'] : [tx('abgeschlossen'), 'fertig'];
   return e.erledigt ? ['erledigt', 'fertig'] : ['offen', 'neutral'];
 }
 
@@ -385,15 +441,15 @@ async function zeigeSuche() {
   if (document.activeElement !== suchFeld) suchFeld.value = q;
   zeigeLeeren();
   if (q.trim().length < 2) {
-    seite.innerHTML = '<h1>Suche</h1><p class="leise">Mindestens zwei Zeichen eingeben. Gesucht wird in Titel, Wortlaut, Auswertung und Tags aller Notizen, Termine und Planungen; alle Wörter müssen vorkommen. „#46“ findet die Nummer.</p>';
+    seite.innerHTML = T('<h1>Suche</h1><p class="leise">Mindestens zwei Zeichen eingeben. Gesucht wird in Titel, Wortlaut, Auswertung und Tags aller Notizen, Termine und Planungen; alle Wörter müssen vorkommen. „#46“ findet die Nummer.</p>');
     return;
   }
-  seite.innerHTML = '<p class="leer">Sucht …</p>';
+  seite.innerHTML = T('<p class="leer">Sucht …</p>');
   let d;
   try {
-    d = await api(`/api/suche?q=${encodeURIComponent(q)}`);
+    d = await api(T`/api/suche?q=${encodeURIComponent(q)}`);
   } catch (f) {
-    seite.innerHTML = `<p class="leer">${f instanceof NetzFehler ? 'Suche nur mit Verbindung.' : esc(f.message)}</p>`;
+    seite.innerHTML = T`<p class="leer">${f instanceof NetzFehler ? tx('Suche nur mit Verbindung.') : esc(f.message)}</p>`;
     return;
   }
   if (aktuell?.name !== 'suche' || (new URLSearchParams(location.search).get('q') || '') !== q) return;
@@ -401,12 +457,12 @@ async function zeigeSuche() {
     const [stand, klasse] = standText(e);
     const art = e.termin ? terminArt(e.termin) : MODUS[e.modus] || e.modus;
     const f = e.fundstelle || {};
-    return `<a class="treffer" href="${e.typ === 'planung' ? '/planung/' : '/eintrag/'}${e.id}">
-      <div class="trefferkopf"><span class="treffertitel">${markiere(e.titel || 'Ohne Titel', q)}</span>${e.nr ? `<span class="nr">#${e.nr}</span>` : ''}</div>
+    return T`<a class="treffer" href="${e.typ === 'planung' ? '/planung/' : '/eintrag/'}${e.id}">
+      <div class="trefferkopf"><span class="treffertitel">${markiere(e.titel || tx('Ohne Titel'), q)}</span>${e.nr ? T`<span class="nr">#${e.nr}</span>` : ''}</div>
       <div class="trefferinfo"><span class="badge ${e.termin ? 'termin' : esc(e.modus)}">${esc(art)}</span><span class="badge ${klasse}">${esc(stand)}</span><span class="leise">${kurz(e.aufgenommen)}</span></div>
-      ${f.text && f.feld !== 'Titel' ? `<div class="fund"><span class="leise">${esc(f.feld)}:</span> ${markiere(f.text, q)}</div>` : ''}</a>`;
+      ${f.text && f.feld !== 'Titel' ? T`<div class="fund"><span class="leise">${esc(tx(f.feld))}:</span> ${markiere(f.text, q)}</div>` : ''}</a>`;
   };
-  seite.innerHTML = `<h1>Suche</h1><p class="leise">${d.anzahl ? `${d.anzahl} ${d.anzahl === 1 ? 'Treffer' : 'Treffer'} für „${esc(q)}“${d.anzahl > d.treffer.length ? `, die ersten ${d.treffer.length}` : ''}` : `Nichts gefunden für „${esc(q)}“.`}</p>
+  seite.innerHTML = T`<h1>Suche</h1><p class="leise">${d.anzahl ? T`${d.anzahl} ${d.anzahl === 1 ? tx('Treffer') : tx('Treffer')} für „${esc(q)}“${d.anzahl > d.treffer.length ? T`, die ersten ${d.treffer.length}` : ''}` : T`Nichts gefunden für „${esc(q)}“.`}</p>
     <div class="trefferliste">${d.treffer.map(zeile).join('')}</div>`;
 }
 
@@ -414,51 +470,51 @@ async function zeigeSuche() {
 
 // Zustand einer Planung als Zeichen mit Beschriftung: offener Kreis = offen, Haken im Kreis = abgeschlossen.
 // Grüner Haken neben dem Listen-Badge: alle Punkte dieser Notiz bzw. Planung sind abgehakt.
-const erledigtZeichen = '<span class="zustand zu" title="In der Liste abgehakt"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="8.5" fill="currentColor"/><path d="M6 10.3l2.7 2.7L14 7.6" fill="none" stroke="var(--flaeche)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg><span>erledigt</span></span>';
+const erledigtZeichen = T('<span class="zustand zu" title="In der Liste abgehakt"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="8.5" fill="currentColor"/><path d="M6 10.3l2.7 2.7L14 7.6" fill="none" stroke="var(--flaeche)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg><span>erledigt</span></span>');
 const planungZeichen = (offen) => (offen
-  ? '<span class="zustand offen" title="Planung offen"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="7.5" fill="none" stroke="currentColor" stroke-width="2"/></svg><span>offen</span></span>'
-  : '<span class="zustand zu" title="Planung abgeschlossen"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="8.5" fill="currentColor"/><path d="M6 10.3l2.7 2.7L14 7.6" fill="none" stroke="var(--flaeche)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg><span>abgeschlossen</span></span>');
+  ? T('<span class="zustand offen" title="Planung offen"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="7.5" fill="none" stroke="currentColor" stroke-width="2"/></svg><span>offen</span></span>')
+  : T('<span class="zustand zu" title="Planung abgeschlossen"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="8.5" fill="currentColor"/><path d="M6 10.3l2.7 2.7L14 7.6" fill="none" stroke="var(--flaeche)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg><span>abgeschlossen</span></span>'));
 
 // Fortlaufende Nummer eines Eintrags (#42): dieselbe in Web-App und Joplin. Ohne Nummer (noch nicht vom Server) nichts.
-const nrHtml = (nr) => (nr ? `<span class="nr">#${nr}</span> ` : '');
+const nrHtml = (nr) => (nr ? T`<span class="nr">#${nr}</span> ` : '');
 // Liste einer Gruppe mit dem Gruppennamen davor; Listen ohne Gruppe nur mit ihrem Namen.
 const listenName = (l) => (l.projekt ? `${l.projekt} › ${l.name}` : l.name);
 // Feste Nummer einer Liste (L12): so lässt sie sich im Diktat („Liste 12“) und im Skill ansprechen.
-const listenNr = (l) => (l.nr ? `<span class="nr">L${l.nr}</span> ` : '');
+const listenNr = (l) => (l.nr ? T`<span class="nr">L${l.nr}</span> ` : '');
 
 // Rechts am Listenpunkt: gelber Punkt, wenn neu seit zuletzt gesehen (offen), dann die Nummer.
 const punktEnde = (p) => {
   const neu = !p.erledigt && !p.gelesen && p.angelegt >= besuche.grenze();
   if (!neu && !p.nr) return '';
-  return `<span class="lpende">${neu ? '<span class="neupunkt" title="Neu seit dem letzten Besuch" aria-label="neu"></span>' : ''}${p.nr ? `<span class="nr">#${p.nr}</span>` : ''}</span>`;
+  return T`<span class="lpende">${neu ? T('<span class="neupunkt" title="Neu seit dem letzten Besuch" aria-label="neu"></span>') : ''}${p.nr ? T`<span class="nr">#${p.nr}</span>` : ''}</span>`;
 };
 
 // Kennzeichen einer Karte für die Mehrfachauswahl im Verlauf.
-const kartenDaten = (e) => `data-id="${e.id}" data-typ="${e.typ === 'planung' ? 'planung' : 'eintrag'}" data-frei="${e.loeschbar ? 1 : 0}"`;
+const kartenDaten = (e) => T`data-id="${e.id}" data-typ="${e.typ === 'planung' ? 'planung' : 'eintrag'}" data-frei="${e.loeschbar ? 1 : 0}"`;
 
 function karte(e) {
-  const weg = e.loeschung ? ` · wird ${new Date(e.loeschung).toDateString() === new Date().toDateString() ? `um ${uhr(e.loeschung)}` : `am ${zeit(e.loeschung)}`} gelöscht` : '';
+  const weg = e.loeschung ? ` · ${new Date(e.loeschung).toDateString() === new Date().toDateString() ? tx('wird um {0} gelöscht', uhr(e.loeschung)) : tx('wird am {0} gelöscht', zeit(e.loeschung))}` : '';
   const neu = istNeu(e) ? ' neu' : '';
   if (e.status === 'leer') {
-    return `<a class="karte leerkarte${neu}" href="/eintrag/${e.id}" ${kartenDaten(e)}><div class="zeile"><span>${nrHtml(e.nr)}<span class="badge neutral">${esc(MODUS[e.modus] || e.modus)}</span> <span class="leise">${zeit(e.aufgenommen)}</span></span>
+    return T`<a class="karte leerkarte${neu}" href="/eintrag/${e.id}" ${kartenDaten(e)}><div class="zeile"><span>${nrHtml(e.nr)}<span class="badge neutral">${esc(MODUS[e.modus] || e.modus)}</span> <span class="leise">${zeit(e.aufgenommen)}</span></span>
       <span class="badge neutral">keine Sprache</span></div><div class="leise">Keine Sprache erkannt${weg}</div></a>`;
   }
-  const fehler = e.status === 'fehler' ? `<div class="leise">${esc(e.fehler || '')}${weg}</div>` : '';
+  const fehler = e.status === 'fehler' ? T`<div class="leise">${esc(e.fehler || '')}${weg}</div>` : '';
   const schritt = e.status === 'in_arbeit' || e.status === 'wiederholung' ? ` · ${esc(e.schritt || '')}` : '';
   const planung = e.typ === 'planung';
-  const runde = planung && e.runden > 1 ? ` · ${e.runden} Runden` : '';
+  const runde = planung && e.runden > 1 ? T` · ${e.runden} Runden` : '';
   // „fertig“ ist der Normalfall und wird nicht angezeigt; rechts oben steht stattdessen Datum und Uhrzeit.
-  const stand = e.status === 'fertig' ? '' : `<span class="badge ${esc(e.status)}">${esc(STATUS[e.status] || e.status)}${schritt}</span> `;
+  const stand = e.status === 'fertig' ? '' : T`<span class="badge ${esc(e.status)}">${esc(STATUS[e.status] || e.status)}${schritt}</span> `;
   // Kurze Notizen sagt der Titel schon ganz: die Vorschau käme nur doppelt.
-  const vorschau = (e.vorschau || '').length >= 100 ? `<div class="vorschau">${esc(e.vorschau)}</div>` : '';
+  const vorschau = (e.vorschau || '').length >= 100 ? T`<div class="vorschau">${esc(e.vorschau)}</div>` : '';
   const t = e.termin;
-  const termin = t ? `<div class="terminkarte${t.verpasst ? ' verpasst' : ''}"><span>${t.verpasst ? '<span class="badge alarm">verpasst</span> ' : ''}${t.bestaetigt ? `${erledigtZeichen} ` : ''}${esc(terminZeit(t))}${t.ort ? ` · ${esc(t.ort)}` : ''}</span></div>` : ''; // Bestätigen per Wischen nach rechts
-  return `<a class="karte${neu}${t?.verpasst ? ' alarmkarte' : ''}${istErledigt(e) ? ' erledigt' : ''}" href="${planung ? '/planung/' : '/eintrag/'}${e.id}" ${kartenDaten(e)}>
-    <div class="zeile"><span>${nrHtml(e.nr)}${t ? `<span class="badge termin">${terminArt(e.termin)}</span>` : `<span class="badge ${esc(e.modus)}">${esc(MODUS[e.modus] || e.modus)}</span>`} ${planung ? planungZeichen(e.planung_status === 'offen') : ''}${e.liste ? ` <span class="badge liste">${esc(listenName(e.liste))}</span>${e.liste.erledigt ? ` ${erledigtZeichen}` : ''}` : ''}</span>
+  const termin = t ? T`<div class="terminkarte${t.verpasst ? ' verpasst' : ''}"><span>${t.verpasst ? T('<span class="badge alarm">verpasst</span> ') : ''}${t.bestaetigt ? `${erledigtZeichen} ` : ''}${esc(terminZeit(t))}${t.ort ? ` · ${esc(t.ort)}` : ''}</span></div>` : ''; // Bestätigen per Wischen nach rechts
+  return T`<a class="karte${neu}${t?.verpasst ? ' alarmkarte' : ''}${istErledigt(e) ? ' erledigt' : ''}" href="${planung ? '/planung/' : '/eintrag/'}${e.id}" ${kartenDaten(e)}>
+    <div class="zeile"><span>${nrHtml(e.nr)}${t ? T`<span class="badge termin">${terminArt(e.termin)}</span>` : T`<span class="badge ${esc(e.modus)}">${esc(MODUS[e.modus] || e.modus)}</span>`} ${planung ? planungZeichen(e.planung_status === 'offen') : ''}${e.liste ? T` <span class="badge liste">${esc(listenName(e.liste))}</span>${e.liste.erledigt ? ` ${erledigtZeichen}` : ''}` : ''}</span>
       <span class="kartenzeit">${stand}<span class="leise">${kurz(e.aufgenommen)}${runde}</span></span></div>
-    <div class="titel">${esc(e.titel || 'Ohne Titel')}</div>
-    ${termin}${vorschau}${e.tags?.length ? `<div class="tags">${e.tags.map((t) => `<span class="tagchip">${esc(t)}</span>`).join('')}</div>` : ''}${fehler}
-    ${e.fragen ? `<div class="fragezeile"><span class="badge frage">${fragenText(e.fragen)}</span><span class="btn klein haupt" role="button" data-fragen="${e.id}" data-ftyp="${planung ? 'planung' : 'eintrag'}">Beantworten</span></div>` : ''}</a>`;
+    <div class="titel">${esc(e.titel || tx('Ohne Titel'))}</div>
+    ${termin}${vorschau}${e.tags?.length ? T`<div class="tags">${e.tags.map((t) => T`<span class="tagchip">${esc(t)}</span>`).join('')}</div>` : ''}${fehler}
+    ${e.fragen ? T`<div class="fragezeile"><span class="badge frage">${fragenText(e.fragen)}</span><span class="btn klein haupt" role="button" data-fragen="${e.id}" data-ftyp="${planung ? 'planung' : 'eintrag'}">Beantworten</span></div>` : ''}</a>`;
 }
 
 // Zuletzt gesehen – für alle Geräte gemeinsam auf dem Server (POST /api/besuch). Jede Aktion (Tippen, Taste,
@@ -508,11 +564,11 @@ const sichtbar = (e) => frisch(e) || istNeu(e);
 
 // Erledigt: fester Stand der Notiz bzw. des Termins (erledigt_at), Planung geschlossen.
 const istErledigt = (e) => !!(e.typ === 'planung' ? e.planung_status === 'geschlossen' : e.termin ? e.termin.bestaetigt : e.erledigt);
-const ICON_HAKEN = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg>';
-const ICON_MUELL = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9.5 7V4.5h5V7M6.5 7l1 13h9l1-13M10 11v5.5M14 11v5.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
-const ICON_OEFFNEN = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4.5 12a7.5 7.5 0 1 0 2.2-5.3M4.5 4v4h4" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+const ICON_HAKEN = T('<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg>');
+const ICON_MUELL = T('<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9.5 7V4.5h5V7M6.5 7l1 13h9l1-13M10 11v5.5M14 11v5.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>');
+const ICON_OEFFNEN = T('<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4.5 12a7.5 7.5 0 1 0 2.2-5.3M4.5 4v4h4" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>');
 // Rechts: offener Eintrag → Haken (erledigt), erledigter → Pfeil (wieder offen).
-const wischKarte = (e) => `<div class="wisch" data-wid="${e.id}">${istErledigt(e) ? `<div class="wisch-box gut auf" aria-hidden="true">${ICON_OEFFNEN}</div>` : `<div class="wisch-box gut" aria-hidden="true">${ICON_HAKEN}</div>`}<div class="wisch-box schlecht" aria-hidden="true">${ICON_MUELL}</div>${karte(e)}</div>`;
+const wischKarte = (e) => T`<div class="wisch" data-wid="${e.id}">${istErledigt(e) ? T`<div class="wisch-box gut auf" aria-hidden="true">${ICON_OEFFNEN}</div>` : T`<div class="wisch-box gut" aria-hidden="true">${ICON_HAKEN}</div>`}<div class="wisch-box schlecht" aria-hidden="true">${ICON_MUELL}</div>${karte(e)}</div>`;
 
 // Vorgemerkte Aktionen: laufen nach WISCH_FRIST, sofort bei Seitenwechsel oder neuer Aktion; „Rückgängig“ bricht ab.
 const WISCH_FRIST = 5000;
@@ -523,11 +579,11 @@ function zeigeToast(text, rueckgaengig) {
   if (!el) {
     el = document.createElement('div');
     el.id = 'toast';
-    el.className = 'meldung toast';
+    el.className = tx('meldung toast');
     el.setAttribute('role', 'status');
     document.body.append(el);
   }
-  el.innerHTML = `<span>${esc(text)}</span>${rueckgaengig ? '<button class="btn klein">Rückgängig</button>' : ''}`;
+  el.innerHTML = T`<span>${esc(text)}</span>${rueckgaengig ? T('<button class="btn klein">Rückgängig</button>') : ''}`;
   el.hidden = false;
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => { el.hidden = true; }, WISCH_FRIST);
@@ -556,7 +612,7 @@ async function fuehreVorgemerktAus(key) {
     await v.ausfuehren();
   } catch (f) {
     v.zurueck();
-    melde(f instanceof NetzFehler ? 'Offline – nicht ausgeführt' : f.message);
+    melde(f instanceof NetzFehler ? tx('Offline – nicht ausgeführt') : f.message);
   }
 }
 function alleVorgemerktenAusfuehren() {
@@ -593,10 +649,10 @@ function wischbar(liste, { finde, aktiv, aktion }) {
     }
     ev.preventDefault();
     g.dx = Math.max(-g.karte.offsetWidth, Math.min(g.karte.offsetWidth, dx));
-    g.karte.style.transform = `translateX(${g.dx}px)`;
+    g.karte.style.transform = T`translateX(${g.dx}px)`;
     const gut = g.w.querySelector('.wisch-box.gut'), schlecht = g.w.querySelector('.wisch-box.schlecht');
-    gut.style.width = `${Math.max(0, g.dx)}px`;
-    schlecht.style.width = `${Math.max(0, -g.dx)}px`;
+    gut.style.width = T`${Math.max(0, g.dx)}px`;
+    schlecht.style.width = T`${Math.max(0, -g.dx)}px`;
     const bereit = Math.abs(g.dx) >= schwelle(g.karte);
     (g.dx > 0 ? gut : schlecht).classList.toggle('bereit', bereit);
   });
@@ -612,7 +668,7 @@ function wischbar(liste, { finde, aktiv, aktion }) {
     const richtung = dx > 0 ? 'rechts' : 'links';
     if (aktion(richtung, e, w)) {
       karte.style.transition = '';
-      karte.style.transform = `translateX(${dx > 0 ? '' : '-'}110%)`;
+      karte.style.transform = T`translateX(${dx > 0 ? '' : '-'}110%)`;
       w.classList.add('weg');
     } else {
       zuruecksetzen(w, karte);
@@ -630,13 +686,13 @@ function terminListeHtml(eintraege) {
   const sortiert = [...eintraege].filter((e) => e.termin).sort((a, b) => a.termin.beginn - b.termin.beginn);
   const offen = sortiert.filter((e) => !e.termin.bestaetigt);
   const gruppen = [
-    ['Verpasst', offen.filter((e) => e.termin.verpasst)],
-    ['Heute', offen.filter((e) => !e.termin.verpasst && new Date(e.termin.beginn).toDateString() === heute)],
-    ['Kommend', offen.filter((e) => !e.termin.verpasst && new Date(e.termin.beginn).toDateString() !== heute)],
-    ['Erledigt', sortiert.filter((e) => e.termin.bestaetigt)],
+    [tx('Verpasst'), offen.filter((e) => e.termin.verpasst)],
+    [tx('Heute'), offen.filter((e) => !e.termin.verpasst && new Date(e.termin.beginn).toDateString() === heute)],
+    [tx('Kommend'), offen.filter((e) => !e.termin.verpasst && new Date(e.termin.beginn).toDateString() !== heute)],
+    [tx('Erledigt'), sortiert.filter((e) => e.termin.bestaetigt)],
   ];
-  const html = gruppen.filter(([, liste]) => liste.length).map(([name, liste]) => `<div class="tag${name === 'Verpasst' ? ' alarm' : ''}">${name}</div>${liste.map(wischKarte).join('')}`).join('');
-  return html || '<p class="leer">Keine Einträge vorhanden.</p>';
+  const html = gruppen.filter(([, liste]) => liste.length).map(([name, liste]) => T`<div class="tag${name === tx('Verpasst') ? ' alarm' : ''}">${name}</div>${liste.map(wischKarte).join('')}`).join('');
+  return html || T('<p class="leer">Keine Einträge vorhanden.</p>');
 }
 
 // Einzeiler über dem Verlauf: nächster Termin, rechts die Zahl der Termine in den nächsten 24 Stunden;
@@ -644,20 +700,20 @@ function terminListeHtml(eintraege) {
 function terminZeileHtml(t) {
   if (!t) return '';
   const n = t.verpasst || 0;
-  const bald = t.in24h ? `<span class="zaehler" title="Termine in den nächsten 24 Stunden">${t.in24h}</span>` : '';
-  const naechster = t.naechster ? `<a class="terminzeile" href="/eintrag/${t.naechster.id}"><span class="tz-text"><strong>${esc(terminZeit(t.naechster))}</strong> · ${esc(t.naechster.titel)}</span>${bald}</a>` : '';
-  const verpasst = n ? `<button class="terminzeile alarm" data-art-wahl="termin">${n === 1 ? '1 verpasster Termin' : `${n} verpasste Termine`} – bitte bestätigen</button>` : '';
+  const bald = t.in24h ? T`<span class="zaehler" title="Termine in den nächsten 24 Stunden">${t.in24h}</span>` : '';
+  const naechster = t.naechster ? T`<a class="terminzeile" href="/eintrag/${t.naechster.id}"><span class="tz-text"><strong>${esc(terminZeit(t.naechster))}</strong> · ${esc(t.naechster.titel)}</span>${bald}</a>` : '';
+  const verpasst = n ? T`<button class="terminzeile alarm" data-art-wahl="termin">${n === 1 ? tx('1 verpasster Termin') : T`${n} verpasste Termine`} – bitte bestätigen</button>` : '';
   return verpasst + naechster;
 }
 
 // Erledigt bzw. wieder offen (Knöpfe auf Karte und Detailseite): Termin bestätigen, Listenpunkte der Notiz abhaken.
 async function setzeErledigt(id, erledigt) {
   try {
-    const e = await api(`/api/eintraege/${id}/erledigt`, { method: 'POST', body: { erledigt } });
+    const e = await api(T`/api/eintraege/${id}/erledigt`, { method: 'POST', body: { erledigt } });
     await lege('verlauf', e);
-    melde(erledigt ? 'Erledigt' : 'Wieder offen');
+    melde(erledigt ? tx('Erledigt') : tx('Wieder offen'));
   } catch (f) {
-    return melde(f instanceof NetzFehler ? 'Offline – nur mit Verbindung' : f.message);
+    return melde(f instanceof NetzFehler ? tx('Offline – nur mit Verbindung') : f.message);
   }
   if (aktuell?.neuLaden) aktuell.neuLaden();
   else zeige();
@@ -665,27 +721,27 @@ async function setzeErledigt(id, erledigt) {
 
 function listeHtml(eintraege, alleZeigen) {
   const neu = eintraege.filter(istNeu), rest = eintraege.filter((e) => !istNeu(e));
-  const gruppen = [['Neu', neu], ['Zuletzt', rest.filter(frisch)]];
-  if (alleZeigen) gruppen.push(['Älter', eintraege.filter((e) => !sichtbar(e))]);
-  const html = gruppen.filter(([, liste]) => liste.length).map(([name, liste]) => `<div class="tag">${name}</div>${liste.map(wischKarte).join('')}`).join('');
-  return html || '<p class="leer">Keine Einträge vorhanden.</p>';
+  const gruppen = [[tx('Neu'), neu], [tx('Zuletzt'), rest.filter(frisch)]];
+  if (alleZeigen) gruppen.push([tx('Älter'), eintraege.filter((e) => !sichtbar(e))]);
+  const html = gruppen.filter(([, liste]) => liste.length).map(([name, liste]) => T`<div class="tag">${name}</div>${liste.map(wischKarte).join('')}`).join('');
+  return html || T('<p class="leer">Keine Einträge vorhanden.</p>');
 }
 
 async function zeigeAusgang() {
   const box = document.getElementById('ausgang');
   if (!box) return;
   const posten = (await alle('ausgang')).sort((a, b) => a.zeit - b.zeit);
-  const name = (p) => (p.typ === 'antwort' ? (p.audio ? 'Antwort (Aufnahme)' : `Antwort: ${esc((p.text || '').slice(0, 80))}`) : p.typ === 'notizantwort' ? 'Antwort auf Rückfrage' : p.typ === 'schliessen' ? 'Planung schließen' : p.typ === 'haken' ? 'Punkt abhaken' : 'Erneut starten');
+  const name = (p) => (p.typ === 'antwort' ? (p.audio ? tx('Antwort (Aufnahme)') : T`Antwort: ${esc((p.text || '').slice(0, 80))}`) : p.typ === 'notizantwort' ? tx('Antwort auf Rückfrage') : p.typ === 'schliessen' ? tx('Planung schließen') : p.typ === 'haken' ? tx('Punkt abhaken') : tx('Erneut starten'));
   box.innerHTML = posten.map((p) => {
     if (p.zustand === 'konflikt') {
-      return `<div class="hinweis warn"><strong>Die Planung wurde inzwischen geschlossen.</strong><br>${name(p)} <span class="leise">(${zeit(p.zeit)})</span>
+      return T`<div class="hinweis warn"><strong>Die Planung wurde inzwischen geschlossen.</strong><br>${name(p)} <span class="leise">(${zeit(p.zeit)})</span>
         <div class="leiste"><button class="btn klein" data-neu="${p.client_id}">Als neue Planung</button><button class="btn klein gefahr" data-weg="${p.client_id}">Verwerfen</button></div></div>`;
     }
     if (p.zustand === 'fehler') {
-      return `<div class="hinweis schlecht">${name(p)} – nicht angenommen: ${esc(p.fehler)}
+      return T`<div class="hinweis schlecht">${name(p)} – nicht angenommen: ${esc(p.fehler)}
         <div class="leiste"><button class="btn klein" data-nochmal="${p.client_id}">Erneut senden</button><button class="btn klein gefahr" data-weg="${p.client_id}">Verwerfen</button></div></div>`;
     }
-    return `<div class="hinweis">Vorgemerkt, wird bei Verbindung gesendet: ${name(p)} <span class="leise">(${zeit(p.zeit)})</span></div>`;
+    return T`<div class="hinweis">Vorgemerkt, wird bei Verbindung gesendet: ${name(p)} <span class="leise">(${zeit(p.zeit)})</span></div>`;
   }).join('');
   box.onclick = async (ev) => {
     const b = ev.target.closest('button');
@@ -694,7 +750,7 @@ async function zeigeAusgang() {
     const p = await lies('ausgang', id);
     if (!p) return;
     if (b.dataset.weg) {
-      if (!confirm('Vorgemerkte Aktion verwerfen?')) return;
+      if (!confirm(tx('Vorgemerkte Aktion verwerfen?'))) return;
       await loesche('ausgang', id);
     } else {
       await lege('ausgang', { ...p, zustand: 'wartet', planung: b.dataset.neu ? '' : p.planung });
@@ -704,7 +760,7 @@ async function zeigeAusgang() {
   };
 }
 
-const ARTEN = [['alles', 'Alles'], ['diktat', 'Notizen'], ['termin', 'Termine'], ['planung', 'Planungen'], ['fragen', 'Fragen']];
+const ARTEN = [['alles', tx('Alles')], ['diktat', tx('Notizen')], ['termin', SPRACHE === 'en' ? 'Dates' : 'Termine'] /* „Appointments“ passt nicht in die Leiste */, ['planung', tx('Planungen')], ['fragen', tx('Fragen')]];
 const passtArt = (e, art) => (art === 'alles' || (art === 'termin' ? !!e.termin : art === 'diktat' ? e.modus === 'diktat' && !e.termin : e.modus === art));
 const passt = (e, art, tags) => (art === 'fragen' ? e.fragen > 0 : passtArt(e, art) && tags.every((t) => (e.tags || []).includes(t)));
 // Gewählte Tags des Verlaufs (alle müssen passen); früher nur einer unter „verlauf-tag“.
@@ -720,7 +776,7 @@ function gewaehlteTags() {
 async function zeigeVerlauf() {
   let art = localStorage.getItem('verlauf-art');
   if (!ARTEN.some(([a]) => a === art)) art = 'alles';
-  seite.innerHTML = `<div id="ausgang"></div><nav class="btn-group unter reiter4" id="filter" aria-label="Verlauf filtern"></nav>
+  seite.innerHTML = T`<div id="ausgang"></div><nav class="btn-group unter reiter4" id="filter" aria-label="Verlauf filtern"></nav>
     <div id="tagleiste" class="tagleiste" hidden></div>
     <div id="termine"></div>
     <div id="liste"><p class="leer">Lädt …</p></div><div id="mehr" class="mitte"></div>
@@ -733,7 +789,7 @@ async function zeigeVerlauf() {
   const maleFilter = (z) => {
     // Reiter nur mit offenen Einträgen; „Alles“ und der gewählte (auch über das Menü mit 0) bleiben immer stehen.
     const da = ARTEN.filter(([a]) => a === 'alles' || a === art || !z || z[a] > 0);
-    filter.innerHTML = da.map(([a, n]) => `<button class="btn${a === art ? ' aktiv' : ''}" data-art="${a}">${n}${z ? ` <span class="zaehler${a === 'fragen' && z[a] ? '' : ' still'}">${z[a] ?? 0}</span>` : ''}</button>`).join('');
+    filter.innerHTML = da.map(([a, n]) => T`<button class="btn${a === art ? ' aktiv' : ''}" data-art="${a}">${n}${z ? T` <span class="zaehler${a === 'fragen' && z[a] ? '' : ' still'}">${z[a] ?? 0}</span>` : ''}</button>`).join('');
   };
   let zahlen = null;
   try { zahlen = JSON.parse(localStorage.getItem('verlauf-zahlen') || 'null'); } catch (f) { /* leer */ }
@@ -777,7 +833,7 @@ async function zeigeVerlauf() {
     // Aktiver Filter sichtbar über der Liste, mit Knopf zum sofortigen Zurücksetzen.
     const tl = document.getElementById('tagleiste');
     tl.hidden = !tags.length;
-    tl.innerHTML = tags.length ? `<span class="tags">${tags.map((t) => `<span class="tagchip">${esc(t)}</span>`).join('')}</span>
+    tl.innerHTML = tags.length ? T`<span class="tags">${tags.map((t) => T`<span class="tagchip">${esc(t)}</span>`).join('')}</span>
       <button class="btn klein" data-tags-weg="1" aria-label="Tag-Filter zurücksetzen">✕ Zurücksetzen</button>` : '';
   };
   // Zurücksetzen ohne Dialog: Filter weg, Verlauf neu.
@@ -805,12 +861,12 @@ async function zeigeVerlauf() {
     const maleDialog = () => {
       const passend = kombis.filter((k) => [...wahlTags].every((t) => k.includes(t)));
       const anzahl = (n) => (wahlTags.size ? passend.filter((k) => k.includes(n)).length : gesamt(n));
-      dialog.innerHTML = `<h2>Nach Tags filtern</h2><p class="leise">${wahlTags.size ? `${passend.length} ${passend.length === 1 ? 'Eintrag trägt' : 'Einträge tragen'} alle gewählten Tags.` : 'Gezeigt werden Einträge mit allen gewählten Tags.'}</p>
+      dialog.innerHTML = T`<h2>Nach Tags filtern</h2><p class="leise">${wahlTags.size ? T`${passend.length} ${passend.length === 1 ? tx('Eintrag trägt') : tx('Einträge tragen')} alle gewählten Tags.` : tx('Gezeigt werden Einträge mit allen gewählten Tags.')}</p>
         <div class="tags wahl">${namen.map((n) => {
           const an = wahlTags.has(n), z = anzahl(n), aus = !an && wahlTags.size > 0 && z === 0;
-          return `<button class="tagchip wahl${an ? ' an' : ''}${aus ? ' aus' : ''}" data-tag="${esc(n)}" aria-pressed="${an}"${aus ? ' disabled' : ''}>${esc(n)} <span class="zahl">${z}</span></button>`;
+          return T`<button class="tagchip wahl${an ? ' an' : ''}${aus ? ' aus' : ''}" data-tag="${esc(n)}" aria-pressed="${an}"${aus ? ' disabled' : ''}>${esc(n)} <span class="zahl">${z}</span></button>`;
         }).join('')}</div>
-        <div class="leiste">${wahlTags.size ? '<button class="btn" data-aus="1">Alle abwählen</button>' : ''}<button class="btn haupt" data-zu="1">Fertig</button></div>`;
+        <div class="leiste">${wahlTags.size ? T('<button class="btn" data-aus="1">Alle abwählen</button>') : ''}<button class="btn haupt" data-zu="1">Fertig</button></div>`;
     };
     // Sofort filtern: Auswahl speichern und den Verlauf hinter dem Dialog neu aufbauen.
     const uebernehmen = () => setzeTags([...wahlTags]);
@@ -855,8 +911,8 @@ async function zeigeVerlauf() {
     maleMenue();
   };
   // seit: zuletzt gesehen, damit der Server auch Neues älter als 24 Stunden liefert.
-  const seit = () => (Number.isFinite(besuche.grenze()) ? `seit=${besuche.grenze()}` : '');
-  const abfrage = () => [art === 'alles' ? '' : `art=${art}`, ...tags.map((t) => `tag=${encodeURIComponent(t)}`), alleZeigen ? 'alle=1' : seit()].filter(Boolean).join('&');
+  const seit = () => (Number.isFinite(besuche.grenze()) ? T`seit=${besuche.grenze()}` : '');
+  const abfrage = () => [art === 'alles' ? '' : T`art=${art}`, ...tags.map((t) => T`tag=${encodeURIComponent(t)}`), alleZeigen ? 'alle=1' : seit()].filter(Boolean).join('&');
 
   // Mehrfachauswahl (langes Drücken auf eine Karte): wahl = Menge der Schlüssel „typ:id“, null = Auswahl aus.
   let wahl = null;
@@ -871,7 +927,7 @@ async function zeigeVerlauf() {
     for (const k of [...wahl]) if (!da.has(k)) wahl.delete(k);
     for (const k of karten) k.classList.toggle('gewaehlt', wahl.has(schluessel(k)));
     const aus = wahl.size ? '' : ' disabled';
-    leiste.innerHTML = `<button class="btn klein" data-w="alle">Alle sichtbaren</button>
+    leiste.innerHTML = T`<button class="btn klein" data-w="alle">Alle sichtbaren</button>
       <button class="btn klein haupt" data-w="erledigt"${aus}>${wahl.size} erledigt</button>
       <button class="btn klein gefahr" data-w="loeschen"${aus}>${wahl.size} löschen</button>
       <button class="btn klein" data-w="aus">Abbrechen</button>`;
@@ -891,7 +947,7 @@ async function zeigeVerlauf() {
     druckAus();
     druck = { x: ev.clientX, y: ev.clientY, id: ev.pointerId, timer: setTimeout(() => {
       druck = null;
-      if (k.dataset.frei !== '1') return melde('Wird noch verarbeitet – nicht auswählbar');
+      if (k.dataset.frei !== '1') return melde(tx('Wird noch verarbeitet – nicht auswählbar'));
       langSperre = true;
       wahl = new Set([schluessel(k)]);
       navigator.vibrate?.(30);
@@ -912,11 +968,11 @@ async function zeigeVerlauf() {
     aktion: (richtung, e) => {
       const planung = e.typ === 'planung';
       if (richtung === 'links') {
-        if (!e.loeschbar) { melde('Wird noch verarbeitet – nicht löschbar'); return false; }
+        if (!e.loeschbar) { melde(tx('Wird noch verarbeitet – nicht löschbar')); return false; }
         ausstehend.set(e.id, null);
         setTimeout(male, 250);
         maleTermine(termineStand);
-        vormerken(`Gelöscht: ${e.titel || 'Eintrag'}`, async () => {
+        vormerken(T`Gelöscht: ${e.titel || tx('Eintrag')}`, async () => {
           await api('/api/verlauf/loeschen', { method: 'POST', body: planung ? { eintraege: [], planungen: [e.id] } : { eintraege: [e.id], planungen: [] } });
           await loesche('verlauf', e.id);
           await loesche('eintraege', e.id);
@@ -939,12 +995,12 @@ async function zeigeVerlauf() {
       const zeigeStand = (wert) => { ausstehend.set(e.id, stand(wert)); male(); maleTermine(termineStand); };
       const senden = async (wert) => {
         try {
-          const d = await api(planung ? `/api/planungen/${e.id}/${wert ? 'schliessen' : 'oeffnen'}` : `/api/eintraege/${e.id}/erledigt`, { method: 'POST', body: planung ? undefined : { erledigt: wert } });
+          const d = await api(planung ? T`/api/planungen/${e.id}/${wert ? 'schliessen' : 'oeffnen'}` : T`/api/eintraege/${e.id}/erledigt`, { method: 'POST', body: planung ? undefined : { erledigt: wert } });
           const neu = planung ? stand(wert) : d;
           await lege('verlauf', neu);
           eintraege = eintraege.map((x) => (x.id === e.id ? neu : x));
         } catch (f) {
-          melde(f instanceof NetzFehler ? 'Offline – nicht gespeichert' : f.message);
+          melde(f instanceof NetzFehler ? tx('Offline – nicht gespeichert') : f.message);
         }
         fertigMit(e.id);
         // Zahlen und „verpasste Termine“ vom Server nachziehen.
@@ -952,7 +1008,7 @@ async function zeigeVerlauf() {
       };
       zeigeStand(erledigt);
       senden(erledigt);
-      zeigeToast(`${erledigt ? 'Erledigt' : 'Wieder offen'}: ${e.titel || 'Eintrag'}`, () => { zeigeStand(!erledigt); senden(!erledigt); });
+      zeigeToast(`${erledigt ? tx('Erledigt') : tx('Wieder offen')}: ${e.titel || tx('Eintrag')}`, () => { zeigeStand(!erledigt); senden(!erledigt); });
       return false;
     },
   });
@@ -964,7 +1020,7 @@ async function zeigeVerlauf() {
     ev.stopPropagation();
     const k = ev.target.closest('.karte[data-id]');
     if (!k) return;
-    if (k.dataset.frei !== '1') return melde('Wird noch verarbeitet – nicht löschbar');
+    if (k.dataset.frei !== '1') return melde(tx('Wird noch verarbeitet – nicht löschbar'));
     if (!wahl.delete(schluessel(k))) wahl.add(schluessel(k));
     maleWahl();
   };
@@ -985,30 +1041,30 @@ async function zeigeVerlauf() {
         const [typ, id] = [k.slice(0, k.indexOf(':')), k.slice(k.indexOf(':') + 1)];
         try {
           if (typ === 'planung') {
-            await api(`/api/planungen/${id}/schliessen`, { method: 'POST' });
+            await api(T`/api/planungen/${id}/schliessen`, { method: 'POST' });
             const e = eintraege.find((x) => x.id === id);
             if (e) await lege('verlauf', { ...e, planung_status: 'geschlossen' });
           } else {
-            await lege('verlauf', await api(`/api/eintraege/${id}/erledigt`, { method: 'POST', body: { erledigt: true } }));
+            await lege('verlauf', await api(T`/api/eintraege/${id}/erledigt`, { method: 'POST', body: { erledigt: true } }));
           }
           n++;
         } catch (f) {
-          if (f instanceof NetzFehler) { melde('Offline – nur mit Verbindung'); b.disabled = false; return; }
+          if (f instanceof NetzFehler) { melde(tx('Offline – nur mit Verbindung')); b.disabled = false; return; }
           fehler++;
         }
       }
       wahl = null;
-      melde(`${n} erledigt${fehler ? `, ${fehler} fehlgeschlagen` : ''}`);
+      melde(T`${n} erledigt${fehler ? T`, ${fehler} fehlgeschlagen` : ''}`);
       return laden();
     }
-    if (!confirm(`${wahl.size} ${wahl.size === 1 ? 'Eintrag' : 'Einträge'} in den Papierkorb legen? Planungen gehen mit allen Runden, Punkte in Listen ebenfalls. Unter Status → Papierkorb wiederherstellbar.`)) return;
+    if (!confirm(T`${wahl.size} ${wahl.size === 1 ? tx('Eintrag') : tx('Einträge')} in den Papierkorb legen? Planungen gehen mit allen Runden, Punkte in Listen ebenfalls. Unter Status → Papierkorb wiederherstellbar.`)) return;
     b.disabled = true;
     const ids = (typ) => [...wahl].filter((k) => k.startsWith(`${typ}:`)).map((k) => k.slice(typ.length + 1));
     try {
       const d = await api('/api/verlauf/loeschen', { method: 'POST', body: { eintraege: ids('eintrag'), planungen: ids('planung') } });
       for (const id of [...ids('eintrag'), ...ids('planung')]) { await loesche('verlauf', id); await loesche('eintraege', id); }
       wahl = null;
-      melde(`${d.geloescht} gelöscht${d.uebersprungen ? `, ${d.uebersprungen} fehlgeschlagen` : ''}`);
+      melde(T`${d.geloescht} gelöscht${d.uebersprungen ? T`, ${d.uebersprungen} fehlgeschlagen` : ''}`);
       await laden();
     } catch (f) {
       b.disabled = false;
@@ -1019,7 +1075,7 @@ async function zeigeVerlauf() {
   const mehrKnopf = (mehr) => {
     const box = document.getElementById('mehr');
     const zeigeAlle = !alleZeigen && aeltere > 0;
-    box.innerHTML = `${mehr ? '<button class="btn" data-m="mehr">Ältere laden</button>' : ''}${zeigeAlle ? ` <button class="btn" data-m="alle">${art === 'termin' ? `Erledigte anzeigen (${aeltere})` : `Alle anzeigen (${aeltere} ältere)`}</button>` : ''}`;
+    box.innerHTML = `${mehr ? T('<button class="btn" data-m="mehr">Ältere laden</button>') : ''}${zeigeAlle ? T` <button class="btn" data-m="alle">${art === 'termin' ? T`Erledigte anzeigen (${aeltere})` : T`Alle anzeigen (${aeltere} ältere)`}</button>` : ''}`;
     box.onclick = async (ev) => {
       const b = ev.target.closest('button[data-m]');
       if (!b) return;
@@ -1029,7 +1085,7 @@ async function zeigeVerlauf() {
         await laden();
         return;
       }
-      const d = await api(`/api/verlauf?vor=${eintraege[eintraege.length - 1].eingegangen}&${abfrage()}`);
+      const d = await api(T`/api/verlauf?vor=${eintraege[eintraege.length - 1].eingegangen}&${abfrage()}`);
       eintraege = eintraege.concat(d.eintraege);
       mehrBekannt = d.mehr;
       male();
@@ -1044,7 +1100,7 @@ async function zeigeVerlauf() {
   }
   const laden = async () => {
     try {
-      const d = await api(`/api/verlauf?${abfrage()}`);
+      const d = await api(T`/api/verlauf?${abfrage()}`);
       if (d.besuch_pause_minuten) besuche.pause(d.besuch_pause_minuten);
       if (typeof d.grenze === 'number' && !alleZeigen && art !== 'fragen' && art !== 'termin') verlaufGrenze.setze(d.grenze);
       if (aktuell?.name !== 'verlauf') return;
@@ -1077,7 +1133,7 @@ async function zeigeVerlauf() {
       window.scrollTo(0, y);
       merke();
     } catch (e) {
-      if (e instanceof NetzFehler && !eintraege.length) liste.innerHTML = '<p class="leer">Offline – noch nichts zwischengespeichert.</p>';
+      if (e instanceof NetzFehler && !eintraege.length) liste.innerHTML = T('<p class="leer">Offline – noch nichts zwischengespeichert.</p>');
       else if (!(e instanceof NetzFehler)) throw e;
     }
   };
@@ -1088,7 +1144,7 @@ async function zeigeVerlauf() {
 // Gelesen wird ein Eintrag erst durch das Öffnen seiner Seite – nicht durch das Vorladen der Details.
 async function merkeGelesen(typ, id) {
   try {
-    await api(`/api/${typ === 'planung' ? 'planungen' : 'eintraege'}/${id}/gelesen`, { method: 'POST' });
+    await api(T`/api/${typ === 'planung' ? 'planungen' : 'eintraege'}/${id}/gelesen`, { method: 'POST' });
   } catch (f) {
     return; // offline: beim nächsten Öffnen mit Verbindung
   }
@@ -1113,21 +1169,21 @@ async function holeDetails(eintraege) {
 }
 
 // Symbole für Aus-/Einklappen (Pfeile auseinander bzw. zusammen).
-const AUSKLAPPEN = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 9l5-5 5 5M7 15l5 5 5-5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
-const EINKLAPPEN = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4l5 5 5-5M7 20l5-5 5 5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+const AUSKLAPPEN = T('<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 9l5-5 5 5M7 15l5 5 5-5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>');
+const EINKLAPPEN = T('<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4l5 5 5-5M7 20l5-5 5 5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>');
 // Brotkrumen: [[Name, Pfad], …, [Name]] – alle bis auf den letzten Teil sind Links.
-const krumen = (teile) => `<nav class="krumen" aria-label="Pfad">${teile.map(([n, h], i) => (i < teile.length - 1 && h ? `<a href="${h}">${esc(n)}</a><span class="trenner" aria-hidden="true">›</span>` : `<span aria-current="page">${esc(n)}</span>`)).join('')}</nav>`;
-const gruppenPfad = (projekt) => `/listen/gruppe/${encodeURIComponent(projekt || '-')}`;
-const gruppenTitel = (projekt) => (projekt && projekt !== '-' ? projekt : 'Ohne Gruppe');
+const krumen = (teile) => T`<nav class="krumen" aria-label="Pfad">${teile.map(([n, h], i) => (i < teile.length - 1 && h ? T`<a href="${h}">${esc(n)}</a><span class="trenner" aria-hidden="true">›</span>` : T`<span aria-current="page">${esc(n)}</span>`)).join('')}</nav>`;
+const gruppenPfad = (projekt) => T`/listen/gruppe/${encodeURIComponent(projekt || '-')}`;
+const gruppenTitel = (projekt) => (projekt && projekt !== '-' ? projekt : tx('Ohne Gruppe'));
 // Pfad einer Liste: Listen › Gruppe › Liste (optional ein weiterer Teil dahinter).
-const listenKrumen = (l, ...rest) => krumen([['Listen', '/listen'], [gruppenTitel(l.projekt), gruppenPfad(l.projekt)], [`${l.nr ? `L${l.nr} ` : ''}${l.name}`, `/liste/${l.id}`], ...rest]);
+const listenKrumen = (l, ...rest) => krumen([[tx('Listen'), '/listen'], [gruppenTitel(l.projekt), gruppenPfad(l.projekt)], [`${l.nr ? `L${l.nr} ` : ''}${l.name}`, T`/liste/${l.id}`], ...rest]);
 // Notiz oder Planung: aus einer Liste geöffnet Listen › Gruppe › Liste › #Nr, sonst Verlauf › #Nr.
 // Zurück zum Verlauf stellt Filter, Liste und Scrollstand wieder her (verlaufStand).
 const zurueckHtml = (x) => {
-  const nr = x.nr ? `#${x.nr}` : 'Eintrag';
+  const nr = x.nr ? `#${x.nr}` : tx('Eintrag');
   if (herkunft && x.liste) return listenKrumen(x.liste, [nr]);
-  if (herkunft) return krumen([['Listen', '/listen'], [nr]]);
-  return krumen([['Verlauf', '/'], [nr]]);
+  if (herkunft) return krumen([[tx('Listen'), '/listen'], [nr]]);
+  return krumen([[tx('Verlauf'), '/'], [nr]]);
 };
 document.addEventListener('click', (e) => {
   const knopf = e.target.closest('button[data-zurueck]');
@@ -1137,16 +1193,16 @@ document.addEventListener('click', (e) => {
 // Tags in der Ansicht: oben als Marken; KI-Vorschläge mit „Übernehmen“/„Verwerfen“. Ändern über den Knopf in der Aktionsleiste.
 // Kopf einer Detailseite: Brotkrumen (mit großer #Nr) und rechts der Mehr-Knopf; Titel passt seine Größe der Länge an;
 // darunter nur Zeitpunkt, Zustand (falls nötig) und Tags. Hauptaktion groß darunter, alles Weitere im Mehr-Blatt.
-const MEHR = '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="2" fill="currentColor"/><circle cx="12" cy="12" r="2" fill="currentColor"/><circle cx="19" cy="12" r="2" fill="currentColor"/></svg>';
+const MEHR = T('<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="2" fill="currentColor"/><circle cx="12" cy="12" r="2" fill="currentColor"/><circle cx="19" cy="12" r="2" fill="currentColor"/></svg>');
 function detailKopf(x, titel, meta, haupt, mehr) {
-  const t = titel || 'Ohne Titel';
+  const t = titel || tx('Ohne Titel');
   const groesse = t.length > 70 ? ' lang' : t.length > 40 ? ' mittel' : '';
-  const chips = (x.tags || []).map((tg) => `<span class="tagchip">${esc(tg)}</span>`).join('');
-  return `<div class="detailkopf">${zurueckHtml(x)}${mehr.length ? `<button type="button" class="titelknopf" data-mehr="1" aria-haspopup="dialog" aria-label="Weitere Aktionen" title="Weitere Aktionen">${MEHR}</button>` : ''}</div>
+  const chips = (x.tags || []).map((tg) => T`<span class="tagchip">${esc(tg)}</span>`).join('');
+  return T`<div class="detailkopf">${zurueckHtml(x)}${mehr.length ? T`<button type="button" class="titelknopf" data-mehr="1" aria-haspopup="dialog" aria-label="Weitere Aktionen" title="Weitere Aktionen">${MEHR}</button>` : ''}</div>
     <h1 class="detailtitel${groesse}">${esc(t)}</h1>
     <div class="detailmeta">${meta}${chips}</div>
-    ${haupt.length ? `<div class="hauptaktion">${haupt.join('')}</div>` : ''}
-    ${mehr.length ? `<dialog class="mehrblatt" aria-label="Weitere Aktionen" tabindex="-1"><div class="griff" aria-hidden="true"></div>${mehr.join('')}</dialog>` : ''}`;
+    ${haupt.length ? T`<div class="hauptaktion">${haupt.join('')}</div>` : ''}
+    ${mehr.length ? T`<dialog class="mehrblatt" aria-label="Weitere Aktionen" tabindex="-1"><div class="griff" aria-hidden="true"></div>${mehr.join('')}</dialog>` : ''}`;
 }
 // Mehr-Blatt: öffnen, Klick daneben oder auf einen Punkt schließt es (die Aktion selbst läuft über die Seite).
 document.addEventListener('click', (e) => {
@@ -1165,14 +1221,14 @@ const tagVorschlaegeHtml = (e, offline) => tagsHtml({ ...e, tags: [] }, offline)
 function tagsHtml(e, offline) {
   const tags = e.tags || [], vor = e.tag_vorschlaege || [];
   if (!tags.length && !vor.length) return '';
-  return `${tags.length ? `<div class="tags">${tags.map((t) => `<span class="tagchip">${esc(t)}</span>`).join('')}</div>` : ''}
-    ${vor.length ? `<div class="vorschlaege"><div class="leise">Vorschläge der KI für neue Tags:</div>${vor.map((t) => `<div class="vorschlag"><span class="tagchip neu">${esc(t)}</span>
+  return `${tags.length ? T`<div class="tags">${tags.map((t) => T`<span class="tagchip">${esc(t)}</span>`).join('')}</div>` : ''}
+    ${vor.length ? T`<div class="vorschlaege"><div class="leise">Vorschläge der KI für neue Tags:</div>${vor.map((t) => T`<div class="vorschlag"><span class="tagchip neu">${esc(t)}</span>
       <button class="btn klein" data-akt="tag-ja" data-tag="${esc(t)}"${offline ? ' disabled' : ''}>Übernehmen</button><button class="btn klein gefahr" data-akt="tag-nein" data-tag="${esc(t)}"${offline ? ' disabled' : ''}>Verwerfen</button></div>`).join('')}</div>` : ''}`;
 }
 
 async function tagAktion(b, art, id) {
-  await api(`/api/${art === 'planung' ? 'planungen' : 'eintraege'}/${id}/tags/vorschlag`, { method: 'POST', body: { tag: b.dataset.tag, aktion: b.dataset.akt === 'tag-ja' ? 'uebernehmen' : 'verwerfen' } });
-  melde(b.dataset.akt === 'tag-ja' ? 'Tag übernommen' : 'Vorschlag verworfen');
+  await api(T`/api/${art === 'planung' ? 'planungen' : 'eintraege'}/${id}/tags/vorschlag`, { method: 'POST', body: { tag: b.dataset.tag, aktion: b.dataset.akt === 'tag-ja' ? 'uebernehmen' : 'verwerfen' } });
+  melde(b.dataset.akt === 'tag-ja' ? tx('Tag übernommen') : tx('Vorschlag verworfen'));
 }
 
 // ---------- Tags ändern (eigene Seite) ----------
@@ -1180,13 +1236,13 @@ async function tagAktion(b, art, id) {
 async function zeigeTags(art, id) {
   const pfad = art === 'planung' ? 'planungen' : 'eintraege';
   const zurueck = `/${art}/${id}`;
-  const [e, vorrat] = await Promise.all([api(`/api/${pfad}/${id}`), api('/api/tags')]);
+  const [e, vorrat] = await Promise.all([api(T`/api/${pfad}/${id}`), api('/api/tags')]);
   const gewaehlt = new Set(e.tags || []);
   const namen = [...new Set([...vorrat.tags.map((t) => t.name), ...gewaehlt, ...(e.tag_vorschlaege || [])])].sort((a, b) => a.localeCompare(b, 'de'));
   const male = () => {
-    seite.innerHTML = `<h1>Tags ändern</h1><p class="leise">${esc(e.titel || '')}</p>
+    seite.innerHTML = T`<h1>Tags ändern</h1><p class="leise">${esc(e.titel || '')}</p>
       <label>Tags antippen zum An- und Abwählen</label>
-      <div class="tags wahl">${namen.length ? namen.map((t) => `<button class="tagchip wahl${gewaehlt.has(t) ? ' an' : ''}" data-tag="${esc(t)}" aria-pressed="${gewaehlt.has(t)}">${esc(t)}</button>`).join('') : '<span class="leise">Noch keine Tags vorhanden.</span>'}</div>
+      <div class="tags wahl">${namen.length ? namen.map((t) => T`<button class="tagchip wahl${gewaehlt.has(t) ? ' an' : ''}" data-tag="${esc(t)}" aria-pressed="${gewaehlt.has(t)}">${esc(t)}</button>`).join('') : T('<span class="leise">Noch keine Tags vorhanden.</span>')}</div>
       <label for="neu">Neuer Tag</label>
       <div class="zeile"><input type="text" id="neu" maxlength="30" placeholder="z. B. garten"><button class="btn" id="dazu">Hinzufügen</button></div>
       <div class="leiste"><button class="btn haupt" id="speichern">Speichern</button><a class="btn" href="${zurueck}">Abbrechen</a></div>`;
@@ -1202,8 +1258,8 @@ async function zeigeTags(art, id) {
     document.getElementById('speichern').onclick = async (ev) => {
       ev.target.disabled = true;
       try {
-        await api(`/api/${pfad}/${id}/tags`, { method: 'POST', body: { tags: [...gewaehlt] } });
-        melde('Tags gespeichert');
+        await api(T`/api/${pfad}/${id}/tags`, { method: 'POST', body: { tags: [...gewaehlt] } });
+        melde(tx('Tags gespeichert'));
         geheZu(zurueck, true);
       } catch (f) { ev.target.disabled = false; melde(f.message); }
     };
@@ -1221,25 +1277,25 @@ async function zeigeTags(art, id) {
 // ---------- Eintrag ----------
 
 // Wert eines Eckdatums: Quellenverweise der KI ([Seite](https://…)) werden kleine Links statt Rohtext.
-const wertHtml = (wert) => esc(wert).replace(/\(?\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)\)?/g, '<a class="beleg" href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
-const eckdatenHtml = (liste) => (liste?.length ? `<dl class="eckdaten">${liste.map((f) => `<dt>${esc(f.name)}</dt><dd>${wertHtml(f.wert)}</dd>`).join('')}</dl>` : '');
-const linksHtml = (quellen) => (quellen?.length ? `<ul class="links">${quellen.map((q) => (/^https?:\/\//.test(q.url) ? `<li><a href="${esc(q.url)}" target="_blank" rel="noopener noreferrer">${esc(q.titel || q.url)}</a></li>` : `<li>${esc(q.titel || q.url)}</li>`)).join('')}</ul>` : '');
+const wertHtml = (wert) => esc(wert).replace(/\(?\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)\)?/g, T('<a class="beleg" href="$2" target="_blank" rel="noopener noreferrer">$1</a>'));
+const eckdatenHtml = (liste) => (liste?.length ? T`<dl class="eckdaten">${liste.map((f) => T`<dt>${esc(f.name)}</dt><dd>${wertHtml(f.wert)}</dd>`).join('')}</dl>` : '');
+const linksHtml = (quellen) => (quellen?.length ? T`<ul class="links">${quellen.map((q) => (/^https?:\/\//.test(q.url) ? T`<li><a href="${esc(q.url)}" target="_blank" rel="noopener noreferrer">${esc(q.titel || q.url)}</a></li>` : T`<li>${esc(q.titel || q.url)}</li>`)).join('')}</ul>` : '');
 // Ein Block der Detailseite; ohne Inhalt entfällt er samt Überschrift.
-const block = (titel, inhalt, klasse = '') => (inhalt ? `<section class="block ${klasse}"><h2>${titel}</h2>${inhalt}</section>` : '');
-const notizHtml = (text) => (text ? `<div class="notiztext">${esc(text)}</div>` : '');
+const block = (titel, inhalt, klasse = '') => (inhalt ? T`<section class="block ${klasse}"><h2>${titel}</h2>${inhalt}</section>` : '');
+const notizHtml = (text) => (text ? T`<div class="notiztext">${esc(text)}</div>` : '');
 
 // Stand einer Planung in fester Reihenfolge: Eckdaten, Notiz, Details (Hintergrund, Tipps, Fragen), Quellen eingeklappt.
 function planHtml(plan, fragenKnopf = '') {
-  const liste = (titel, punkte) => (punkte?.length ? `<h3>${titel}</h3><ul>${punkte.map((p) => `<li>${md(p).replace(/^<p>|<\/p>$/g, '')}</li>`).join('')}</ul>` : '');
-  const planung = `${plan.ergebnisse ? `<h3>Hintergrund</h3><div class="md">${md(plan.ergebnisse)}</div>` : ''}
-    ${liste('Tipps', plan.tipps)}
-    ${liste('Nächste Schritte', plan.naechste_schritte)}
-    ${plan.offene_fragen?.length ? `<h3>Offene Fragen</h3><ul>${plan.offene_fragen.map((f) => `<li>${esc(frageText(f))}</li>`).join('')}</ul>${fragenKnopf}` : ''}
-    ${plan.annahmen?.length ? `<details><summary>Annahmen / unklar (${plan.annahmen.length})</summary><ul>${plan.annahmen.map((p) => `<li>${esc(p)}</li>`).join('')}</ul></details>` : ''}`;
-  return `${block('Eckdaten', `${plan.vorhaben ? `<p class="vorhaben">${esc(plan.vorhaben)}</p>` : ''}${eckdatenHtml(plan.eckdaten)}`)}
-    ${block('Text', notizHtml(plan.notiz), 'notiz')}
-    ${block('Details', planung.trim(), 'zusatz')}
-    ${plan.quellen?.length ? `<details class="einklapp quellen"><summary>Quellen (${plan.quellen.length})</summary>${linksHtml(plan.quellen)}</details>` : ''}`;
+  const liste = (titel, punkte) => (punkte?.length ? T`<h3>${titel}</h3><ul>${punkte.map((p) => T`<li>${md(p).replace(/^<p>|<\/p>$/g, '')}</li>`).join('')}</ul>` : '');
+  const planung = `${plan.ergebnisse ? T`<h3>Hintergrund</h3><div class="md">${md(plan.ergebnisse)}</div>` : ''}
+    ${liste(tx('Tipps'), plan.tipps)}
+    ${liste(tx('Nächste Schritte'), plan.naechste_schritte)}
+    ${plan.offene_fragen?.length ? T`<h3>Offene Fragen</h3><ul>${plan.offene_fragen.map((f) => T`<li>${esc(frageText(f))}</li>`).join('')}</ul>${fragenKnopf}` : ''}
+    ${plan.annahmen?.length ? T`<details><summary>Annahmen / unklar (${plan.annahmen.length})</summary><ul>${plan.annahmen.map((p) => T`<li>${esc(p)}</li>`).join('')}</ul></details>` : ''}`;
+  return `${block(tx('Eckdaten'), `${plan.vorhaben ? T`<p class="vorhaben">${esc(plan.vorhaben)}</p>` : ''}${eckdatenHtml(plan.eckdaten)}`)}
+    ${block(tx('Text'), notizHtml(plan.notiz), 'notiz')}
+    ${block(tx('Details'), planung.trim(), 'zusatz')}
+    ${plan.quellen?.length ? T`<details class="einklapp quellen"><summary>Quellen (${plan.quellen.length})</summary>${linksHtml(plan.quellen)}</details>` : ''}`;
 }
 
 // Auswertung eines Diktats in fester Reihenfolge: Eckdaten (bei Listenpunkten je Punkt), Notiz, Hinweise und Links.
@@ -1247,23 +1303,23 @@ function analyseHtml(e, aufnahme = '') {
   const an = e.analyse;
   let html = '';
   if (an && e.fragen && an.rueckfragen?.length) {
-    html += `<div class="hinweis warn"><strong>Die KI hat ${fragenText(e.fragen)} zu dieser Notiz:</strong><ul>${an.rueckfragen.map((f) => `<li>${esc(f.frage)}</li>`).join('')}</ul>
-      <div class="leiste"><button class="btn haupt" data-fragen="${e.id}" data-ftyp="eintrag">${fragenText(e.fragen)} beantworten</button></div></div>`;
+    html += T`<div class="hinweis warn"><strong>Die KI hat ${fragenText(e.fragen)} zu dieser Notiz:</strong><ul>${an.rueckfragen.map((f) => T`<li>${esc(f.frage)}</li>`).join('')}</ul>
+      <div class="leiste"><button class="btn haupt" data-fragen="${e.id}" data-ftyp="eintrag">${tx('{0} beantworten', fragenText(e.fragen))}</button></div></div>`;
   }
-  if (an?.antworten?.length) html += `<h2>Deine Antworten</h2><dl>${an.antworten.map((x) => `<dt>${esc(x.frage)}</dt><dd>${esc(x.antwort)}</dd>`).join('')}</dl>`;
+  if (an?.antworten?.length) html += T`<h2>Deine Antworten</h2><dl>${an.antworten.map((x) => T`<dt>${esc(x.frage)}</dt><dd>${esc(x.antwort)}</dd>`).join('')}</dl>`;
   // Eckdaten zuerst (bei mehreren Punkten je Punkt mit Namen), darunter getrennt der Listenbezug mit Erledigt-Haken.
   const lp = e.liste?.punkte || [];
   const mehrere = lp.length > 1;
-  html += block('Eckdaten', lp.map((p) => (p.eckdaten?.length ? `${mehrere ? `<h3>${esc(p.text)}</h3>` : ''}${eckdatenHtml(p.eckdaten)}` : '')).join('') + eckdatenHtml(an?.eckdaten));
+  html += block(tx('Eckdaten'), lp.map((p) => (p.eckdaten?.length ? `${mehrere ? `<h3>${esc(p.text)}</h3>` : ''}${eckdatenHtml(p.eckdaten)}` : '')).join('') + eckdatenHtml(an?.eckdaten));
   if (e.liste) {
-    html += block(`Liste <a href="/liste/${e.liste.id}">${esc(listenName(e.liste))}</a>`, lp.map((p) => `<div class="lp${p.erledigt ? ' erledigt' : ''}"><button class="haken" data-haken="${p.id}" aria-pressed="${!!p.erledigt}" aria-label="${p.erledigt ? 'Wieder öffnen' : 'Abhaken'}: ${esc(p.text)}"><span class="hakenbild" aria-hidden="true"></span></button><div class="lptext"><div>${esc(p.text)}</div></div></div>`).join(''), 'listenbezug');
+    html += block(T`Liste <a href="/liste/${e.liste.id}">${esc(listenName(e.liste))}</a>`, lp.map((p) => T`<div class="lp${p.erledigt ? ' erledigt' : ''}"><button class="haken" data-haken="${p.id}" aria-pressed="${!!p.erledigt}" aria-label="${p.erledigt ? tx('Wieder öffnen') : tx('Abhaken')}: ${esc(p.text)}"><span class="hakenbild" aria-hidden="true"></span></button><div class="lptext"><div>${esc(p.text)}</div></div></div>`).join(''), 'listenbezug');
   }
   // Text: kurze KI-Fassung des Gesagten; ältere Einträge ohne diese Fassung zeigen hier das Transkript.
-  html += block('Text', notizHtml(an?.notiz || e.transkript), 'notiz');
+  html += block(tx('Text'), notizHtml(an?.notiz || e.transkript), 'notiz');
   if (!an) return html + aufnahme;
   // Details: Zusatzwissen (z. B. Inhalt eines Films), Hinweise, Links. Die Aufnahme steht als eigene Karte am Ende.
-  const mehr = `${an.beschreibung ? `<div class="beschreibung">${esc(an.beschreibung)}</div>` : ''}${an.hinweise?.length ? `<ul>${an.hinweise.map((h) => `<li>${md(h).replace(/^<p>|<\/p>$/g, '')}</li>`).join('')}</ul>` : ''}${an.quellen?.length ? `<h3>Links</h3>${linksHtml(an.quellen)}` : ''}`;
-  return html + block('Details', mehr, 'zusatz') + aufnahme;
+  const mehr = `${an.beschreibung ? T`<div class="beschreibung">${esc(an.beschreibung)}</div>` : ''}${an.hinweise?.length ? T`<ul>${an.hinweise.map((h) => T`<li>${md(h).replace(/^<p>|<\/p>$/g, '')}</li>`).join('')}</ul>` : ''}${an.quellen?.length ? T`<h3>Links</h3>${linksHtml(an.quellen)}` : ''}`;
+  return html + block(tx('Details'), mehr, 'zusatz') + aufnahme;
 }
 
 function eintragHtml(e, offline) {
@@ -1271,79 +1327,79 @@ function eintragHtml(e, offline) {
   const offen = p && p.status === 'offen';
   const fertig = e.status === 'fertig';
   // Zustand nur, wenn er etwas sagt (läuft, Fehler, leer); „fertig“ ist der Normalfall.
-  const meta = `<span class="leise">${zeit(e.aufgenommen)}</span>${fertig ? '' : ` <span class="badge ${esc(e.status)}">${esc(STATUS[e.status] || e.status)}${e.schritt ? ` · ${esc(e.schritt)}` : ''}</span>`}`;
+  const meta = T`<span class="leise">${zeit(e.aufgenommen)}</span>${fertig ? '' : T` <span class="badge ${esc(e.status)}">${esc(STATUS[e.status] || e.status)}${e.schritt ? ` · ${esc(e.schritt)}` : ''}</span>`}`;
   const mitTags = e.tags && !e.planung && (e.modus === 'diktat' || e.modus === 'planung');
   let html = mitTags ? tagVorschlaegeHtml(e, offline) : '';
 
-  const wann = e.loeschung ? ` Wird am ${zeit(e.loeschung)} automatisch gelöscht.` : '';
-  if (e.status === 'leer') html += `<div class="hinweis">Keine Sprache erkannt – vermutlich versehentlich ausgelöst.${wann}</div>`;
-  else if (e.status === 'fehler') html += `<div class="hinweis schlecht"><strong>Dauerhaft fehlgeschlagen</strong> (${esc(e.schritt || '')}): ${esc(e.fehler)}${wann}</div>`;
-  else if (e.status === 'wiederholung') html += `<div class="hinweis warn">${esc(e.schritt || '')} fehlgeschlagen, Versuch ${e.versuche}: ${esc(e.fehler)}<br>Nächster Versuch ${e.naechster_versuch ? zeit(e.naechster_versuch) : 'gleich'}.</div>`;
-  if (e.limit_erreicht) html += `<div class="hinweis warn">Kostenlimit von ${e.limit_usd.toFixed(2)} $ in dieser Runde erreicht – die Recherche wurde begrenzt.</div>`;
-  if (p && !p.aktuell && p.plan) html += '<div class="hinweis">Stand nach dieser Runde – es gibt eine neuere Runde.</div>';
+  const wann = e.loeschung ? T` Wird am ${zeit(e.loeschung)} automatisch gelöscht.` : '';
+  if (e.status === 'leer') html += T`<div class="hinweis">Keine Sprache erkannt – vermutlich versehentlich ausgelöst.${wann}</div>`;
+  else if (e.status === 'fehler') html += T`<div class="hinweis schlecht"><strong>Dauerhaft fehlgeschlagen</strong> (${esc(e.schritt || '')}): ${esc(e.fehler)}${wann}</div>`;
+  else if (e.status === 'wiederholung') html += T`<div class="hinweis warn">${esc(e.schritt || '')} fehlgeschlagen, Versuch ${e.versuche}: ${esc(e.fehler)}<br>Nächster Versuch ${e.naechster_versuch ? zeit(e.naechster_versuch) : tx('gleich')}.</div>`;
+  if (e.limit_erreicht) html += T`<div class="hinweis warn">Kostenlimit von ${e.limit_usd.toFixed(2)} $ in dieser Runde erreicht – die Recherche wurde begrenzt.</div>`;
+  if (p && !p.aktuell && p.plan) html += T('<div class="hinweis">Stand nach dieser Runde – es gibt eine neuere Runde.</div>');
   const t = e.termin;
   if (t) {
-    const wann = `${tag(t.beginn)}${t.ganztag ? ', ganztägig' : `, ${uhr(t.beginn)} Uhr`}`;
+    const wann = `${tag(t.beginn)}${t.ganztag ? tx(', ganztägig') : `, ${tx('{0} Uhr', uhr(t.beginn))}`}`;
     // Gesendet nur, wenn die Erinnerung vor dem Termin rausging (nachgetragene oder verspätete zählen nicht).
     const gesendet = t.erinnert && t.erinnert <= t.beginn + (t.ganztag ? 86400000 : 0);
-    const erinnerung = gesendet ? `Erinnerung gesendet ${zeit(t.erinnert)}` : t.bestaetigt || t.verpasst ? '' : `Erinnerung ${zeit(t.erinnerung)}`;
-    html += `<div class="hinweis termin${t.verpasst ? ' schlecht' : t.bestaetigt ? ' gut' : ''}"><strong>${t.verpasst ? `${terminArt(t)} verpasst` : t.bestaetigt ? `${terminArt(t)} erledigt` : terminArt(t)}:</strong> ${esc(wann)}${t.ort ? ` · ${esc(t.ort)}` : ''}${erinnerung ? `<br><span class="leise">${erinnerung}</span>` : ''}</div>`;
+    const erinnerung = gesendet ? T`Erinnerung gesendet ${zeit(t.erinnert)}` : t.bestaetigt || t.verpasst ? '' : T`Erinnerung ${zeit(t.erinnerung)}`;
+    html += T`<div class="hinweis termin${t.verpasst ? ' schlecht' : t.bestaetigt ? ' gut' : ''}"><strong>${t.verpasst ? T`${terminArt(t)} verpasst` : t.bestaetigt ? T`${terminArt(t)} erledigt` : terminArt(t)}:</strong> ${esc(wann)}${t.ort ? ` · ${esc(t.ort)}` : ''}${erinnerung ? T`<br><span class="leise">${erinnerung}</span>` : ''}</div>`;
   }
 
   // Hauptaktion groß unter dem Kopf, alles Weitere im Mehr-Blatt (Punkte mit Klasse mehrpunkt).
   const haupt = [], mehr = [];
-  const punkt = (art, attr, text, klasse = '') => (art === 'a' ? `<a class="mehrpunkt${klasse}" ${attr}>${text}</a>` : `<button type="button" class="mehrpunkt${klasse}" ${attr}>${text}</button>`);
+  const punkt = (art, attr, text, klasse = '') => (art === 'a' ? T`<a class="mehrpunkt${klasse}" ${attr}>${text}</a>` : T`<button type="button" class="mehrpunkt${klasse}" ${attr}>${text}</button>`);
   if (e.modus === 'diktat' && !e.planung && !offline) {
     const zu = istErledigt(e);
-    haupt.push(zu ? `<button class="btn" data-fertig="${e.id}" data-erledigt="0">Wieder öffnen</button>` : `<button class="btn haupt" data-fertig="${e.id}">${t?.verpasst ? 'Bestätigen' : 'Erledigt'}</button>`);
+    haupt.push(zu ? T`<button class="btn" data-fertig="${e.id}" data-erledigt="0">Wieder öffnen</button>` : T`<button class="btn haupt" data-fertig="${e.id}">${t?.verpasst ? tx('Bestätigen') : tx('Erledigt')}</button>`);
   }
   // Termin: zweiter Knopf zum Verschieben (eigenes Fenster mit Datum und Uhrzeit).
-  if (t && fertig && !offline) haupt.push('<button class="btn" data-akt="verschieben">Verschieben</button>');
-  if (e.status === 'fehler' || e.status === 'wiederholung' || e.status === 'leer') haupt.push(`<button class="btn${e.status === 'leer' ? '' : ' haupt'}" data-akt="neustart">Erneut starten</button>`);
-  if (offen && fertig) haupt.push(`<a class="btn haupt" href="/planung/${p.id}/antwort">Antworten</a>`);
+  if (t && fertig && !offline) haupt.push(T('<button class="btn" data-akt="verschieben">Verschieben</button>'));
+  if (e.status === 'fehler' || e.status === 'wiederholung' || e.status === 'leer') haupt.push(T`<button class="btn${e.status === 'leer' ? '' : ' haupt'}" data-akt="neustart">Erneut starten</button>`);
+  if (offen && fertig) haupt.push(T`<a class="btn haupt" href="/planung/${p.id}/antwort">Antworten</a>`);
   if (fertig || e.transkript) {
-    if (navigator.share) mehr.push(punkt('b', 'data-akt="teilen"', 'Teilen'));
-    mehr.push(punkt('b', 'data-akt="kopieren"', 'Kopieren'));
+    if (navigator.share) mehr.push(punkt('b', 'data-akt="teilen"', tx('Teilen')));
+    mehr.push(punkt('b', 'data-akt="kopieren"', tx('Kopieren')));
   }
-  if (e.joplin?.aktiv && e.joplin.uebertragen) mehr.push(punkt('a', `href="joplin://x-callback-url/openNote?id=${esc(e.joplin.id)}" target="_self"`, 'In Joplin öffnen'));
-  if (offen) mehr.push(punkt('b', 'data-akt="schliessen"', 'Planung schließen'));
-  if (offen && p.letzte_runde && (fertig || e.status === 'fehler') && !offline) mehr.push(punkt('a', `href="/eintrag/${e.id}/umhaengen"`, 'Umhängen'));
+  if (e.joplin?.aktiv && e.joplin.uebertragen) mehr.push(punkt('a', T`href="joplin://x-callback-url/openNote?id=${esc(e.joplin.id)}" target="_self"`, tx('In Joplin öffnen')));
+  if (offen) mehr.push(punkt('b', 'data-akt="schliessen"', tx('Planung schließen')));
+  if (offen && p.letzte_runde && (fertig || e.status === 'fehler') && !offline) mehr.push(punkt('a', T`href="/eintrag/${e.id}/umhaengen"`, tx('Umhängen')));
   // Wortlaut korrigieren: Notizen und die letzte Runde einer Planung, sobald nichts mehr läuft.
-  if (e.transkript && (fertig || e.status === 'fehler') && !offline && (e.modus === 'diktat' || (e.modus === 'planung' && (!p || p.letzte_runde)))) mehr.push(punkt('a', `href="/eintrag/${e.id}/wortlaut"`, 'Wortlaut korrigieren'));
-  if (!p && e.modus === 'planung' && e.status === 'fehler' && e.transkript && !offline) mehr.push(punkt('a', `href="/eintrag/${e.id}/umhaengen"`, 'Umhängen'));
-  if (e.modus === 'diktat' && !e.termin && fertig && !offline) mehr.push(punkt('a', `href="/eintrag/${e.id}/liste"`, e.liste ? 'Liste wechseln' : 'In Liste'));
-  if (mitTags && !offline) mehr.push(punkt('a', `href="/tags/eintrag/${e.id}"`, 'Tags ändern'));
-  if (e.loeschbar && !offline) mehr.push(punkt('b', 'data-akt="loeschen"', 'In den Papierkorb', ' gefahr'));
+  if (e.transkript && (fertig || e.status === 'fehler') && !offline && (e.modus === 'diktat' || (e.modus === 'planung' && (!p || p.letzte_runde)))) mehr.push(punkt('a', T`href="/eintrag/${e.id}/wortlaut"`, tx('Wortlaut korrigieren')));
+  if (!p && e.modus === 'planung' && e.status === 'fehler' && e.transkript && !offline) mehr.push(punkt('a', T`href="/eintrag/${e.id}/umhaengen"`, tx('Umhängen')));
+  if (e.modus === 'diktat' && !e.termin && fertig && !offline) mehr.push(punkt('a', T`href="/eintrag/${e.id}/liste"`, e.liste ? tx('Liste wechseln') : tx('In Liste')));
+  if (mitTags && !offline) mehr.push(punkt('a', T`href="/tags/eintrag/${e.id}"`, tx('Tags ändern')));
+  if (e.loeschbar && !offline) mehr.push(punkt('b', 'data-akt="loeschen"', tx('In den Papierkorb'), ' gefahr'));
   html = detailKopf(e, e.titel, meta, haupt, mehr) + html;
   // Feste Reihenfolge: Eckdaten, Liste, Notiz, Aufnahme (Wortlaut eingeklappt), Hinweise, Links, Details eingeklappt.
   // Feste Reihenfolge: Eckdaten, Notiz, Hinweise und Links, zuletzt Aufnahme und Wortlaut.
-  let aufnahme = '<p class="leise">Keine Aufnahme (Text).</p>';
-  if (e.audio === 'da') aufnahme = offline ? '<p class="leise">Wiedergabe nur mit Verbindung.</p>' : `<audio controls preload="none" src="/api/eintraege/${e.id}/audio"></audio>`;
-  else if (e.audio === 'abgelaufen') aufnahme = '<p class="leise">Aufnahme abgelaufen – das Audio wurde nach der Aufbewahrungsfrist gelöscht.</p>';
+  let aufnahme = T('<p class="leise">Keine Aufnahme (Text).</p>');
+  if (e.audio === 'da') aufnahme = offline ? T('<p class="leise">Wiedergabe nur mit Verbindung.</p>') : T`<audio controls preload="none" src="/api/eintraege/${e.id}/audio"></audio>`;
+  else if (e.audio === 'abgelaufen') aufnahme = T('<p class="leise">Aufnahme abgelaufen – das Audio wurde nach der Aufbewahrungsfrist gelöscht.</p>');
   // Wiedergabe direkt unter dem Text; der Original-Wortlaut ist eingeklappt – offen nur, wenn es keinen bereinigten Text gibt.
   // Notizen zeigen das Gesagte schon als Text; der Original-Wortlaut liegt eingeklappt bei der Aufnahme – nur wenn er nicht schon oben steht.
   const obenText = e.modus === 'diktat' && !e.analyse?.notiz;
-  const wortlaut = obenText ? '' : e.transkript ? `<details class="einklapp"${e.modus === 'planung' && !p?.plan?.notiz ? ' open' : ''}><summary>Original-Wortlaut</summary><div class="wortlaut">${esc(e.transkript)}</div></details>` : '<p class="leise">Noch kein Transkript.</p>';
+  const wortlaut = obenText ? '' : e.transkript ? T`<details class="einklapp"${e.modus === 'planung' && !p?.plan?.notiz ? ' open' : ''}><summary>Original-Wortlaut</summary><div class="wortlaut">${esc(e.transkript)}</div></details>` : T('<p class="leise">Noch kein Transkript.</p>');
   // Notiz: Aufnahme und Wortlaut eingeklappt; Planungsrunde wie bisher.
-  const quelle = e.modus === 'diktat' ? `<details class="einklapp quelle"><summary>Aufnahme und Wortlaut</summary>${aufnahme}${obenText ? '' : e.transkript ? `<div class="wortlaut">${esc(e.transkript)}</div>` : ''}</details>`
-    : block('Audio dieser Runde', aufnahme + wortlaut, 'quelle');
+  const quelle = e.modus === 'diktat' ? T`<details class="einklapp quelle"><summary>Aufnahme und Wortlaut</summary>${aufnahme}${obenText ? '' : e.transkript ? T`<div class="wortlaut">${esc(e.transkript)}</div>` : ''}</details>`
+    : block(tx('Audio dieser Runde'), aufnahme + wortlaut, 'quelle');
   if (p?.plan) html += planHtml(p.plan);
   if (e.modus === 'diktat') html += analyseHtml(e, quelle);
   else html += quelle;
-  if (e.modus === 'diktat' && fertig && !e.analyse) html += '<p class="leise">Keine Auswertung vorhanden.</p>';
+  if (e.modus === 'diktat' && fertig && !e.analyse) html += T('<p class="leise">Keine Auswertung vorhanden.</p>');
 
   if (p?.runden?.length > 1) {
-    html += `<h2>Runden</h2>${p.runden.map((r) => `<a class="karte" href="/eintrag/${r.id}"><div class="zeile"><span class="leise">Runde ${r.nr} · ${zeit(r.zeit)} · ${r.quelle === 'web' ? 'Web-App' : 'Pebble'}</span>
-      ${r.id === e.id ? '<span class="badge neutral">diese</span>' : `<span class="badge ${esc(r.status)}">${esc(STATUS[r.status] || r.status)}</span>`}</div><div class="vorschau">${esc(r.transkript)}</div></a>`).join('')}`;
+    html += T`<h2>Runden</h2>${p.runden.map((r) => T`<a class="karte" href="/eintrag/${r.id}"><div class="zeile"><span class="leise">Runde ${r.nr} · ${zeit(r.zeit)} · ${r.quelle === 'web' ? tx('Web-App') : tx('Pebble')}</span>
+      ${r.id === e.id ? T('<span class="badge neutral">diese</span>') : T`<span class="badge ${esc(r.status)}">${esc(STATUS[r.status] || r.status)}</span>`}</div><div class="vorschau">${esc(r.transkript)}</div></a>`).join('')}`;
   }
 
   const details = [];
-  if (e.zuordnung) details.push(['Zuordnung', ZUORDNUNG[e.zuordnung] || e.zuordnung]);
-  if (e.transkript_quelle) details.push(['Transkript von', { openai: 'OpenAI', pebble: 'Pebble', text: 'getippt', nutzer: 'von Hand korrigiert' }[e.transkript_quelle] || e.transkript_quelle]);
-  if (e.kosten_usd != null) details.push([e.modus === 'diktat' ? 'Kosten der Auswertung' : 'Recherchekosten', `${e.kosten_usd.toFixed(3)} $`]);
-  if (e.joplin?.aktiv) details.push(['Joplin', e.joplin.fehler ? `Übertragung fehlgeschlagen: ${e.joplin.fehler}` : e.joplin.offen ? 'noch nicht übertragen' : `übertragen ${zeit(e.joplin.uebertragen)}`]);
-  const pebbleText = e.pebble_text && e.pebble_text !== e.transkript ? `<h3>Transkript der Pebble-App</h3><blockquote>${esc(e.pebble_text)}</blockquote>` : '';
-  if (details.length || pebbleText) html += `<details class="einklapp technik"><summary>Technische Details</summary>${details.length ? `<dl>${details.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}</dl>` : ''}${pebbleText}</details>`;
+  if (e.zuordnung) details.push([tx('Zuordnung'), ZUORDNUNG[e.zuordnung] || e.zuordnung]);
+  if (e.transkript_quelle) details.push([tx('Transkript von'), { openai: tx('OpenAI'), pebble: tx('Pebble'), text: tx('getippt'), nutzer: tx('von Hand korrigiert') }[e.transkript_quelle] || e.transkript_quelle]);
+  if (e.kosten_usd != null) details.push([e.modus === 'diktat' ? tx('Kosten der Auswertung') : tx('Recherchekosten'), `${e.kosten_usd.toFixed(3)} $`]);
+  if (e.joplin?.aktiv) details.push([tx('Joplin'), e.joplin.fehler ? T`Übertragung fehlgeschlagen: ${e.joplin.fehler}` : e.joplin.offen ? tx('noch nicht übertragen') : T`übertragen ${zeit(e.joplin.uebertragen)}`]);
+  const pebbleText = e.pebble_text && e.pebble_text !== e.transkript ? T`<h3>Transkript der Pebble-App</h3><blockquote>${esc(e.pebble_text)}</blockquote>` : '';
+  if (details.length || pebbleText) html += T`<details class="einklapp technik"><summary>Technische Details</summary>${details.length ? T`<dl>${details.map(([k, v]) => T`<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}</dl>` : ''}${pebbleText}</details>`;
   return html;
 }
 
@@ -1354,12 +1410,12 @@ function terminVerschieben(e, danach) {
   const zwei = (n) => String(n).padStart(2, '0');
   const alsDatum = (d) => `${d.getFullYear()}-${zwei(d.getMonth() + 1)}-${zwei(d.getDate())}`;
   const d0 = new Date(t.beginn);
-  const WT = ['Sonntag', 'Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag'];
-  const pfeil = (r) => `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="${r ? 'M9 5l7 7-7 7' : 'M15 5l-7 7 7 7'}" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+  const WT = Array.from({ length: 7 }, (_, i) => new Date(2026, 10, 15 + i).toLocaleDateString(LOCALE, { weekday: 'long' }));
+  const pfeil = (r) => T`<svg viewBox="0 0 24 24" aria-hidden="true"><path d="${r ? 'M9 5l7 7-7 7' : 'M15 5l-7 7 7 7'}" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
   const dlg = document.createElement('dialog');
-  dlg.className = 'formblatt terminblatt';
-  dlg.innerHTML = `<form method="dialog" id="vform"><h2>Termin verschieben</h2>
-    <p class="leise">Bisher: ${esc(tag(t.beginn))}${t.ganztag ? ', ganztägig' : `, ${uhr(t.beginn)} Uhr`}. Der alte Termin bleibt als Hinweis in der Notiz.</p>
+  dlg.className = tx('formblatt terminblatt');
+  dlg.innerHTML = T`<form method="dialog" id="vform"><h2>Termin verschieben</h2>
+    <p class="leise">Bisher: ${esc(tag(t.beginn))}${t.ganztag ? tx(', ganztägig') : `, ${tx('{0} Uhr', uhr(t.beginn))}`}. Der alte Termin bleibt als Hinweis in der Notiz.</p>
     <label for="vdatum">Datum <span class="leise" id="vwt"></span></label>
     <div class="stepper"><button type="button" class="rundknopf" data-tage="-1" aria-label="Einen Tag früher">${pfeil(false)}</button>
       <input type="date" id="vdatum" value="${alsDatum(d0)}" required><button type="button" class="rundknopf" data-tage="1" aria-label="Einen Tag später">${pfeil(true)}</button></div>
@@ -1368,7 +1424,7 @@ function terminVerschieben(e, danach) {
       <label for="vzeit">Uhrzeit</label>
       <div class="stepper"><button type="button" class="rundknopf" data-min="-15" aria-label="15 Minuten früher">${pfeil(false)}</button>
         <input type="time" id="vzeit" step="300" value="${t.ganztag ? '07:00' : `${zwei(d0.getHours())}:${zwei(d0.getMinutes())}`}"><button type="button" class="rundknopf" data-min="15" aria-label="15 Minuten später">${pfeil(true)}</button></div>
-      <div class="chips">${['07:00', '09:00', '12:00', '15:00', '18:00'].map((z) => `<button type="button" data-zeit="${z}">${z}</button>`).join('')}</div>
+      <div class="chips">${['07:00', '09:00', '12:00', '15:00', '18:00'].map((z) => T`<button type="button" data-zeit="${z}">${z}</button>`).join('')}</div>
     </div>
     <label class="schalter"><input type="checkbox" id="vganz"${t.ganztag ? ' checked' : ''}> ganztägig</label>
     <div class="leiste"><button class="btn haupt" type="submit" id="vok">Verschieben</button><button class="btn" type="button" id="vab">Abbrechen</button></div></form>`;
@@ -1404,13 +1460,13 @@ function terminVerschieben(e, danach) {
   dlg.querySelector('#vform').onsubmit = async (ev) => {
     ev.preventDefault();
     const tagWert = datum.value;
-    if (!tagWert || (!ganz.checked && !zeitFeld.value)) return melde('Datum und Uhrzeit angeben');
+    if (!tagWert || (!ganz.checked && !zeitFeld.value)) return melde(tx('Datum und Uhrzeit angeben'));
     const ok = dlg.querySelector('#vok');
     ok.disabled = true;
     try {
-      await api(`/api/eintraege/${e.id}/termin`, { method: 'POST', body: { beginn: ganz.checked ? tagWert : `${tagWert}T${zeitFeld.value}`, ganztag: ganz.checked } });
+      await api(T`/api/eintraege/${e.id}/termin`, { method: 'POST', body: { beginn: ganz.checked ? tagWert : `${tagWert}T${zeitFeld.value}`, ganztag: ganz.checked } });
       zu();
-      melde('Termin verschoben');
+      melde(tx('Termin verschoben'));
       verlaufStand = null;
       await danach();
     } catch (f) { ok.disabled = false; melde(f.message); }
@@ -1426,7 +1482,7 @@ async function zeigeEintrag(id) {
   const male = () => {
     if (aktuell?.name !== 'eintrag' || aktuell.arg !== id) return;
     // Eine Runde gehört zu ihrer Planung: dort steht alles auf einer Seite.
-    if (e?.planung) return geheZu(`/planung/${e.planung}`, true);
+    if (e?.planung) return geheZu(T`/planung/${e.planung}`, true);
     // Laufende Wiedergabe nicht durch Neuzeichnen abbrechen.
     const spieler = seite.querySelector('audio');
     if (spieler && !spieler.paused) return;
@@ -1437,10 +1493,10 @@ async function zeigeEintrag(id) {
     if (auf && auf.length === neu.length) neu.forEach((d, i) => { d.open = auf[i]; });
     gemalt = true;
   };
-  if (e) { offline = !navigator.onLine || !netzDa; male(); } else seite.innerHTML = '<p class="leer">Lädt …</p>';
+  if (e) { offline = !navigator.onLine || !netzDa; male(); } else seite.innerHTML = T('<p class="leer">Lädt …</p>');
   const laden = async () => {
     try {
-      e = await api(`/api/eintraege/${id}`);
+      e = await api(T`/api/eintraege/${id}`);
       offline = false;
       await lege('eintraege', e);
       male();
@@ -1448,11 +1504,11 @@ async function zeigeEintrag(id) {
     } catch (f) {
       if (f instanceof NetzFehler) {
         offline = true;
-        if (e) male(); else seite.innerHTML = '<p class="leer">Offline – dieser Eintrag ist nicht zwischengespeichert.</p>';
+        if (e) male(); else seite.innerHTML = T('<p class="leer">Offline – dieser Eintrag ist nicht zwischengespeichert.</p>');
       } else if (f instanceof ApiFehler && f.status === 404) {
         await loesche('eintraege', id);
         await loesche('verlauf', id);
-        seite.innerHTML = '<p class="leer">Eintrag nicht gefunden.</p>';
+        seite.innerHTML = T('<p class="leer">Eintrag nicht gefunden.</p>');
       } else throw f;
     }
   };
@@ -1476,24 +1532,24 @@ async function zeigeEintrag(id) {
       if (akt === 'tag-ja' || akt === 'tag-nein') { b.disabled = true; await tagAktion(b, 'eintrag', e.id); await laden(); }
       else if (akt === 'verschieben') terminVerschieben(e, laden);
       else if (akt === 'teilen') await navigator.share({ title: e.titel, text: e.text });
-      else if (akt === 'kopieren') { await navigator.clipboard.writeText(e.text); melde('Text kopiert'); }
+      else if (akt === 'kopieren') { await navigator.clipboard.writeText(e.text); melde(tx('Text kopiert')); }
       else if (akt === 'loeschen') {
-        if (!confirm((e.liste ? 'Eintrag in den Papierkorb legen? Seine Punkte verschwinden auch aus der Liste.' : 'Eintrag in den Papierkorb legen?') + ' Unter Status → Papierkorb wiederherstellbar.' + (e.status !== 'fertig' && e.status !== 'fehler' ? ' Die laufende Verarbeitung wird abgebrochen.' : ''))) return;
+        if (!confirm((e.liste ? tx('Eintrag in den Papierkorb legen? Seine Punkte verschwinden auch aus der Liste.') : tx('Eintrag in den Papierkorb legen?')) + tx(' Unter Status → Papierkorb wiederherstellbar.') + (e.status !== 'fertig' && e.status !== 'fehler' ? tx(' Die laufende Verarbeitung wird abgebrochen.') : ''))) return;
         b.disabled = true;
-        await api(`/api/eintraege/${e.id}`, { method: 'DELETE' });
+        await api(T`/api/eintraege/${e.id}`, { method: 'DELETE' });
         await loesche('eintraege', e.id);
         await loesche('verlauf', e.id);
         verlaufStand = null;
-        melde('Gelöscht');
+        melde(tx('Gelöscht'));
         geheZu('/', true);
       } else if (akt === 'neustart') {
         b.disabled = true;
-        melde((await merkeVor({ typ: 'neustart', eintrag: e.id })) ? 'Neu gestartet' : 'Vorgemerkt – startet bei Verbindung');
+        melde((await merkeVor({ typ: 'neustart', eintrag: e.id })) ? tx('Neu gestartet') : tx('Vorgemerkt – startet bei Verbindung'));
         await laden();
       } else if (akt === 'schliessen') {
-        if (!confirm('Planung schließen? Sie wird nicht mehr fortgesetzt.')) return;
+        if (!confirm(tx('Planung schließen? Sie wird nicht mehr fortgesetzt.'))) return;
         b.disabled = true;
-        melde((await merkeVor({ typ: 'schliessen', planung: e.planung_daten.id })) ? 'Planung geschlossen' : 'Vorgemerkt – schließt bei Verbindung');
+        melde((await merkeVor({ typ: 'schliessen', planung: e.planung_daten.id })) ? tx('Planung geschlossen') : tx('Vorgemerkt – schließt bei Verbindung'));
         await laden();
       }
     } catch (f) {
@@ -1511,62 +1567,62 @@ function planungHtml(p, offline) {
   const runden = p.rundenliste;
   const letzte = runden[0];
   const laeuft = letzte.status !== 'fertig';
-  const meta = `<span class="leise">${zeit(letzte.zeit)}</span> ${planungZeichen(offen)}${laeuft ? ` <span class="badge ${esc(letzte.status)}">Runde ${letzte.nr}: ${esc(STATUS[letzte.status])}${letzte.schritt ? ` · ${esc(letzte.schritt)}` : ''}</span>` : ''}`;
+  const meta = T`<span class="leise">${zeit(letzte.zeit)}</span> ${planungZeichen(offen)}${laeuft ? T` <span class="badge ${esc(letzte.status)}">Runde ${letzte.nr}: ${esc(STATUS[letzte.status])}${letzte.schritt ? ` · ${esc(letzte.schritt)}` : ''}</span>` : ''}`;
   let html = tagVorschlaegeHtml(p, offline);
 
-  if (!offen) html += `<div class="hinweis">${p.geschlossen_von === 'automatik' ? `Automatisch abgeschlossen am ${zeit(p.geschlossen)}, weil ${p.schliesst_nach_tagen} Tage keine neue Runde kam.` : `Abgeschlossen am ${zeit(p.geschlossen)}.`} Eine abgeschlossene Planung wird nicht fortgesetzt.</div>`;
-  if (letzte.status === 'fehler') html += `<div class="hinweis schlecht"><strong>Runde ${letzte.nr} dauerhaft fehlgeschlagen</strong> (${esc(letzte.schritt || '')}): ${esc(letzte.fehler)}${p.plan ? '<br>Unten steht der Stand davor.' : ''}</div>`;
-  else if (letzte.status === 'wiederholung') html += `<div class="hinweis warn">Runde ${letzte.nr}: ${esc(letzte.schritt || '')} fehlgeschlagen, Versuch ${letzte.versuche}: ${esc(letzte.fehler)}<br>Nächster Versuch ${letzte.naechster_versuch ? zeit(letzte.naechster_versuch) : 'gleich'}.</div>`;
-  else if (laeuft) html += `<div class="hinweis">Runde ${letzte.nr} wird verarbeitet${p.plan ? ' – unten steht noch der Stand davor' : ''}.</div>`;
-  if (runden.find((r) => r.aktuell)?.limit_erreicht) html += `<div class="hinweis warn">Kostenlimit von ${p.limit_usd.toFixed(2)} $ in der letzten Recherche erreicht – sie wurde begrenzt.</div>`;
+  if (!offen) html += T`<div class="hinweis">${p.geschlossen_von === 'automatik' ? T`Automatisch abgeschlossen am ${zeit(p.geschlossen)}, weil ${p.schliesst_nach_tagen} Tage keine neue Runde kam.` : T`Abgeschlossen am ${zeit(p.geschlossen)}.`} Eine abgeschlossene Planung wird nicht fortgesetzt.</div>`;
+  if (letzte.status === 'fehler') html += T`<div class="hinweis schlecht"><strong>Runde ${letzte.nr} dauerhaft fehlgeschlagen</strong> (${esc(letzte.schritt || '')}): ${esc(letzte.fehler)}${p.plan ? T('<br>Unten steht der Stand davor.') : ''}</div>`;
+  else if (letzte.status === 'wiederholung') html += T`<div class="hinweis warn">Runde ${letzte.nr}: ${esc(letzte.schritt || '')} fehlgeschlagen, Versuch ${letzte.versuche}: ${esc(letzte.fehler)}<br>Nächster Versuch ${letzte.naechster_versuch ? zeit(letzte.naechster_versuch) : tx('gleich')}.</div>`;
+  else if (laeuft) html += T`<div class="hinweis">Runde ${letzte.nr} wird verarbeitet${p.plan ? tx(' – unten steht noch der Stand davor') : ''}.</div>`;
+  if (runden.find((r) => r.aktuell)?.limit_erreicht) html += T`<div class="hinweis warn">Kostenlimit von ${p.limit_usd.toFixed(2)} $ in der letzten Recherche erreicht – sie wurde begrenzt.</div>`;
 
   const haupt = [], mehr = [];
-  const punkt = (art, attr, text, klasse = '') => (art === 'a' ? `<a class="mehrpunkt${klasse}" ${attr}>${text}</a>` : `<button type="button" class="mehrpunkt${klasse}" ${attr}>${text}</button>`);
-  if (letzte.status === 'fehler' || letzte.status === 'wiederholung') haupt.push(`<button class="btn haupt" data-akt="neustart" data-id="${letzte.id}">Erneut starten</button>`);
-  if (p.fragen && !offline) haupt.push(`<button class="btn haupt" data-fragen="${p.id}">${fragenText(p.fragen)} beantworten</button>`);
+  const punkt = (art, attr, text, klasse = '') => (art === 'a' ? T`<a class="mehrpunkt${klasse}" ${attr}>${text}</a>` : T`<button type="button" class="mehrpunkt${klasse}" ${attr}>${text}</button>`);
+  if (letzte.status === 'fehler' || letzte.status === 'wiederholung') haupt.push(T`<button class="btn haupt" data-akt="neustart" data-id="${letzte.id}">Erneut starten</button>`);
+  if (p.fragen && !offline) haupt.push(T`<button class="btn haupt" data-fragen="${p.id}">${tx('{0} beantworten', fragenText(p.fragen))}</button>`);
   // Offene Planung: zwei gleichrangige Aktionen, Antworten oder Schließen; abgeschlossene: Wieder öffnen.
-  if (offen && !laeuft) haupt.push(`<a class="btn${p.fragen ? '' : ' haupt'}" href="/planung/${p.id}/antwort">Antworten</a>`);
-  if (offen) haupt.push('<button class="btn" data-akt="schliessen">Schließen</button>');
-  else if (!offline) haupt.push('<button class="btn" data-akt="oeffnen">Wieder öffnen</button>');
+  if (offen && !laeuft) haupt.push(T`<a class="btn${p.fragen ? '' : ' haupt'}" href="/planung/${p.id}/antwort">Antworten</a>`);
+  if (offen) haupt.push(T('<button class="btn" data-akt="schliessen">Schließen</button>'));
+  else if (!offline) haupt.push(T('<button class="btn" data-akt="oeffnen">Wieder öffnen</button>'));
   if (p.text) {
-    if (navigator.share) mehr.push(punkt('b', 'data-akt="teilen"', 'Teilen'));
-    mehr.push(punkt('b', 'data-akt="kopieren"', 'Kopieren'));
+    if (navigator.share) mehr.push(punkt('b', 'data-akt="teilen"', tx('Teilen')));
+    mehr.push(punkt('b', 'data-akt="kopieren"', tx('Kopieren')));
   }
-  if (!laeuft && !offline && letzte.transkript && (letzte.status === 'fertig' || letzte.status === 'fehler')) mehr.push(punkt('a', `href="/eintrag/${letzte.id}/wortlaut"`, 'Wortlaut korrigieren'));
-  if (p.joplin?.aktiv && p.joplin.uebertragen) mehr.push(punkt('a', `href="joplin://x-callback-url/openNote?id=${esc(p.joplin.id)}" target="_self"`, 'In Joplin öffnen'));
-  if (p.plan && !offline) mehr.push(punkt('a', `href="/planung/${p.id}/liste"`, p.liste ? 'Liste wechseln' : 'In Liste'));
-  if (!offline) mehr.push(punkt('a', `href="/tags/planung/${p.id}"`, 'Tags ändern'));
-  if (letzte.status === 'fehler' && !offline) mehr.push(punkt('b', `data-akt="loeschen" data-id="${letzte.id}"`, 'Fehlgeschlagene Runde löschen', ' gefahr'));
-  if (!offline) mehr.push(punkt('b', 'data-akt="planung-loeschen"', 'Planung in den Papierkorb', ' gefahr'));
+  if (!laeuft && !offline && letzte.transkript && (letzte.status === 'fertig' || letzte.status === 'fehler')) mehr.push(punkt('a', T`href="/eintrag/${letzte.id}/wortlaut"`, tx('Wortlaut korrigieren')));
+  if (p.joplin?.aktiv && p.joplin.uebertragen) mehr.push(punkt('a', T`href="joplin://x-callback-url/openNote?id=${esc(p.joplin.id)}" target="_self"`, tx('In Joplin öffnen')));
+  if (p.plan && !offline) mehr.push(punkt('a', T`href="/planung/${p.id}/liste"`, p.liste ? tx('Liste wechseln') : tx('In Liste')));
+  if (!offline) mehr.push(punkt('a', T`href="/tags/planung/${p.id}"`, tx('Tags ändern')));
+  if (letzte.status === 'fehler' && !offline) mehr.push(punkt('b', T`data-akt="loeschen" data-id="${letzte.id}"`, tx('Fehlgeschlagene Runde löschen'), ' gefahr'));
+  if (!offline) mehr.push(punkt('b', 'data-akt="planung-loeschen"', tx('Planung in den Papierkorb'), ' gefahr'));
   html = detailKopf(p, p.titel, meta, haupt, mehr) + html;
 
 
-  if (p.plan) html += planHtml(p.plan, p.fragen && !offline ? `<div class="leiste"><button class="btn haupt" data-fragen="${p.id}">${fragenText(p.fragen)} beantworten</button></div>` : '');
+  if (p.plan) html += planHtml(p.plan, p.fragen && !offline ? T`<div class="leiste"><button class="btn haupt" data-fragen="${p.id}">${tx('{0} beantworten', fragenText(p.fragen))}</button></div>` : '');
 
-  html += `<section class="block quelle"><h2>Audio und Wortlaut</h2><p class="leise">Jede Runde ergibt einen neuen Stand. Die neueste steht oben.</p>`;
+  html += T`<section class="block quelle"><h2>Audio und Wortlaut</h2><p class="leise">Jede Runde ergibt einen neuen Stand. Die neueste steht oben.</p>`;
   for (const r of runden) {
-    const marke = r.aktuell ? '<span class="badge fertig">aktueller Stand</span>' : r.status !== 'fertig' ? `<span class="badge ${esc(r.status)}">${esc(STATUS[r.status])}${r.schritt ? ` · ${esc(r.schritt)}` : ''}</span>` : '<span class="badge neutral">früherer Stand</span>';
+    const marke = r.aktuell ? T('<span class="badge fertig">aktueller Stand</span>') : r.status !== 'fertig' ? T`<span class="badge ${esc(r.status)}">${esc(STATUS[r.status])}${r.schritt ? ` · ${esc(r.schritt)}` : ''}</span>` : T('<span class="badge neutral">früherer Stand</span>');
     const meta = [];
     if (r.zuordnung) meta.push(ZUORDNUNG[r.zuordnung] || r.zuordnung);
     if (r.kosten_usd != null) meta.push(`${r.kosten_usd.toFixed(3)} $`);
-    if (r.limit_erreicht) meta.push('Kostenlimit erreicht');
+    if (r.limit_erreicht) meta.push(tx('Kostenlimit erreicht'));
     let audio = '';
-    if (r.audio === 'da') audio = offline ? '<p class="leise">Wiedergabe nur mit Verbindung.</p>' : `<audio controls preload="none" src="/api/eintraege/${r.id}/audio"></audio>`;
-    else if (r.audio === 'abgelaufen') audio = '<p class="leise">Aufnahme abgelaufen.</p>';
-    html += `<div class="karte version${r.aktuell ? ' aktuell' : ''}">
+    if (r.audio === 'da') audio = offline ? T('<p class="leise">Wiedergabe nur mit Verbindung.</p>') : T`<audio controls preload="none" src="/api/eintraege/${r.id}/audio"></audio>`;
+    else if (r.audio === 'abgelaufen') audio = T('<p class="leise">Aufnahme abgelaufen.</p>');
+    html += T`<div class="karte version${r.aktuell ? ' aktuell' : ''}">
       <div class="zeile"><strong>Runde ${r.nr}</strong>${marke}</div>
-      <div class="leise">${zeit(r.zeit)} · ${r.quelle === 'web' ? 'Web-App' : 'Pebble'}${meta.length ? ` · ${esc(meta.join(' · '))}` : ''}</div>
-      ${r.transkript ? `<blockquote>${esc(r.transkript)}</blockquote>` : '<p class="leise">Noch kein Transkript.</p>'}${audio}
-      ${offline ? '' : `<div class="leiste">${r.letzte && offen && (r.status === 'fertig' || r.status === 'fehler') ? `<a class="btn klein" href="/eintrag/${r.id}/umhaengen">Diese Runde umhängen</a>` : ''}<button class="btn klein gefahr" data-akt="loeschen" data-id="${r.id}">Runde löschen</button></div>`}
-      ${r.plan && !r.aktuell ? `<details><summary>Stand nach Runde ${r.nr} ansehen</summary>${planHtml(r.plan)}</details>` : ''}</div>`;
+      <div class="leise">${zeit(r.zeit)} · ${r.quelle === 'web' ? tx('Web-App') : tx('Pebble')}${meta.length ? ` · ${esc(meta.join(' · '))}` : ''}</div>
+      ${r.transkript ? T`<blockquote>${esc(r.transkript)}</blockquote>` : T('<p class="leise">Noch kein Transkript.</p>')}${audio}
+      ${offline ? '' : T`<div class="leiste">${r.letzte && offen && (r.status === 'fertig' || r.status === 'fehler') ? T`<a class="btn klein" href="/eintrag/${r.id}/umhaengen">Diese Runde umhängen</a>` : ''}<button class="btn klein gefahr" data-akt="loeschen" data-id="${r.id}">Runde löschen</button></div>`}
+      ${r.plan && !r.aktuell ? T`<details><summary>Stand nach Runde ${r.nr} ansehen</summary>${planHtml(r.plan)}</details>` : ''}</div>`;
   }
   html += '</section>';
 
   const details = [];
-  if (p.kosten_usd != null) details.push(['KI-Kosten gesamt', `${p.kosten_usd.toFixed(3)} $`]);
-  if (offen && p.schliesst_nach_tagen > 0) details.push(['Schließt automatisch', `${zeit(letzte.zeit + p.schliesst_nach_tagen * 86400000)}, wenn keine neue Runde kommt`]);
-  if (p.joplin?.aktiv) details.push(['Joplin', p.joplin.fehler ? `Übertragung fehlgeschlagen: ${p.joplin.fehler}` : p.joplin.offen ? 'noch nicht übertragen' : `übertragen ${zeit(p.joplin.uebertragen)}`]);
-  if (details.length) html += `<details class="einklapp technik"><summary>Technische Details</summary><dl>${details.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}</dl></details>`;
+  if (p.kosten_usd != null) details.push([tx('KI-Kosten gesamt'), `${p.kosten_usd.toFixed(3)} $`]);
+  if (offen && p.schliesst_nach_tagen > 0) details.push([tx('Schließt automatisch'), T`${zeit(letzte.zeit + p.schliesst_nach_tagen * 86400000)}, wenn keine neue Runde kommt`]);
+  if (p.joplin?.aktiv) details.push([tx('Joplin'), p.joplin.fehler ? T`Übertragung fehlgeschlagen: ${p.joplin.fehler}` : p.joplin.offen ? tx('noch nicht übertragen') : T`übertragen ${zeit(p.joplin.uebertragen)}`]);
+  if (details.length) html += T`<details class="einklapp technik"><summary>Technische Details</summary><dl>${details.map(([k, v]) => T`<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}</dl></details>`;
   return html;
 }
 
@@ -1582,10 +1638,10 @@ async function zeigePlanung(id) {
     seite.innerHTML = planungHtml(p, offline);
     seite.querySelectorAll('details').forEach((d, i) => { d.open = !!auf[i]; });
   };
-  if (p) { offline = !navigator.onLine || !netzDa; male(); } else seite.innerHTML = '<p class="leer">Lädt …</p>';
+  if (p) { offline = !navigator.onLine || !netzDa; male(); } else seite.innerHTML = T('<p class="leer">Lädt …</p>');
   const laden = async () => {
     try {
-      p = await api(`/api/planungen/${id}`);
+      p = await api(T`/api/planungen/${id}`);
       offline = false;
       await lege('eintraege', p);
       male();
@@ -1593,11 +1649,11 @@ async function zeigePlanung(id) {
     } catch (f) {
       if (f instanceof NetzFehler) {
         offline = true;
-        if (p) male(); else seite.innerHTML = '<p class="leer">Offline – diese Planung ist nicht zwischengespeichert.</p>';
+        if (p) male(); else seite.innerHTML = T('<p class="leer">Offline – diese Planung ist nicht zwischengespeichert.</p>');
       } else if (f instanceof ApiFehler && f.status === 404) {
         await loesche('eintraege', id);
         await loesche('verlauf', id);
-        seite.innerHTML = '<p class="leer">Planung nicht gefunden.</p><p class="mitte"><a class="btn" href="/">Zum Verlauf</a></p>';
+        seite.innerHTML = T('<p class="leer">Planung nicht gefunden.</p><p class="mitte"><a class="btn" href="/">Zum Verlauf</a></p>');
       } else throw f;
     }
   };
@@ -1608,14 +1664,14 @@ async function zeigePlanung(id) {
     try {
       if (b.dataset.akt === 'tag-ja' || b.dataset.akt === 'tag-nein') { b.disabled = true; await tagAktion(b, 'planung', p.id); await laden(); }
       else if (b.dataset.akt === 'teilen') await navigator.share({ title: p.titel, text: p.text });
-      else if (b.dataset.akt === 'kopieren') { await navigator.clipboard.writeText(p.text); melde('Text kopiert'); }
+      else if (b.dataset.akt === 'kopieren') { await navigator.clipboard.writeText(p.text); melde(tx('Text kopiert')); }
       else if (b.dataset.akt === 'loeschen') {
         const r = p.rundenliste.find((x) => x.id === b.dataset.id);
         const einzige = p.rundenliste.length === 1;
-        if (!confirm(`Runde ${r ? r.nr : ''} in den Papierkorb legen?${r && r.status !== 'fertig' && r.status !== 'fehler' ? ' Ihre Verarbeitung wird abgebrochen.' : ''}${einzige ? ' Es ist die einzige Runde – die Planung verschwindet mit.' : ''}`)) return;
+        if (!confirm(T`Runde ${r ? r.nr : ''} in den Papierkorb legen?${r && r.status !== 'fertig' && r.status !== 'fehler' ? tx(' Ihre Verarbeitung wird abgebrochen.') : ''}${einzige ? tx(' Es ist die einzige Runde – die Planung verschwindet mit.') : ''}`)) return;
         b.disabled = true;
-        await api(`/api/eintraege/${b.dataset.id}`, { method: 'DELETE' });
-        melde('Runde gelöscht');
+        await api(T`/api/eintraege/${b.dataset.id}`, { method: 'DELETE' });
+        melde(tx('Runde gelöscht'));
         if (einzige) {
           await loesche('eintraege', p.id);
           await loesche('verlauf', p.id);
@@ -1623,27 +1679,27 @@ async function zeigePlanung(id) {
           geheZu('/', true);
         } else await laden();
       } else if (b.dataset.akt === 'planung-loeschen') {
-        if (!confirm(`Planung mit ${p.rundenliste.length} ${p.rundenliste.length === 1 ? 'Runde' : 'Runden'} in den Papierkorb legen? Laufende Verarbeitung wird abgebrochen, ihr Listenpunkt verschwindet ebenfalls. Unter Status → Papierkorb wiederherstellbar.`)) return;
+        if (!confirm(T`Planung mit ${p.rundenliste.length} ${p.rundenliste.length === 1 ? tx('Runde') : tx('Runden')} in den Papierkorb legen? Laufende Verarbeitung wird abgebrochen, ihr Listenpunkt verschwindet ebenfalls. Unter Status → Papierkorb wiederherstellbar.`)) return;
         b.disabled = true;
         await api('/api/verlauf/loeschen', { method: 'POST', body: { eintraege: [], planungen: [p.id] } });
         await loesche('eintraege', p.id);
         await loesche('verlauf', p.id);
         verlaufStand = null;
-        melde('Planung gelöscht');
+        melde(tx('Planung gelöscht'));
         geheZu('/', true);
       } else if (b.dataset.akt === 'neustart') {
         b.disabled = true;
-        melde((await merkeVor({ typ: 'neustart', eintrag: b.dataset.id })) ? 'Neu gestartet' : 'Vorgemerkt – startet bei Verbindung');
+        melde((await merkeVor({ typ: 'neustart', eintrag: b.dataset.id })) ? tx('Neu gestartet') : tx('Vorgemerkt – startet bei Verbindung'));
         await laden();
       } else if (b.dataset.akt === 'schliessen') {
-        if (!confirm('Planung schließen? Sie wird nicht mehr fortgesetzt.')) return;
+        if (!confirm(tx('Planung schließen? Sie wird nicht mehr fortgesetzt.'))) return;
         b.disabled = true;
-        melde((await merkeVor({ typ: 'schliessen', planung: p.id })) ? 'Planung geschlossen' : 'Vorgemerkt – schließt bei Verbindung');
+        melde((await merkeVor({ typ: 'schliessen', planung: p.id })) ? tx('Planung geschlossen') : tx('Vorgemerkt – schließt bei Verbindung'));
         await laden();
       } else if (b.dataset.akt === 'oeffnen') {
         b.disabled = true;
-        await api(`/api/planungen/${p.id}/oeffnen`, { method: 'POST' });
-        melde('Planung wieder offen');
+        await api(T`/api/planungen/${p.id}/oeffnen`, { method: 'POST' });
+        melde(tx('Planung wieder offen'));
         await laden();
       }
     } catch (f) {
@@ -1657,13 +1713,13 @@ async function zeigePlanung(id) {
 // ---------- Umhängen ----------
 
 async function zeigeUmhaengen(id) {
-  const [e, offen] = await Promise.all([api(`/api/eintraege/${id}`), api('/api/planungen/offen')]);
+  const [e, offen] = await Promise.all([api(T`/api/eintraege/${id}`), api('/api/planungen/offen')]);
   const ziele = offen.planungen.filter((p) => p.id !== e.planung);
-  seite.innerHTML = `<h1>Runde umhängen</h1>
+  seite.innerHTML = T`<h1>Runde umhängen</h1>
     <p class="leise">Die Aufnahme „${esc(e.vorschau)}“ wird aus ihrer Planung gelöst und am neuen Ziel neu recherchiert.</p>
     <div class="leiste"><button class="btn haupt" data-ziel="neu">Als neue Planung</button></div>
-    ${ziele.length ? '<h2>Zu einer offenen Planung</h2>' : '<p class="leise">Keine andere offene Planung vorhanden.</p>'}
-    ${ziele.map((p) => `<div class="karte"><div class="titel">${nrHtml(p.nr)}${esc(p.titel)}</div><div class="vorschau">${esc(p.vorhaben)}</div>
+    ${ziele.length ? T('<h2>Zu einer offenen Planung</h2>') : T('<p class="leise">Keine andere offene Planung vorhanden.</p>')}
+    ${ziele.map((p) => T`<div class="karte"><div class="titel">${nrHtml(p.nr)}${esc(p.titel)}</div><div class="vorschau">${esc(p.vorhaben)}</div>
       <div class="leiste"><button class="btn klein" data-ziel="${p.id}">Hierher umhängen</button></div></div>`).join('')}
     <div class="leiste"><a class="btn" href="/eintrag/${id}">Abbrechen</a></div>`;
   seite.onclick = async (ev) => {
@@ -1671,9 +1727,9 @@ async function zeigeUmhaengen(id) {
     if (!b) return;
     b.disabled = true;
     try {
-      await api(`/api/eintraege/${id}/umhaengen`, { method: 'POST', body: { ziel: b.dataset.ziel } });
-      melde('Umgehängt – wird neu recherchiert');
-      geheZu(`/eintrag/${id}`, true);
+      await api(T`/api/eintraege/${id}/umhaengen`, { method: 'POST', body: { ziel: b.dataset.ziel } });
+      melde(tx('Umgehängt – wird neu recherchiert'));
+      geheZu(T`/eintrag/${id}`, true);
     } catch (f) { b.disabled = false; melde(f.message); }
   };
   aufraeumen = () => { seite.onclick = null; };
@@ -1682,29 +1738,29 @@ async function zeigeUmhaengen(id) {
 // ---------- Wortlaut korrigieren (eigene Bearbeiten-Seite) ----------
 
 async function zeigeWortlaut(id) {
-  const e = await api(`/api/eintraege/${id}`);
-  const zurueck = e.planung ? `/planung/${e.planung}` : `/eintrag/${id}`;
-  seite.innerHTML = `<h1>Wortlaut korrigieren</h1>
-    <p class="leise">Falsch erkannte Wörter (z. B. Namen) berichtigen. Danach wertet die KI ${e.planung ? 'diese Runde der Planung' : 'die Notiz'} neu aus; was davon allgemein gilt (z. B. die Schreibweise eines Namens), schlägt die KI fürs Gedächtnis vor.</p>
+  const e = await api(T`/api/eintraege/${id}`);
+  const zurueck = e.planung ? T`/planung/${e.planung}` : T`/eintrag/${id}`;
+  seite.innerHTML = T`<h1>Wortlaut korrigieren</h1>
+    <p class="leise">Falsch erkannte Wörter (z. B. Namen) berichtigen. Danach wertet die KI ${e.planung ? tx('diese Runde der Planung') : tx('die Notiz')} neu aus; was davon allgemein gilt (z. B. die Schreibweise eines Namens), schlägt die KI fürs Gedächtnis vor.</p>
     <label for="wortlaut">Wortlaut</label>
     <textarea id="wortlaut" rows="8">${esc(e.transkript || '')}</textarea>
     <div class="leiste"><button class="btn haupt" data-akt="speichern">Speichern und neu auswerten</button><a class="btn" href="${zurueck}">Abbrechen</a></div>`;
   const feld = document.getElementById('wortlaut');
-  feld.style.height = `${Math.max(feld.scrollHeight + 4, 160)}px`;
+  feld.style.height = T`${Math.max(feld.scrollHeight + 4, 160)}px`;
   seite.onclick = async (ev) => {
     const b = ev.target.closest('button[data-akt="speichern"]');
     if (!b) return;
     const text = feld.value.trim();
-    if (!text) return melde('Der Wortlaut darf nicht leer sein');
+    if (!text) return melde(tx('Der Wortlaut darf nicht leer sein'));
     b.disabled = true;
     try {
-      const d = await api(`/api/eintraege/${id}/wortlaut`, { method: 'PUT', body: { text } });
-      melde(!d.geaendert ? 'Nichts geändert' : `Wird neu ausgewertet${d.gelernt ? ' · die KI prüft, ob die Berichtigung ins Gedächtnis gehört' : ''}`);
+      const d = await api(T`/api/eintraege/${id}/wortlaut`, { method: 'PUT', body: { text } });
+      melde(!d.geaendert ? tx('Nichts geändert') : T`Wird neu ausgewertet${d.gelernt ? tx(' · die KI prüft, ob die Berichtigung ins Gedächtnis gehört') : ''}`);
       ladeZaehler();
       geheZu(zurueck, true);
     } catch (f) {
       b.disabled = false;
-      melde(f instanceof NetzFehler ? 'Offline – nur mit Verbindung' : f.message);
+      melde(f instanceof NetzFehler ? tx('Offline – nur mit Verbindung') : f.message);
     }
   };
   aufraeumen = () => { seite.onclick = null; };
@@ -1714,8 +1770,8 @@ async function zeigeWortlaut(id) {
 
 async function zeigeAntwort(planung) {
   let aufnahme = null, rekorder = null, strom = null;
-  const entwurfKey = `entwurf:${planung}`;
-  seite.innerHTML = `<h1>Antworten</h1>
+  const entwurfKey = T`entwurf:${planung}`;
+  seite.innerHTML = T`<h1>Antworten</h1>
     <p class="leise">Die Antwort wird als neue Runde in die Planung eingearbeitet. Tippen oder aufnehmen.</p>
     <label for="text">Antwort als Text</label>
     <textarea id="text" placeholder="Antworten auf die offenen Fragen, Ergänzungen, Änderungen …"></textarea>
@@ -1730,11 +1786,11 @@ async function zeigeAntwort(planung) {
 
   const stoppeStrom = () => { strom?.getTracks().forEach((t) => t.stop()); strom = null; };
   const male = () => {
-    if (rekorder?.state === 'recording') box.innerHTML = '<span class="punkt"></span><span>Aufnahme läuft …</span><button class="btn klein" data-a="stopp">Stopp</button>';
+    if (rekorder?.state === 'recording') box.innerHTML = T('<span class="punkt"></span><span>Aufnahme läuft …</span><button class="btn klein" data-a="stopp">Stopp</button>');
     else if (aufnahme) {
-      box.innerHTML = '<audio controls></audio><button class="btn klein gefahr" data-a="weg">Aufnahme verwerfen</button>';
+      box.innerHTML = T('<audio controls></audio><button class="btn klein gefahr" data-a="weg">Aufnahme verwerfen</button>');
       box.querySelector('audio').src = URL.createObjectURL(aufnahme);
-    } else box.innerHTML = navigator.mediaDevices?.getUserMedia ? '<button class="btn" data-a="start">Aufnehmen</button>' : '<span class="leise">Aufnahme wird von diesem Browser nicht unterstützt.</span>';
+    } else box.innerHTML = navigator.mediaDevices?.getUserMedia ? T('<button class="btn" data-a="start">Aufnehmen</button>') : T('<span class="leise">Aufnahme wird von diesem Browser nicht unterstützt.</span>');
   };
   box.onclick = async (ev) => {
     const a = ev.target.closest('button')?.dataset.a;
@@ -1746,7 +1802,7 @@ async function zeigeAntwort(planung) {
         rekorder.ondataavailable = (d) => d.data.size && teile.push(d.data);
         rekorder.onstop = () => { aufnahme = new Blob(teile, { type: rekorder.mimeType || 'audio/webm' }); stoppeStrom(); male(); };
         rekorder.start();
-      } catch (f) { melde('Mikrofon nicht verfügbar'); }
+      } catch (f) { melde(tx('Mikrofon nicht verfügbar')); }
     } else if (a === 'stopp') rekorder.stop();
     else if (a === 'weg') aufnahme = null;
     male();
@@ -1754,15 +1810,15 @@ async function zeigeAntwort(planung) {
   male();
 
   document.getElementById('senden').onclick = async (ev) => {
-    if (rekorder?.state === 'recording') return melde('Erst die Aufnahme stoppen');
+    if (rekorder?.state === 'recording') return melde(tx('Erst die Aufnahme stoppen'));
     const inhalt = text.value.trim();
-    if (!aufnahme && !inhalt) return melde('Antwort ist leer');
-    if (aufnahme && inhalt && !confirm('Es gibt Text und Aufnahme. Gesendet wird die Aufnahme, der Text entfällt. Fortfahren?')) return;
+    if (!aufnahme && !inhalt) return melde(tx('Antwort ist leer'));
+    if (aufnahme && inhalt && !confirm(tx('Es gibt Text und Aufnahme. Gesendet wird die Aufnahme, der Text entfällt. Fortfahren?'))) return;
     ev.target.disabled = true;
     const gesendet = await merkeVor(aufnahme ? { typ: 'antwort', planung, audio: aufnahme } : { typ: 'antwort', planung, text: inhalt });
     localStorage.removeItem(entwurfKey);
-    melde(gesendet ? 'Antwort gesendet' : 'Antwort vorgemerkt – wird bei Verbindung gesendet');
-    geheZu(`/planung/${planung}`, true);
+    melde(gesendet ? tx('Antwort gesendet') : tx('Antwort vorgemerkt – wird bei Verbindung gesendet'));
+    geheZu(T`/planung/${planung}`, true);
   };
   aufraeumen = () => { if (rekorder?.state === 'recording') rekorder.stop(); stoppeStrom(); };
 }
@@ -1774,39 +1830,39 @@ async function oeffneFragen(planung, typ = 'planung') {
   if (document.querySelector('dialog.drawer')) return;
   const notiz = typ === 'eintrag';
   let p;
-  try { p = await api(`/api/${notiz ? 'eintraege' : 'planungen'}/${planung}`); await lege('eintraege', p); } catch (f) {
+  try { p = await api(T`/api/${notiz ? 'eintraege' : 'planungen'}/${planung}`); await lege('eintraege', p); } catch (f) {
     if (f instanceof NetzFehler) p = await lies('eintraege', planung); else return melde(f.message);
   }
   const fragen = ((notiz ? p?.analyse?.rueckfragen : p?.plan?.offene_fragen) || []).map((f) => (typeof f === 'string' ? { frage: f, antworten: [] } : f));
-  if (!p || (!notiz && p.planung_status !== 'offen') || !p.fragen || !fragen.length) return melde('Keine offenen Fragen');
+  if (!p || (!notiz && p.planung_status !== 'offen') || !p.fragen || !fragen.length) return melde(tx('Keine offenen Fragen'));
   const antworten = fragen.map(() => null); // null = übersprungen
   let i = 0, eigene = false;
   const d = document.createElement('dialog');
   d.className = 'drawer';
   const male = () => {
-    const kopf = `<div class="griff" aria-hidden="true"></div><div class="zeile"><span class="leise">${nrHtml(p.nr)}${esc(p.titel || (notiz ? 'Notiz' : 'Planung'))}</span><button class="btn klein rund" data-d="zu" aria-label="Schließen">×</button></div>`;
+    const kopf = T`<div class="griff" aria-hidden="true"></div><div class="zeile"><span class="leise">${nrHtml(p.nr)}${esc(p.titel || (notiz ? tx('Notiz') : tx('Planung')))}</span><button class="btn klein rund" data-d="zu" aria-label="Schließen">×</button></div>`;
     if (i >= fragen.length) {
       const n = antworten.filter((a) => a).length;
-      d.innerHTML = `${kopf}<h2>Antworten senden</h2>
-        <div class="dliste">${fragen.map((f, k) => `<button class="dzeile" data-d="gehe" data-k="${k}"><span class="leise">${esc(f.frage)}</span><span>${antworten[k] ? esc(antworten[k]) : '<em class="leise">übersprungen</em>'}</span></button>`).join('')}</div>
-        <p class="leise">${n ? (notiz ? 'Die Notiz wird mit den Antworten neu ausgewertet; die KI merkt sie sich.' : 'Die Planung wird mit den Antworten neu recherchiert.') : 'Noch keine Frage beantwortet.'}</p>
+      d.innerHTML = T`${kopf}<h2>Antworten senden</h2>
+        <div class="dliste">${fragen.map((f, k) => T`<button class="dzeile" data-d="gehe" data-k="${k}"><span class="leise">${esc(f.frage)}</span><span>${antworten[k] ? esc(antworten[k]) : T('<em class="leise">übersprungen</em>')}</span></button>`).join('')}</div>
+        <p class="leise">${n ? (notiz ? tx('Die Notiz wird mit den Antworten neu ausgewertet; die KI merkt sie sich.') : tx('Die Planung wird mit den Antworten neu recherchiert.')) : tx('Noch keine Frage beantwortet.')}</p>
         <div class="dfuss"><button class="btn klein rund" data-d="zurueck">‹ Zurück</button><span></span><button class="btn haupt pille" data-d="senden"${n ? '' : ' disabled'}>Senden</button></div>`;
       return;
     }
     const f = fragen[i];
     const frei = antworten[i] && !f.antworten.includes(antworten[i]) ? antworten[i] : '';
     const feld = eigene || frei || !f.antworten.length;
-    d.innerHTML = `${kopf}<h2>${esc(f.frage)}</h2>
-      <div class="dliste">${f.antworten.map((a, k) => `<button class="dzeile wahl${antworten[i] === a ? ' an' : ''}" data-d="wahl" data-k="${k}"><span class="kreis" aria-hidden="true"></span><span>${esc(a)}</span></button>`).join('')}
-        ${feld ? `<div class="deigene"><input type="text" id="deigene" maxlength="300" placeholder="Eigene Antwort …" value="${esc(frei)}"><button class="btn klein haupt" data-d="eigene-ok">OK</button></div>` : '<button class="dzeile wahl" data-d="eigene"><span class="kreis" aria-hidden="true"></span><span class="leise">Eigene Antwort …</span></button>'}</div>
+    d.innerHTML = T`${kopf}<h2>${esc(f.frage)}</h2>
+      <div class="dliste">${f.antworten.map((a, k) => T`<button class="dzeile wahl${antworten[i] === a ? ' an' : ''}" data-d="wahl" data-k="${k}"><span class="kreis" aria-hidden="true"></span><span>${esc(a)}</span></button>`).join('')}
+        ${feld ? T`<div class="deigene"><input type="text" id="deigene" maxlength="300" placeholder="Eigene Antwort …" value="${esc(frei)}"><button class="btn klein haupt" data-d="eigene-ok">OK</button></div>` : T('<button class="dzeile wahl" data-d="eigene"><span class="kreis" aria-hidden="true"></span><span class="leise">Eigene Antwort …</span></button>')}</div>
       <div class="dfuss"><span class="pager"><button class="btn klein rund" data-d="zurueck"${i ? '' : ' disabled'} aria-label="Vorige Frage">‹</button><span>Frage ${i + 1} von ${fragen.length}</span></span>
-        <button class="btn pille" data-d="weiter">${antworten[i] ? 'Weiter' : 'Überspringen'}</button></div>`;
+        <button class="btn pille" data-d="weiter">${antworten[i] ? tx('Weiter') : tx('Überspringen')}</button></div>`;
     if (eigene) d.querySelector('#deigene')?.focus();
   };
   const weiter = () => { i += 1; eigene = false; male(); };
   const nimmEigene = () => {
     const wert = d.querySelector('#deigene')?.value.trim();
-    if (!wert) return melde('Antwort ist leer');
+    if (!wert) return melde(tx('Antwort ist leer'));
     antworten[i] = wert;
     weiter();
   };
@@ -1828,12 +1884,12 @@ async function oeffneFragen(planung, typ = 'planung') {
       case 'gehe': i = Number(b.dataset.k); eigene = false; return male();
       case 'senden': {
         b.disabled = true;
-        const text = fragen.map((f, k) => (antworten[k] ? `Frage: ${f.frage}\nAntwort: ${antworten[k]}` : '')).filter(Boolean).join('\n\n');
+        const text = fragen.map((f, k) => (antworten[k] ? T`Frage: ${f.frage}\nAntwort: ${antworten[k]}` : '')).filter(Boolean).join('\n\n');
         const gesendet = notiz
           ? await merkeVor({ typ: 'notizantwort', eintrag: planung, antworten: fragen.map((f, k) => ({ frage: f.frage, antwort: antworten[k] })).filter((x) => x.antwort) })
           : await merkeVor({ typ: 'antwort', planung, text });
         d.close();
-        melde(gesendet ? `Antworten gesendet – die ${notiz ? 'Notiz' : 'Planung'} wird aktualisiert` : 'Vorgemerkt – wird bei Verbindung gesendet');
+        melde(gesendet ? (notiz ? tx('Antworten gesendet – die Notiz wird aktualisiert') : tx('Antworten gesendet – die Planung wird aktualisiert')) : tx('Vorgemerkt – wird bei Verbindung gesendet'));
         aktuell?.neuLaden?.();
       }
     }
@@ -1853,21 +1909,21 @@ async function oeffneFragen(planung, typ = 'planung') {
 
 // Alle Listen, oder als Unterseite /listen/gruppe/<name> nur eine Gruppe ('-' = ohne Gruppe).
 async function zeigeListen(filter) {
-  seite.innerHTML = '<p class="leer">Lädt …</p>';
+  seite.innerHTML = T('<p class="leer">Lädt …</p>');
   let d = null, vergangeneZeigen = false;
   // Ausgeklappt: unter jeder aktiven Liste ihre offenen (und kürzlich abgehakten) Punkte; je Gerät gemerkt.
   let ausgeklappt = false;
   try { ausgeklappt = localStorage.getItem('listen-ausgeklappt') === '1'; } catch { /* Standard: eingeklappt */ }
-  const punktHtml = (p) => `<div class="lp${p.erledigt ? ' erledigt' : ''}">
-    <button class="haken" data-haken="${p.id}" aria-pressed="${!!p.erledigt}" aria-label="${p.erledigt ? 'Wieder öffnen' : 'Abhaken'}: ${esc(p.text)}"><span class="hakenbild" aria-hidden="true"></span></button>
-    <div class="lptext"><div class="lpzeile">${p.eintrag || p.planung ? `<a class="lptitel" href="${p.eintrag ? `/eintrag/${p.eintrag}` : `/planung/${p.planung}`}">${esc(p.text)}</a>${punktEnde(p)}` : `${esc(p.text)}${punktEnde(p)}`}</div></div></div>`;
+  const punktHtml = (p) => T`<div class="lp${p.erledigt ? ' erledigt' : ''}">
+    <button class="haken" data-haken="${p.id}" aria-pressed="${!!p.erledigt}" aria-label="${p.erledigt ? tx('Wieder öffnen') : tx('Abhaken')}: ${esc(p.text)}"><span class="hakenbild" aria-hidden="true"></span></button>
+    <div class="lptext"><div class="lpzeile">${p.eintrag || p.planung ? T`<a class="lptitel" href="${p.eintrag ? T`/eintrag/${p.eintrag}` : T`/planung/${p.planung}`}">${esc(p.text)}</a>${punktEnde(p)}` : `${esc(p.text)}${punktEnde(p)}`}</div></div></div>`;
   const male = () => {
     if (aktuell?.name !== 'listen' || (aktuell.arg ? decodeURIComponent(aktuell.arg) : '') !== filter) return;
-    const zeile = (l) => `<a class="karte listenkarte" href="/liste/${l.id}"><span class="titel">${listenNr(l)}${esc(l.name)}</span>
-        <span class="badge ${l.offen ? 'in_arbeit' : 'fertig'}" title="${l.offen} von ${l.gesamt} offen">${l.offen}/${l.gesamt}</span></a>`;
+    const zeile = (l) => T`<a class="karte listenkarte" href="/liste/${l.id}"><span class="titel">${listenNr(l)}${esc(l.name)}</span>
+        <span class="badge ${l.offen ? 'in_arbeit' : 'fertig'}" title="${tx('{0} von {1} offen', l.offen, l.gesamt)}">${l.offen}/${l.gesamt}</span></a>`;
     const mitPunkten = (l) => {
       const sichtbar = ausgeklappt ? (l.punkte || []).filter((p) => !p.erledigt || p.erledigt > d.vergangen_vor) : [];
-      return zeile(l) + (sichtbar.length ? `<div class="lpgruppe">${sichtbar.map(punktHtml).join('')}</div>` : '');
+      return zeile(l) + (sichtbar.length ? T`<div class="lpgruppe">${sichtbar.map(punktHtml).join('')}</div>` : '');
     };
     // Je Gruppe ihre Listen; Listen ohne Gruppe unter „Ohne Gruppe“. Gruppen und Listen nach dem jüngsten Punkt, neueste oben.
     // Der Gruppenname öffnet die Gruppe als Unterseite; dort steht kein Gruppenkopf.
@@ -1880,7 +1936,7 @@ async function zeigeListen(filter) {
       }
       return gruppen.map(([projekt, ls]) => {
         const wert = projekt || '-';
-        return `<div class="tag gruppenkopf">${projekt ? `<a class="titelknopf" href="/gruppe/${encodeURIComponent(projekt)}/bearbeiten" aria-label="Gruppe ${esc(projekt)} bearbeiten" title="Gruppe bearbeiten">${STIFT}</a>` : '<span class="titelknopf platz" aria-hidden="true"></span>'}<a class="gruppenname" href="${gruppenPfad(wert)}" title="Gruppe öffnen">${esc(gruppenTitel(projekt))}</a></div>${ls.map(fn).join('')}`;
+        return T`<div class="tag gruppenkopf">${projekt ? T`<a class="titelknopf" href="/gruppe/${encodeURIComponent(projekt)}/bearbeiten" aria-label="${esc(tx('Gruppe {0} bearbeiten', projekt))}" title="Gruppe bearbeiten">${STIFT}</a>` : T('<span class="titelknopf platz" aria-hidden="true"></span>')}<a class="gruppenname" href="${gruppenPfad(wert)}" title="Gruppe öffnen">${esc(gruppenTitel(projekt))}</a></div>${ls.map(fn).join('')}`;
       }).join('');
     };
     // Aktiv: nur Listen mit offenen Punkten; ganz erledigte und leere stehen eingeklappt unter „Vergangen“ (Nutzervorgabe 20.11.2026).
@@ -1892,19 +1948,19 @@ async function zeigeListen(filter) {
     const sichtbar = d.listen.filter(passt);
     const aktiv = sichtbar.filter(istAktiv), vergangen = sichtbar.filter((l) => !istAktiv(l));
     // Titelzeile: links Stift (Gruppe bearbeiten), rechts großes Symbol zum Aus-/Einklappen der offenen Punkte.
-    const klapp = aktiv.length ? `<button class="titelknopf gross" data-ausklappen="1" aria-pressed="${ausgeklappt}" aria-label="${ausgeklappt ? 'Offene Punkte einklappen' : 'Alle offenen Punkte ausklappen'}" title="${ausgeklappt ? 'Offene Punkte einklappen' : 'Alle offenen Punkte ausklappen'}">${ausgeklappt ? EINKLAPPEN : AUSKLAPPEN}</button>` : '';
+    const klapp = aktiv.length ? T`<button class="titelknopf gross" data-ausklappen="1" aria-pressed="${ausgeklappt}" aria-label="${ausgeklappt ? tx('Offene Punkte einklappen') : tx('Alle offenen Punkte ausklappen')}" title="${ausgeklappt ? tx('Offene Punkte einklappen') : tx('Alle offenen Punkte ausklappen')}">${ausgeklappt ? EINKLAPPEN : AUSKLAPPEN}</button>` : '';
     const titel = gruppenTitel(gruppe || filter);
     const kopf = filter
-      ? `${krumen([['Listen', '/listen'], [titel]])}<div class="titelzeile">${gruppe ? `<a class="titelknopf" href="/gruppe/${encodeURIComponent(gruppe)}/bearbeiten" aria-label="Gruppe ${esc(gruppe)} bearbeiten" title="Gruppe bearbeiten">${STIFT}</a>` : ''}<h1>${esc(titel)}</h1>${klapp}</div>`
-      : `<div class="titelzeile"><h1>Listen</h1>${klapp}</div><p class="leise">Die KI sortiert Notizen selbst als Punkte in Listen, Listen eines größeren Themas in Gruppen. Von Hand über „In Liste“ an der Notiz.</p>`;
+      ? T`${krumen([[tx('Listen'), '/listen'], [titel]])}<div class="titelzeile">${gruppe ? T`<a class="titelknopf" href="/gruppe/${encodeURIComponent(gruppe)}/bearbeiten" aria-label="${esc(tx('Gruppe {0} bearbeiten', gruppe))}" title="Gruppe bearbeiten">${STIFT}</a>` : ''}<h1>${esc(titel)}</h1>${klapp}</div>`
+      : T`<div class="titelzeile"><h1>Listen</h1>${klapp}</div><p class="leise">Die KI sortiert Notizen selbst als Punkte in Listen, Listen eines größeren Themas in Gruppen. Von Hand über „In Liste“ an der Notiz.</p>`;
     seite.innerHTML = `${kopf}
-      ${filter && !sichtbar.length ? '<p class="leer">Keine Einträge vorhanden.</p>' : !d.listen.length ? '<p class="leer">Noch keine Liste. Einfach einen Filmtitel oder eine Idee diktieren.</p>' : aktiv.length ? gruppiert(aktiv, mitPunkten) : '<p class="leer">Alles erledigt.</p>'}
-      ${vergangen.length ? `<div class="leiste"><button class="btn klein" data-vergangen="1">${vergangeneZeigen ? 'Vergangene ausblenden' : `Vergangene Listen anzeigen (${vergangen.length})`}</button></div>
-        ${vergangeneZeigen ? `<h2>Vergangen</h2>${gruppiert(vergangen, zeile)}` : ''}` : ''}`;
+      ${filter && !sichtbar.length ? T('<p class="leer">Keine Einträge vorhanden.</p>') : !d.listen.length ? T('<p class="leer">Noch keine Liste. Einfach einen Filmtitel oder eine Idee diktieren.</p>') : aktiv.length ? gruppiert(aktiv, mitPunkten) : T('<p class="leer">Alles erledigt.</p>')}
+      ${vergangen.length ? T`<div class="leiste"><button class="btn klein" data-vergangen="1">${vergangeneZeigen ? tx('Vergangene ausblenden') : T`Vergangene Listen anzeigen (${vergangen.length})`}</button></div>
+        ${vergangeneZeigen ? T`<h2>Vergangen</h2>${gruppiert(vergangen, zeile)}` : ''}` : ''}`;
   };
   const laden = async () => {
     try { d = await apiAbgelegt('/api/listen?punkte=1'); } catch (f) {
-      if (f instanceof NetzFehler) { if (!d && aktuell?.name === 'listen') seite.innerHTML = '<p class="leer">Offline – die Listen sind noch nicht gespeichert.</p>'; return; }
+      if (f instanceof NetzFehler) { if (!d && aktuell?.name === 'listen') seite.innerHTML = T('<p class="leer">Offline – die Listen sind noch nicht gespeichert.</p>'); return; }
       throw f;
     }
     // Gruppen fürs Menü (neueste zuerst; '-' = Listen ohne Gruppe).
@@ -1951,7 +2007,7 @@ async function zeigeListen(filter) {
 
 // Haken in den gespeicherten Antworten nachführen: Liste und Übersicht stimmen auch offline.
 async function merkeHakenAbgelegt(listeId, punkt) {
-  await aendereAbgelegt(`/api/listen/${listeId}`, (l) => ({ ...l, punkte: l.punkte.map((x) => (x.id === punkt.id ? { ...x, erledigt: punkt.erledigt } : x)) }));
+  await aendereAbgelegt(T`/api/listen/${listeId}`, (l) => ({ ...l, punkte: l.punkte.map((x) => (x.id === punkt.id ? { ...x, erledigt: punkt.erledigt } : x)) }));
   await aendereAbgelegt('/api/listen?punkte=1', (d) => ({ ...d, listen: d.listen.map((x) => (x.id === listeId
     ? { ...x, offen: x.offen + (punkt.erledigt ? -1 : 1), erledigt_am: punkt.erledigt ? Math.max(x.erledigt_am || 0, punkt.erledigt) : x.erledigt_am,
       punkte: x.punkte?.map((y) => (y.id === punkt.id ? { ...y, erledigt: punkt.erledigt } : y)) }
@@ -1959,12 +2015,12 @@ async function merkeHakenAbgelegt(listeId, punkt) {
 }
 
 async function zeigeListe(id) {
-  seite.innerHTML = '<p class="leer">Lädt …</p>';
+  seite.innerHTML = T('<p class="leer">Lädt …</p>');
   let l = null, vergangeneZeigen = false;
-  const punkt = (p) => `<div class="lp${p.erledigt ? ' erledigt' : ''}">
-    <button class="haken" data-haken="${p.id}" aria-pressed="${!!p.erledigt}" aria-label="${p.erledigt ? 'Wieder öffnen' : 'Abhaken'}: ${esc(p.text)}"><span class="hakenbild" aria-hidden="true"></span></button>
-    <div class="lptext"><div class="lpzeile">${p.eintrag || p.planung ? `<a class="lptitel" href="${p.eintrag ? `/eintrag/${p.eintrag}` : `/planung/${p.planung}`}">${esc(p.text)}</a>${punktEnde(p)}` : `${esc(p.text)}${punktEnde(p)}`}</div>
-      <details class="lpmenue"><summary aria-label="Mehr zu ${esc(p.text)}">Mehr</summary><div class="leiste"><a class="btn klein" href="/liste/${id}/punkt/${p.id}/verschieben">Verschieben</a><button class="btn klein gefahr" data-weg="${p.id}">Löschen</button></div></details></div></div>`;
+  const punkt = (p) => T`<div class="lp${p.erledigt ? ' erledigt' : ''}">
+    <button class="haken" data-haken="${p.id}" aria-pressed="${!!p.erledigt}" aria-label="${p.erledigt ? tx('Wieder öffnen') : tx('Abhaken')}: ${esc(p.text)}"><span class="hakenbild" aria-hidden="true"></span></button>
+    <div class="lptext"><div class="lpzeile">${p.eintrag || p.planung ? T`<a class="lptitel" href="${p.eintrag ? T`/eintrag/${p.eintrag}` : T`/planung/${p.planung}`}">${esc(p.text)}</a>${punktEnde(p)}` : `${esc(p.text)}${punktEnde(p)}`}</div>
+      <details class="lpmenue"><summary aria-label="${esc(tx('Mehr zu {0}', p.text))}">Mehr</summary><div class="leiste"><a class="btn klein" href="/liste/${id}/punkt/${p.id}/verschieben">Verschieben</a><button class="btn klein gefahr" data-weg="${p.id}">Löschen</button></div></details></div></div>`;
   const male = () => {
     if (aktuell?.name !== 'liste' || aktuell.arg !== id) return;
     const offen = l.punkte.filter((p) => !p.erledigt), fertig = l.punkte.filter((p) => p.erledigt);
@@ -1972,20 +2028,20 @@ async function zeigeListe(id) {
     const kuerzlich = fertig.filter((p) => p.erledigt > l.vergangen_vor), vergangen = fertig.filter((p) => p.erledigt <= l.vergangen_vor);
     const aktiv = [...offen, ...kuerzlich];
     const auf = new Set([...seite.querySelectorAll('details[open] [data-weg]')].map((b) => b.dataset.weg));
-    seite.innerHTML = `${krumen([['Listen', '/listen'], [gruppenTitel(l.projekt), gruppenPfad(l.projekt)], [`${l.nr ? `L${l.nr} ` : ''}${l.name}`]])}
-      <h1>${listenNr(l)}${esc(l.name)}</h1><div class="leise">${l.projekt ? `Gruppe ${esc(l.projekt)} · ` : ''}${offen.length} offen · ${fertig.length} erledigt</div>
-      ${l.beschreibung ? `<p class="leise">${esc(l.beschreibung)}</p>` : ''}
-      ${aktiv.length ? aktiv.map(punkt).join('') : `<p class="leer">${fertig.length ? 'Alles erledigt.' : 'Die Liste ist leer.'}</p>`}
-      ${vergangen.length ? `<div class="leiste"><button class="btn klein" data-vergangen="1">${vergangeneZeigen ? 'Vergangene ausblenden' : `Vergangene anzeigen (${vergangen.length})`}</button></div>
-        ${vergangeneZeigen ? `<h2>Vergangen</h2>${vergangen.map(punkt).join('')}` : ''}` : ''}
-      <div class="leiste">${l.joplin_id ? `<a class="btn" href="joplin://x-callback-url/openNote?id=${esc(l.joplin_id)}" target="_self">In Joplin öffnen</a>` : ''}<a class="btn" href="/liste/${id}/bearbeiten">Bearbeiten</a><button class="btn gefahr" data-liste-weg="1">Liste löschen</button></div>`;
+    seite.innerHTML = T`${krumen([[tx('Listen'), '/listen'], [gruppenTitel(l.projekt), gruppenPfad(l.projekt)], [`${l.nr ? `L${l.nr} ` : ''}${l.name}`]])}
+      <h1>${listenNr(l)}${esc(l.name)}</h1><div class="leise">${l.projekt ? T`Gruppe ${esc(l.projekt)} · ` : ''}${offen.length} offen · ${fertig.length} erledigt</div>
+      ${l.beschreibung ? T`<p class="leise">${esc(l.beschreibung)}</p>` : ''}
+      ${aktiv.length ? aktiv.map(punkt).join('') : T`<p class="leer">${fertig.length ? tx('Alles erledigt.') : tx('Die Liste ist leer.')}</p>`}
+      ${vergangen.length ? T`<div class="leiste"><button class="btn klein" data-vergangen="1">${vergangeneZeigen ? tx('Vergangene ausblenden') : T`Vergangene anzeigen (${vergangen.length})`}</button></div>
+        ${vergangeneZeigen ? T`<h2>Vergangen</h2>${vergangen.map(punkt).join('')}` : ''}` : ''}
+      <div class="leiste">${l.joplin_id ? T`<a class="btn" href="joplin://x-callback-url/openNote?id=${esc(l.joplin_id)}" target="_self">In Joplin öffnen</a>` : ''}<a class="btn" href="/liste/${id}/bearbeiten">Bearbeiten</a><button class="btn gefahr" data-liste-weg="1">Liste löschen</button></div>`;
     seite.querySelectorAll('details.lpmenue').forEach((dt) => { if (auf.has(dt.querySelector('[data-weg]')?.dataset.weg)) dt.open = true; });
   };
   const laden = async () => {
     const hier = () => aktuell?.name === 'liste' && aktuell.arg === id;
-    try { l = await apiAbgelegt(`/api/listen/${id}`); male(); } catch (f) {
-      if (f instanceof NetzFehler) { if (!l && hier()) seite.innerHTML = '<p class="leer">Offline – diese Liste ist noch nicht gespeichert.</p>'; }
-      else if (f instanceof ApiFehler && f.status === 404) { if (hier()) seite.innerHTML = '<p class="leer">Liste nicht gefunden.</p><p class="mitte"><a class="btn" href="/listen">Alle Listen</a></p>'; }
+    try { l = await apiAbgelegt(T`/api/listen/${id}`); male(); } catch (f) {
+      if (f instanceof NetzFehler) { if (!l && hier()) seite.innerHTML = T('<p class="leer">Offline – diese Liste ist noch nicht gespeichert.</p>'); }
+      else if (f instanceof ApiFehler && f.status === 404) { if (hier()) seite.innerHTML = T('<p class="leer">Liste nicht gefunden.</p><p class="mitte"><a class="btn" href="/listen">Alle Listen</a></p>'); }
       else throw f;
     }
   };
@@ -2005,13 +2061,13 @@ async function zeigeListe(id) {
         await merkeHakenAbgelegt(id, p);
         await merkeVor({ typ: 'haken', punkt: p.id });
       } else if (b.dataset.weg) {
-        if (!confirm('Punkt aus der Liste löschen?')) return;
-        await api(`/api/listenpunkte/${b.dataset.weg}`, { method: 'DELETE' });
+        if (!confirm(tx('Punkt aus der Liste löschen?'))) return;
+        await api(T`/api/listenpunkte/${b.dataset.weg}`, { method: 'DELETE' });
         await laden();
       } else if (b.dataset.listeWeg) {
-        if (!confirm(`Liste „${l.name}“ mit ${l.punkte.length} Punkten löschen? Die Notizen bleiben im Verlauf.`)) return;
-        await api(`/api/listen/${id}`, { method: 'DELETE' });
-        melde('Liste gelöscht');
+        if (!confirm(T`Liste „${l.name}“ mit ${l.punkte.length} Punkten löschen? Die Notizen bleiben im Verlauf.`)) return;
+        await api(T`/api/listen/${id}`, { method: 'DELETE' });
+        melde(tx('Liste gelöscht'));
         geheZu('/listen', true);
       }
     } catch (f) { melde(f.message); laden(); }
@@ -2021,21 +2077,21 @@ async function zeigeListe(id) {
 }
 
 async function zeigeVerschieben(liste, punkt) {
-  const [l, alleListen] = await Promise.all([api(`/api/listen/${liste}`), api('/api/listen')]);
+  const [l, alleListen] = await Promise.all([api(T`/api/listen/${liste}`), api('/api/listen')]);
   const p = l.punkte.find((x) => x.id === punkt);
   const ziele = alleListen.listen.filter((x) => x.id !== liste);
-  if (!p) { seite.innerHTML = `<p class="leer">Punkt nicht gefunden.</p><p class="mitte"><a class="btn" href="/liste/${liste}">Zur Liste</a></p>`; return; }
-  seite.innerHTML = `<h1>Punkt verschieben</h1><p class="leise">„${esc(p.text)}“ aus „${esc(l.name)}“ in eine andere Liste.</p>
-    ${ziele.length ? ziele.map((z) => `<div class="karte listenkarte"><span class="titel">${esc(listenName(z))}</span><span class="leise">${z.gesamt} ${z.gesamt === 1 ? 'Punkt' : 'Punkte'}</span><button class="btn klein haupt" data-ziel="${z.id}">Hierher</button></div>`).join('') : '<p class="leise">Es gibt keine andere Liste.</p>'}
+  if (!p) { seite.innerHTML = T`<p class="leer">Punkt nicht gefunden.</p><p class="mitte"><a class="btn" href="/liste/${liste}">Zur Liste</a></p>`; return; }
+  seite.innerHTML = T`<h1>Punkt verschieben</h1><p class="leise">„${esc(p.text)}“ aus „${esc(l.name)}“ in eine andere Liste.</p>
+    ${ziele.length ? ziele.map((z) => T`<div class="karte listenkarte"><span class="titel">${esc(listenName(z))}</span><span class="leise">${z.gesamt} ${z.gesamt === 1 ? tx('Punkt') : tx('Punkte')}</span><button class="btn klein haupt" data-ziel="${z.id}">Hierher</button></div>`).join('') : T('<p class="leise">Es gibt keine andere Liste.</p>')}
     <div class="leiste"><a class="btn" href="/liste/${liste}">Abbrechen</a></div>`;
   seite.onclick = async (ev) => {
     const b = ev.target.closest('button[data-ziel]');
     if (!b) return;
     b.disabled = true;
     try {
-      await api(`/api/listenpunkte/${punkt}/verschieben`, { method: 'POST', body: { ziel: b.dataset.ziel } });
-      melde('Verschoben');
-      geheZu(`/liste/${b.dataset.ziel}`, true);
+      await api(T`/api/listenpunkte/${punkt}/verschieben`, { method: 'POST', body: { ziel: b.dataset.ziel } });
+      melde(tx('Verschoben'));
+      geheZu(T`/liste/${b.dataset.ziel}`, true);
     } catch (f) { b.disabled = false; melde(f.message); }
   };
   aufraeumen = () => { seite.onclick = null; };
@@ -2043,13 +2099,13 @@ async function zeigeVerschieben(liste, punkt) {
 
 // Eigene Seite: Liste umbenennen oder in eine andere Gruppe verschieben (auch „ohne Gruppe“).
 async function zeigeListeBearbeiten(id) {
-  const [l, alle] = await Promise.all([api(`/api/listen/${id}`), api('/api/listen')]);
+  const [l, alle] = await Promise.all([api(T`/api/listen/${id}`), api('/api/listen')]);
   const gruppen = (alle.gruppen || []).map((g) => g.name);
-  const opt = (wert, text) => `<option value="${esc(wert)}"${wert.toLowerCase() === (l.projekt || '').toLowerCase() ? ' selected' : ''}>${esc(text)}</option>`;
-  seite.innerHTML = `${listenKrumen({ ...l, id }, ['Bearbeiten'])}<h1>Liste bearbeiten</h1>
+  const opt = (wert, text) => T`<option value="${esc(wert)}"${wert.toLowerCase() === (l.projekt || '').toLowerCase() ? ' selected' : ''}>${esc(text)}</option>`;
+  seite.innerHTML = T`${listenKrumen({ ...l, id }, [tx('Bearbeiten')])}<h1>Liste bearbeiten</h1>
     <label for="lname">Name</label><input type="text" id="lname" maxlength="40" value="${esc(l.name)}">
     <label for="lgruppe">Gruppe</label>
-    <select id="lgruppe">${opt('', 'ohne Gruppe')}${gruppen.map((g) => opt(g, g)).join('')}<option value="__neu__">Neue Gruppe …</option></select>
+    <select id="lgruppe">${opt('', tx('ohne Gruppe'))}${gruppen.map((g) => opt(g, g)).join('')}<option value="__neu__">Neue Gruppe …</option></select>
     <div id="lneuwrap" hidden><label for="lneu">Name der neuen Gruppe</label><input type="text" id="lneu" maxlength="40"></div>
     <div class="leiste"><button class="btn haupt" id="lsichern">Speichern</button><a class="btn" href="/liste/${id}">Abbrechen</a></div>`;
   const wahl = document.getElementById('lgruppe');
@@ -2057,13 +2113,13 @@ async function zeigeListeBearbeiten(id) {
   document.getElementById('lsichern').onclick = async (ev) => {
     const name = document.getElementById('lname').value.trim();
     const gruppe = wahl.value === '__neu__' ? document.getElementById('lneu').value.trim() : wahl.value;
-    if (!name) return melde('Name fehlt');
-    if (wahl.value === '__neu__' && !gruppe) return melde('Name der neuen Gruppe fehlt');
+    if (!name) return melde(tx('Name fehlt'));
+    if (wahl.value === '__neu__' && !gruppe) return melde(tx('Name der neuen Gruppe fehlt'));
     ev.target.disabled = true;
     try {
-      await api(`/api/listen/${id}`, { method: 'PUT', body: { name, gruppe } });
-      melde('Gespeichert');
-      geheZu(`/liste/${id}`, true);
+      await api(T`/api/listen/${id}`, { method: 'PUT', body: { name, gruppe } });
+      melde(tx('Gespeichert'));
+      geheZu(T`/liste/${id}`, true);
     } catch (f) { ev.target.disabled = false; melde(f.message); }
   };
 }
@@ -2072,31 +2128,31 @@ async function zeigeListeBearbeiten(id) {
 async function zeigeGruppeBearbeiten(name) {
   const alle = await api('/api/listen');
   const g = (alle.gruppen || []).find((x) => x.name.toLowerCase() === name.toLowerCase());
-  if (!g) { seite.innerHTML = '<p class="leer">Gruppe nicht gefunden.</p><p class="mitte"><a class="btn" href="/listen">Zu den Listen</a></p>'; return; }
+  if (!g) { seite.innerHTML = T('<p class="leer">Gruppe nicht gefunden.</p><p class="mitte"><a class="btn" href="/listen">Zu den Listen</a></p>'); return; }
   const listen = alle.listen.filter((l) => (l.projekt || '').toLowerCase() === g.name.toLowerCase());
-  seite.innerHTML = `${krumen([['Listen', '/listen'], [g.name, gruppenPfad(g.name)], ['Bearbeiten']])}<h1>Gruppe bearbeiten</h1>
-    <p class="leise">${listen.length} ${listen.length === 1 ? 'Liste' : 'Listen'}: ${listen.map((l) => esc(l.name)).join(', ')}</p>
-    ${g.beschreibung ? `<p class="leise">Beschreibung der KI (wöchentlich aktualisiert, hilft beim Einsortieren): ${esc(g.beschreibung)}</p>` : ''}
+  seite.innerHTML = T`${krumen([[tx('Listen'), '/listen'], [g.name, gruppenPfad(g.name)], [tx('Bearbeiten')]])}<h1>Gruppe bearbeiten</h1>
+    <p class="leise">${listen.length} ${listen.length === 1 ? tx('Liste') : tx('Listen')}: ${listen.map((l) => esc(l.name)).join(', ')}</p>
+    ${g.beschreibung ? T`<p class="leise">Beschreibung der KI (wöchentlich aktualisiert, hilft beim Einsortieren): ${esc(g.beschreibung)}</p>` : ''}
     <label for="gname">Name</label><input type="text" id="gname" maxlength="40" value="${esc(g.name)}">
     <div class="leiste"><button class="btn haupt" id="gsichern">Speichern</button><a class="btn" href="/listen">Abbrechen</a></div>
     <div class="leiste"><button class="btn gefahr" id="gweg">Gruppe auflösen</button></div>
     <p class="leise">Auflösen löscht nichts: die Listen bleiben samt Punkten, nur ohne Gruppe.</p>`;
   document.getElementById('gsichern').onclick = async (ev) => {
     const neu = document.getElementById('gname').value.trim();
-    if (!neu) return melde('Name fehlt');
+    if (!neu) return melde(tx('Name fehlt'));
     ev.target.disabled = true;
     try {
       await api('/api/gruppen', { method: 'PUT', body: { alt: g.name, name: neu } });
-      melde('Gespeichert');
+      melde(tx('Gespeichert'));
       geheZu('/listen', true);
     } catch (f) { ev.target.disabled = false; melde(f.message); }
   };
   document.getElementById('gweg').onclick = async (ev) => {
-    if (!confirm(`Gruppe „${g.name}“ auflösen? Die Listen bleiben ohne Gruppe.`)) return;
+    if (!confirm(T`Gruppe „${g.name}“ auflösen? Die Listen bleiben ohne Gruppe.`)) return;
     ev.target.disabled = true;
     try {
       await api('/api/gruppen/loeschen', { method: 'POST', body: { name: g.name } });
-      melde('Gruppe aufgelöst');
+      melde(tx('Gruppe aufgelöst'));
       geheZu('/listen', true);
     } catch (f) { ev.target.disabled = false; melde(f.message); }
   };
@@ -2106,24 +2162,24 @@ async function zeigeGruppeBearbeiten(name) {
 async function zeigeEinsortieren(id, art) {
   const pfad = art === 'planung' ? 'planungen' : 'eintraege';
   const zurueck = `/${art}/${id}`;
-  const [e, alleListen] = await Promise.all([api(`/api/${pfad}/${id}`), api('/api/listen')]);
+  const [e, alleListen] = await Promise.all([api(T`/api/${pfad}/${id}`), api('/api/listen')]);
   const ziele = alleListen.listen.filter((l) => l.id !== e.liste?.id);
-  const was = art === 'planung' ? 'Die Planung' : 'Die Notiz';
-  seite.innerHTML = `<h1>${e.liste ? 'Liste wechseln' : 'In Liste einsortieren'}</h1>
-    <p class="leise">„${esc(e.titel)}“ ${e.liste ? `steht in „${esc(listenName(e.liste))}“ und zieht in die gewählte Liste um.` : `wird ein Punkt zum Abhaken. ${was} bleibt im Verlauf.`}</p>
-    ${ziele.map((z) => `<div class="karte listenkarte"><span class="titel">${esc(listenName(z))}</span><span class="leise">${z.gesamt} ${z.gesamt === 1 ? 'Punkt' : 'Punkte'}</span><button class="btn klein haupt" data-ziel="${z.id}">Hierher</button></div>`).join('')}
+  const was = art === 'planung' ? tx('Die Planung') : tx('Die Notiz');
+  seite.innerHTML = T`<h1>${e.liste ? tx('Liste wechseln') : tx('In Liste einsortieren')}</h1>
+    <p class="leise">„${esc(e.titel)}“ ${e.liste ? T`steht in „${esc(listenName(e.liste))}“ und zieht in die gewählte Liste um.` : T`wird ein Punkt zum Abhaken. ${was} bleibt im Verlauf.`}</p>
+    ${ziele.map((z) => T`<div class="karte listenkarte"><span class="titel">${esc(listenName(z))}</span><span class="leise">${z.gesamt} ${z.gesamt === 1 ? tx('Punkt') : tx('Punkte')}</span><button class="btn klein haupt" data-ziel="${z.id}">Hierher</button></div>`).join('')}
     <label for="neueliste">Neue Liste</label>
     <div class="zeile"><input type="text" id="neueliste" maxlength="40" placeholder="z. B. Filme"><button class="btn" data-neu="1">Anlegen</button></div>
-    <div class="leiste">${e.liste ? `<a class="btn" href="/liste/${e.liste.id}">Zur Liste „${esc(listenName(e.liste))}“</a>` : ''}<a class="btn" href="${zurueck}">Abbrechen</a></div>`;
+    <div class="leiste">${e.liste ? T`<a class="btn" href="/liste/${e.liste.id}">Zur Liste „${esc(listenName(e.liste))}“</a>` : ''}<a class="btn" href="${zurueck}">Abbrechen</a></div>`;
   seite.onclick = async (ev) => {
     const b = ev.target.closest('button[data-ziel], button[data-neu]');
     if (!b) return;
     const name = seite.querySelector('#neueliste').value.trim();
-    if (b.dataset.neu && !name) { melde('Name der Liste fehlt'); return; }
+    if (b.dataset.neu && !name) { melde(tx('Name der Liste fehlt')); return; }
     b.disabled = true;
     try {
-      const r = await api(`/api/${pfad}/${id}/liste`, { method: 'POST', body: b.dataset.neu ? { neu: name } : { ziel: b.dataset.ziel } });
-      melde(`In „${r.liste.name}“ einsortiert`);
+      const r = await api(T`/api/${pfad}/${id}/liste`, { method: 'POST', body: b.dataset.neu ? { neu: name } : { ziel: b.dataset.ziel } });
+      melde(T`In „${r.liste.name}“ einsortiert`);
       geheZu(zurueck, true);
     } catch (f) { b.disabled = false; melde(f.message); }
   };
@@ -2147,40 +2203,40 @@ function bytesZuB64(buf) {
 }
 
 async function zeigeStatus() {
-  seite.innerHTML = `${statusReiter('status')}<p class="leer">Lädt …</p>`;
+  seite.innerHTML = T`${statusReiter('status')}<p class="leer">Lädt …</p>`;
   const laden = async () => {
     let s, g, o;
     try {
       [s, g, o] = await Promise.all([apiAbgelegt('/api/status'), apiAbgelegt('/api/geraete'), api('/api/oauth/apps').catch(() => ({ apps: [] })), ladeZaehler()]);
     } catch (f) {
-      if (f instanceof NetzFehler) { if (aktuell?.name === 'status') seite.innerHTML = '<p class="leer">Offline – der Status ist noch nicht gespeichert.</p>'; return; }
+      if (f instanceof NetzFehler) { if (aktuell?.name === 'status') seite.innerHTML = T('<p class="leer">Offline – der Status ist noch nicht gespeichert.</p>'); return; }
       throw f;
     }
     if (aktuell?.name !== 'status') return;
     const abo = await pushAbo().catch(() => null);
     const pushDa = 'PushManager' in window;
-    const platz = (p) => (p.fehler ? `nicht lesbar: ${esc(p.fehler)}` : `${(p.frei_mb / 1024).toFixed(1)} GB frei${p.knapp ? ' – <strong>knapp, neue Aufnahmen werden abgewiesen</strong>' : ''}`);
-    const joplin = !s.joplin.aktiv ? 'ausgeschaltet' : s.joplin.fehler ? `<strong>Fehler:</strong> ${esc(s.joplin.fehler)}` : `erreichbar${s.joplin.offene_planungen ? `, ${s.joplin.offene_planungen} Planung(en) noch nicht übertragen` : ''}`;
-    const updateKarte = neueVersion ? `<a class="karte updatekarte" href="/status/update">${updateSymbol}<span><strong>Update ${esc(neueVersion)} verfügbar</strong><br><span class="leise">Änderungen ansehen und installieren</span></span></a>` : '';
-    seite.innerHTML = `${statusReiter('status')}<h1>Status</h1>${updateKarte}
-      ${s.fehlgeschlagen ? `<div class="hinweis schlecht">${s.fehlgeschlagen} Auftrag/Aufträge dauerhaft fehlgeschlagen.</div>` : '<div class="hinweis gut">Keine fehlgeschlagenen Aufträge.</div>'}
+    const platz = (p) => (p.fehler ? T`nicht lesbar: ${esc(p.fehler)}` : T`${(p.frei_mb / 1024).toFixed(1)} GB frei${p.knapp ? T(' – <strong>knapp, neue Aufnahmen werden abgewiesen</strong>') : ''}`);
+    const joplin = !s.joplin.aktiv ? tx('ausgeschaltet') : s.joplin.fehler ? T`<strong>Fehler:</strong> ${esc(s.joplin.fehler)}` : T`erreichbar${s.joplin.offene_planungen ? T`, ${s.joplin.offene_planungen} Planung(en) noch nicht übertragen` : ''}`;
+    const updateKarte = neueVersion ? T`<a class="karte updatekarte" href="/status/update">${updateSymbol}<span><strong>Update ${esc(neueVersion)} verfügbar</strong><br><span class="leise">Änderungen ansehen und installieren</span></span></a>` : '';
+    seite.innerHTML = T`${statusReiter('status')}<h1>Status</h1>${updateKarte}
+      ${s.fehlgeschlagen ? T`<div class="hinweis schlecht">${s.fehlgeschlagen} Auftrag/Aufträge dauerhaft fehlgeschlagen.</div>` : T('<div class="hinweis gut">Keine fehlgeschlagenen Aufträge.</div>')}
       <dl><dt>Aufträge</dt><dd>${s.auftraege} gesamt, ${s.warteschlange} in Arbeit</dd>
         <dt>Speicher Audio</dt><dd>${platz(s.speicher_audio)}</dd><dt>Speicher Daten</dt><dd>${platz(s.speicher_daten)}</dd>
-        ${s.joplin.aktiv ? `<dt>Joplin</dt><dd>${joplin}</dd>` : ''}</dl>
-      ${s.joplin.aktiv ? '<div class="leiste"><button class="btn klein" data-a="pruefen">Joplin jetzt prüfen</button></div>' : ''}
-      ${s.probleme.length ? `<h2>Aufträge mit Fehlern</h2>${s.fehlgeschlagen ? '<div class="leiste"><button class="btn gefahr" data-a="fehler-weg">Alle fehlerhaften löschen</button></div>' : ''}${s.probleme.map(karte).join('')}` : ''}
+        ${s.joplin.aktiv ? T`<dt>Joplin</dt><dd>${joplin}</dd>` : ''}</dl>
+      ${s.joplin.aktiv ? T('<div class="leiste"><button class="btn klein" data-a="pruefen">Joplin jetzt prüfen</button></div>') : ''}
+      ${s.probleme.length ? T`<h2>Aufträge mit Fehlern</h2>${s.fehlgeschlagen ? T('<div class="leiste"><button class="btn gefahr" data-a="fehler-weg">Alle fehlerhaften löschen</button></div>') : ''}${s.probleme.map(karte).join('')}` : ''}
       <h2>Benachrichtigungen</h2>
-      ${!pushDa ? '<p class="leise">Dieser Browser unterstützt keine Benachrichtigungen. Auf dem iPhone die App erst zum Home-Bildschirm hinzufügen.</p>'
-    : `<p>${abo ? 'Auf diesem Gerät eingeschaltet.' : 'Auf diesem Gerät ausgeschaltet.'} <span class="leise">Geräte mit Benachrichtigung: ${s.push_abos}</span></p>
-        <div class="leiste">${abo ? '<button class="btn" data-a="push-aus">Ausschalten</button><button class="btn" data-a="push-test">Test senden</button>' : '<button class="btn haupt" data-a="push-an">Einschalten</button>'}</div>`}
+      ${!pushDa ? T('<p class="leise">Dieser Browser unterstützt keine Benachrichtigungen. Auf dem iPhone die App erst zum Home-Bildschirm hinzufügen.</p>')
+    : T`<p>${abo ? tx('Auf diesem Gerät eingeschaltet.') : tx('Auf diesem Gerät ausgeschaltet.')} <span class="leise">Geräte mit Benachrichtigung: ${s.push_abos}</span></p>
+        <div class="leiste">${abo ? T('<button class="btn" data-a="push-aus">Ausschalten</button><button class="btn" data-a="push-test">Test senden</button>') : T('<button class="btn haupt" data-a="push-an">Einschalten</button>')}</div>`}
       <h2>Geräte (Passkeys)</h2>
-      ${g.geraete.map((d) => `<div class="karte"><div class="zeile"><span><strong>${esc(d.name)}</strong>${d.dieses ? ' <span class="badge neutral">dieses Gerät</span>' : ''}</span>
-        ${g.geraete.length > 1 && !d.dieses ? `<button class="btn klein gefahr" data-geraet="${esc(d.id)}">Entfernen</button>` : ''}</div>
-        <div class="leise">angelegt ${zeit(d.angelegt)}${d.zuletzt ? ` · zuletzt angemeldet ${zeit(d.zuletzt)}` : ''}</div></div>`).join('')}
+      ${g.geraete.map((d) => T`<div class="karte"><div class="zeile"><span><strong>${esc(d.name)}</strong>${d.dieses ? T(' <span class="badge neutral">dieses Gerät</span>') : ''}</span>
+        ${g.geraete.length > 1 && !d.dieses ? T`<button class="btn klein gefahr" data-geraet="${esc(d.id)}">Entfernen</button>` : ''}</div>
+        <div class="leise">angelegt ${zeit(d.angelegt)}${d.zuletzt ? T` · zuletzt angemeldet ${zeit(d.zuletzt)}` : ''}</div></div>`).join('')}
       <div class="leiste"><a class="btn" href="/status/geraet">Weiteres Gerät hinzufügen</a></div>
       <h2>Verbundene Apps (MCP)</h2>
-      ${o.apps.length ? o.apps.map((x) => `<div class="karte"><div class="zeile"><span><strong>${esc(x.name)}</strong></span><button class="btn klein gefahr" data-app="${esc(x.id)}">Trennen</button></div>
-        <div class="leise">verbunden ${zeit(x.angelegt)}${x.zuletzt ? ` · zuletzt genutzt ${zeit(x.zuletzt)}` : ''}</div></div>`).join('') : '<p class="leise">Keine. Claude, ChatGPT & Co. verbinden sich über die Adresse <code>/mcp</code> dieses Dienstes und fragen hier nach Freigabe.</p>'}
+      ${o.apps.length ? o.apps.map((x) => T`<div class="karte"><div class="zeile"><span><strong>${esc(x.name)}</strong></span><button class="btn klein gefahr" data-app="${esc(x.id)}">Trennen</button></div>
+        <div class="leise">verbunden ${zeit(x.angelegt)}${x.zuletzt ? T` · zuletzt genutzt ${zeit(x.zuletzt)}` : ''}</div></div>`).join('') : T('<p class="leise">Keine. Claude, ChatGPT & Co. verbinden sich über die Adresse <code>/mcp</code> dieses Dienstes und fragen hier nach Freigabe.</p>')}
       <div class="leiste"><button class="btn gefahr" data-a="abmelden">Abmelden</button></div>`;
   };
   aktuell.neuLaden = laden;
@@ -2189,42 +2245,42 @@ async function zeigeStatus() {
     if (!b) return;
     try {
       if (b.dataset.app) {
-        if (!confirm('App trennen? Sie verliert sofort den Zugriff und muss neu freigegeben werden.')) return;
-        await api(`/api/oauth/apps/${b.dataset.app}`, { method: 'DELETE' });
+        if (!confirm(tx('App trennen? Sie verliert sofort den Zugriff und muss neu freigegeben werden.'))) return;
+        await api(T`/api/oauth/apps/${b.dataset.app}`, { method: 'DELETE' });
         return laden();
       }
       if (b.dataset.geraet) {
-        if (!confirm('Gerät entfernen? Es kann sich danach nicht mehr anmelden.')) return;
-        await api(`/api/geraete/${b.dataset.geraet}`, { method: 'DELETE' });
+        if (!confirm(tx('Gerät entfernen? Es kann sich danach nicht mehr anmelden.'))) return;
+        await api(T`/api/geraete/${b.dataset.geraet}`, { method: 'DELETE' });
         return laden();
       }
       switch (b.dataset.a) {
         case 'fehler-weg': {
-          if (!confirm('Alle dauerhaft fehlgeschlagenen und leeren Einträge in den Papierkorb legen?')) return;
+          if (!confirm(tx('Alle dauerhaft fehlgeschlagenen und leeren Einträge in den Papierkorb legen?'))) return;
           b.disabled = true;
           const d = await api('/api/fehler', { method: 'DELETE' });
           for (const e of await alle('verlauf')) if (e.status === 'fehler' || e.status === 'leer') await loesche('verlauf', e.id);
           verlaufStand = null;
-          melde(`${d.geloescht} gelöscht`);
+          melde(T`${d.geloescht} gelöscht`);
           return laden();
         }
-        case 'pruefen': b.disabled = true; await api('/api/status?pruefen=1'); melde('Joplin geprüft'); return laden();
+        case 'pruefen': b.disabled = true; await api('/api/status?pruefen=1'); melde(tx('Joplin geprüft')); return laden();
         case 'push-an': {
-          if ((await Notification.requestPermission()) !== 'granted') return melde('Benachrichtigungen wurden im Browser nicht erlaubt');
+          if ((await Notification.requestPermission()) !== 'granted') return melde(tx('Benachrichtigungen wurden im Browser nicht erlaubt'));
           const { schluessel } = await api('/api/push/schluessel');
           const reg = await navigator.serviceWorker.ready;
           const abo = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64zuBytes(schluessel) });
           await api('/api/push/abo', { method: 'POST', body: abo.toJSON() });
-          melde('Benachrichtigungen eingeschaltet');
+          melde(tx('Benachrichtigungen eingeschaltet'));
           return laden();
         }
         case 'push-aus': {
           const abo = await pushAbo();
           if (abo) { await api('/api/push/abo/entfernen', { method: 'POST', body: { endpoint: abo.endpoint } }); await abo.unsubscribe(); }
-          melde('Benachrichtigungen ausgeschaltet');
+          melde(tx('Benachrichtigungen ausgeschaltet'));
           return laden();
         }
-        case 'push-test': await api('/api/push/test', { method: 'POST' }); return melde('Test gesendet');
+        case 'push-test': await api('/api/push/test', { method: 'POST' }); return melde(tx('Test gesendet'));
         case 'abmelden': await api('/api/auth/abmelden', { method: 'POST' }); return geheZu('/anmelden', true);
       }
     } catch (f) { b.disabled = false; melde(f.message); }
@@ -2238,38 +2294,38 @@ async function zeigeStatus() {
 
 // ---------- Gedächtnis: was die KI über den Nutzer gelernt hat ----------
 
-const GED_REITER = [['vorschlaege', 'Vorschläge'], ['aktiv', 'Aktiv'], ['geloescht', 'Gelöscht']];
-const GED_QUELLE = { ki: 'KI', lernlauf: 'Lernlauf', korrektur: 'Korrektur', antwort: 'Antwort', nutzer: 'von dir' };
+const GED_REITER = [['vorschlaege', tx('Vorschläge')], ['aktiv', tx('Aktiv')], ['geloescht', tx('Gelöscht')]];
+const GED_QUELLE = { ki: 'KI', lernlauf: tx('Lernlauf'), korrektur: tx('Korrektur'), antwort: tx('Antwort'), nutzer: tx('von dir') };
 
 async function zeigeGedaechtnis() {
-  seite.innerHTML = `<p class="leer">Lädt …</p>`;
+  seite.innerHTML = T`<p class="leer">Lädt …</p>`;
   let wartet = false, g = null;
   let reiter = localStorage.getItem('gedaechtnis-reiter');
   const male = () => {
     if (!GED_REITER.some(([r]) => r === reiter)) reiter = g.vorschlaege.length ? 'vorschlaege' : 'aktiv';
     const l = g.lernlauf;
-    const lauf = !l ? 'Noch kein Lernlauf.' : l.fehler ? `Letzter Lernlauf ${zeit(l.zeit)} fehlgeschlagen: ${esc(l.fehler)}`
-      : `Letzter Lernlauf ${zeit(l.zeit)}: ${l.notizen} Notizen und ${l.planungen} Planungen ausgewertet, ${l.neu} neue Vorschläge${l.kosten_usd != null ? `, ${usd(l.kosten_usd)}` : ''}.`;
+    const lauf = !l ? tx('Noch kein Lernlauf.') : l.fehler ? T`Letzter Lernlauf ${zeit(l.zeit)} fehlgeschlagen: ${esc(l.fehler)}`
+      : T`Letzter Lernlauf ${zeit(l.zeit)}: ${l.notizen} Notizen und ${l.planungen} Planungen ausgewertet, ${l.neu} neue Vorschläge${l.kosten_usd != null ? `, ${usd(l.kosten_usd)}` : ''}.`;
     const knoepfe = (e) => (reiter === 'vorschlaege'
-      ? `<button class="btn klein haupt" data-g="uebernehmen" data-id="${e.id}">Übernehmen</button><button class="btn klein" data-g="verwerfen" data-id="${e.id}">Verwerfen</button><a class="btn klein" href="/status/gedaechtnis/${e.id}/bearbeiten">Ändern</a>`
+      ? T`<button class="btn klein haupt" data-g="uebernehmen" data-id="${e.id}">Übernehmen</button><button class="btn klein" data-g="verwerfen" data-id="${e.id}">Verwerfen</button><a class="btn klein" href="/status/gedaechtnis/${e.id}/bearbeiten">Ändern</a>`
       : reiter === 'aktiv'
-        ? `<a class="btn klein" href="/status/gedaechtnis/${e.id}/bearbeiten">Bearbeiten</a><button class="btn klein gefahr" data-g="loeschen" data-id="${e.id}">Löschen</button>`
-        : `<button class="btn klein" data-g="wiederherstellen" data-id="${e.id}">Wiederherstellen</button>`);
-    const leer = { vorschlaege: 'Keine offenen Vorschläge.', aktiv: 'Noch nichts bestätigt.', geloescht: 'Nichts gelöscht.' }[reiter];
-    const hinweis = { vorschlaege: 'Neues von der KI, aus deinen Korrekturen und Antworten. Es wirkt erst, wenn du es übernimmst.',
-      aktiv: 'Geht bei jeder Notiz und Planung an die KI mit.',
-      geloescht: `Kommt nicht wieder. Die letzten ${g.unerwuenscht} gehen als „nicht erwünscht“ an die KI mit.` }[reiter];
-    seite.innerHTML = `<h1>Gedächtnis</h1>
+        ? T`<a class="btn klein" href="/status/gedaechtnis/${e.id}/bearbeiten">Bearbeiten</a><button class="btn klein gefahr" data-g="loeschen" data-id="${e.id}">Löschen</button>`
+        : T`<button class="btn klein" data-g="wiederherstellen" data-id="${e.id}">Wiederherstellen</button>`);
+    const leer = { vorschlaege: tx('Keine offenen Vorschläge.'), aktiv: tx('Noch nichts bestätigt.'), geloescht: tx('Nichts gelöscht.') }[reiter];
+    const hinweis = { vorschlaege: tx('Neues von der KI, aus deinen Korrekturen und Antworten. Es wirkt erst, wenn du es übernimmst.'),
+      aktiv: tx('Geht bei jeder Notiz und Planung an die KI mit.'),
+      geloescht: T`Kommt nicht wieder. Die letzten ${g.unerwuenscht} gehen als „nicht erwünscht“ an die KI mit.` }[reiter];
+    seite.innerHTML = T`<h1>Gedächtnis</h1>
       <p class="leise">Was die KI über dich weiß, damit sie kurze Notizen richtig versteht und einsortiert.</p>
-      <div class="leiste"><a class="btn" href="/status/gedaechtnis/neu">Neuer Eintrag</a><button class="btn" data-g="lernen"${wartet || g.lernlauf_laeuft ? ' disabled' : ''}>${wartet || g.lernlauf_laeuft ? 'Lernlauf läuft …' : 'Jetzt lernen'}</button></div>
-      <nav class="btn-group unter" aria-label="Gedächtnis">${GED_REITER.map(([r, n]) => `<button class="btn${r === reiter ? ' aktiv' : ''}" data-reiter="${r}">${n} <span class="zaehler${r === 'vorschlaege' && g[r].length ? '' : ' still'}">${g[r].length}</span></button>`).join('')}</nav>
+      <div class="leiste"><a class="btn" href="/status/gedaechtnis/neu">Neuer Eintrag</a><button class="btn" data-g="lernen"${wartet || g.lernlauf_laeuft ? ' disabled' : ''}>${wartet || g.lernlauf_laeuft ? tx('Lernlauf läuft …') : tx('Jetzt lernen')}</button></div>
+      <nav class="btn-group unter" aria-label="Gedächtnis">${GED_REITER.map(([r, n]) => T`<button class="btn${r === reiter ? ' aktiv' : ''}" data-reiter="${r}">${n} <span class="zaehler${r === 'vorschlaege' && g[r].length ? '' : ' still'}">${g[r].length}</span></button>`).join('')}</nav>
       <p class="leise">${hinweis}</p>
-      ${g[reiter].length ? g[reiter].map((e) => `<div class="karte gedkarte"><div>${esc(e.text)}</div><div class="leise">${GED_QUELLE[e.quelle] || esc(e.quelle)} · ${zeit(e.geaendert)}</div><div class="leiste">${knoepfe(e)}</div></div>`).join('') : `<p class="leer">${leer}</p>`}
-      <p class="leise">${lauf}${g.naechster_lernlauf ? ` Nächster ab ${zeit(g.naechster_lernlauf)}.` : ''} Ausgewertet werden die letzten ${g.lernlauf_eintraege} Einträge.</p>`;
+      ${g[reiter].length ? g[reiter].map((e) => T`<div class="karte gedkarte"><div>${esc(e.text)}</div><div class="leise">${GED_QUELLE[e.quelle] || esc(e.quelle)} · ${zeit(e.geaendert)}</div><div class="leiste">${knoepfe(e)}</div></div>`).join('') : T`<p class="leer">${leer}</p>`}
+      <p class="leise">${lauf}${g.naechster_lernlauf ? T` Nächster ab ${zeit(g.naechster_lernlauf)}.` : ''} Ausgewertet werden die letzten ${g.lernlauf_eintraege} Einträge.</p>`;
   };
   const laden = async () => {
     try { g = await apiAbgelegt('/api/gedaechtnis'); } catch (f) {
-      if (f instanceof NetzFehler) { if (aktuell?.name === 'gedaechtnis') seite.innerHTML = `<p class="leer">Offline – das Gedächtnis ist noch nicht gespeichert.</p>`; return; }
+      if (f instanceof NetzFehler) { if (aktuell?.name === 'gedaechtnis') seite.innerHTML = T`<p class="leer">Offline – das Gedächtnis ist noch nicht gespeichert.</p>`; return; }
       throw f;
     }
     if (aktuell?.name !== 'gedaechtnis') return;
@@ -2289,11 +2345,11 @@ async function zeigeGedaechtnis() {
       if (b.dataset.g === 'lernen') {
         wartet = Date.now();
         await api('/api/gedaechtnis/lernen', { method: 'POST' });
-        melde('Lernlauf gestartet');
+        melde(tx('Lernlauf gestartet'));
       } else {
-        if (b.dataset.g === 'loeschen' && !confirm('Eintrag löschen? Die KI schlägt ihn nicht wieder vor.')) { b.disabled = false; return; }
-        await api(`/api/gedaechtnis/${b.dataset.id}`, { method: 'POST', body: { aktion: b.dataset.g } });
-        melde({ uebernehmen: 'Übernommen', verwerfen: 'Verworfen', loeschen: 'Gelöscht', wiederherstellen: 'Wiederhergestellt' }[b.dataset.g]);
+        if (b.dataset.g === 'loeschen' && !confirm(tx('Eintrag löschen? Die KI schlägt ihn nicht wieder vor.'))) { b.disabled = false; return; }
+        await api(T`/api/gedaechtnis/${b.dataset.id}`, { method: 'POST', body: { aktion: b.dataset.g } });
+        melde({ uebernehmen: tx('Übernommen'), verwerfen: tx('Verworfen'), loeschen: tx('Gelöscht'), wiederherstellen: tx('Wiederhergestellt') }[b.dataset.g]);
       }
       await laden();
     } catch (f) { if (b.dataset.g === 'lernen') wartet = false; b.disabled = false; melde(f.message); }
@@ -2308,27 +2364,27 @@ async function zeigeGedaechtnisBearbeiten(id) {
   if (id) {
     const g = await api('/api/gedaechtnis');
     e = [...g.vorschlaege, ...g.aktiv, ...g.geloescht].find((x) => x.id === id);
-    if (!e) { seite.innerHTML = '<p class="leer">Eintrag nicht gefunden.</p><p class="mitte"><a class="btn" href="/status/gedaechtnis">Zum Gedächtnis</a></p>'; return; }
+    if (!e) { seite.innerHTML = T('<p class="leer">Eintrag nicht gefunden.</p><p class="mitte"><a class="btn" href="/status/gedaechtnis">Zum Gedächtnis</a></p>'); return; }
   }
-  seite.innerHTML = `<p><a class="btn klein" href="/status/gedaechtnis">← Gedächtnis</a></p><h1>${e ? 'Eintrag ändern' : 'Neuer Eintrag'}</h1>
-    <p class="leise">Ein kurzer Satz, z. B. „Bolle ist unser Hund“ oder „Podcasts gehören in die Liste Hören“.${e?.status === 'vorschlag' ? ' Mit dem Speichern ist der Vorschlag übernommen.' : ''}</p>
+  seite.innerHTML = T`<p><a class="btn klein" href="/status/gedaechtnis">← Gedächtnis</a></p><h1>${e ? tx('Eintrag ändern') : tx('Neuer Eintrag')}</h1>
+    <p class="leise">Ein kurzer Satz, z. B. „Bolle ist unser Hund“ oder „Podcasts gehören in die Liste Hören“.${e?.status === 'vorschlag' ? tx(' Mit dem Speichern ist der Vorschlag übernommen.') : ''}</p>
     <textarea id="gtext" maxlength="250">${esc(e?.text || '')}</textarea>
     <div class="leiste"><button class="btn haupt" id="gsichern">Speichern</button><a class="btn" href="/status/gedaechtnis">Abbrechen</a></div>`;
   document.getElementById('gsichern').onclick = async (ev) => {
     const text = document.getElementById('gtext').value.trim();
-    if (!text) return melde('Text fehlt');
+    if (!text) return melde(tx('Text fehlt'));
     ev.target.disabled = true;
     try {
-      await api(e ? `/api/gedaechtnis/${e.id}` : '/api/gedaechtnis', { method: e ? 'PUT' : 'POST', body: { text } });
+      await api(e ? T`/api/gedaechtnis/${e.id}` : '/api/gedaechtnis', { method: e ? 'PUT' : 'POST', body: { text } });
       localStorage.setItem('gedaechtnis-reiter', 'aktiv');
-      melde('Gespeichert');
+      melde(tx('Gespeichert'));
       geheZu('/status/gedaechtnis', true);
     } catch (f) { ev.target.disabled = false; melde(f.message); }
   };
 }
 
-const usd = (v) => `${v.toLocaleString('de-DE', { minimumFractionDigits: v < 0.1 ? 3 : 2, maximumFractionDigits: v < 0.1 ? 3 : 2 })} $`;
-const kurzTag = (iso, mitWochentag) => new Date(`${iso}T12:00:00`).toLocaleDateString('de-DE', mitWochentag ? { weekday: 'short', day: '2-digit', month: '2-digit' } : { day: '2-digit', month: '2-digit' });
+const usd = (v) => `${v.toLocaleString(LOCALE, { minimumFractionDigits: v < 0.1 ? 3 : 2, maximumFractionDigits: v < 0.1 ? 3 : 2 })} $`;
+const kurzTag = (iso, mitWochentag) => new Date(`${iso}T12:00:00`).toLocaleDateString(LOCALE, mitWochentag ? { weekday: 'short', day: '2-digit', month: '2-digit' } : { day: '2-digit', month: '2-digit' });
 
 // Runde Obergrenze und drei Achsenwerte für kleine Dollarbeträge.
 function achse(max) {
@@ -2354,42 +2410,44 @@ function saeulen(tage, id, wochentag) {
     const hD = (t.diktat / max) * plotH, hP = (t.planung / max) * plotH;
     const luecke = hD > 0 && hP > 0 ? 2 : 0;
     if (hP > 0) {
-      marken += `<path class="s2" d="${kappe(x, y(t.diktat + t.planung), Math.max(hP - luecke, 1), 4)}"/>`;
-      if (hD > 0) marken += `<rect class="s1" x="${x}" y="${y(t.diktat)}" width="${breite}" height="${hD}"/>`;
-    } else if (hD > 0) marken += `<path class="s1" d="${kappe(x, y(t.diktat), hD, 4)}"/>`;
-    treffer += `<rect class="treffer" data-i="${i}" x="${links + i * band}" y="${oben}" width="${band}" height="${plotH + unten}" tabindex="0" role="img" aria-label="${esc(kurzTag(t.tag, true))}: Notizen ${usd(t.diktat)}, Planungen ${usd(t.planung)}"/>`;
+      marken += T`<path class="s2" d="${kappe(x, y(t.diktat + t.planung), Math.max(hP - luecke, 1), 4)}"/>`;
+      if (hD > 0) marken += T`<rect class="s1" x="${x}" y="${y(t.diktat)}" width="${breite}" height="${hD}"/>`;
+    } else if (hD > 0) marken += T`<path class="s1" d="${kappe(x, y(t.diktat), hD, 4)}"/>`;
+    treffer += T`<rect class="treffer" data-i="${i}" x="${links + i * band}" y="${oben}" width="${band}" height="${plotH + unten}" tabindex="0" role="img" aria-label="${esc(tx('{0}: Notizen {1}, Planungen {2}', kurzTag(t.tag, true), usd(t.diktat), usd(t.planung)))}"/>`;
     const letzter = i === tage.length - 1 && !wochentag;
-    const name = wochentag ? new Date(`${t.tag}T12:00:00`).toLocaleDateString('de-DE', { weekday: 'short' }).replace('.', '') : kurzTag(t.tag, false);
-    if ((tage.length - 1 - i) % jede === 0) achseX += `<text class="achse" x="${letzter ? B - 4 : links + i * band + band / 2}" y="${H - 6}" text-anchor="${letzter ? 'end' : 'middle'}">${esc(name)}</text>`;
+    const name = wochentag ? new Date(`${t.tag}T12:00:00`).toLocaleDateString(LOCALE, { weekday: 'short' }).replace('.', '') : kurzTag(t.tag, false);
+    if ((tage.length - 1 - i) % jede === 0) achseX += T`<text class="achse" x="${letzter ? B - 4 : links + i * band + band / 2}" y="${H - 6}" text-anchor="${letzter ? 'end' : 'middle'}">${esc(name)}</text>`;
   });
-  const gitter = schritte.map((s) => `<line class="gitter" x1="${links}" x2="${B - 4}" y1="${y(s)}" y2="${y(s)}"/><text class="achse" x="${links - 6}" y="${y(s) + 4}" text-anchor="end">${s.toLocaleString('de-DE', { minimumFractionDigits: stellen, maximumFractionDigits: stellen })} $</text>`).join('');
-  return `<svg class="diagramm" id="${id}" viewBox="0 0 ${B} ${H}" role="group" aria-label="Kosten je Tag in Dollar">${gitter}${marken}${achseX}${treffer}</svg>`;
+  const gitter = schritte.map((s) => T`<line class="gitter" x1="${links}" x2="${B - 4}" y1="${y(s)}" y2="${y(s)}"/><text class="achse" x="${links - 6}" y="${y(s) + 4}" text-anchor="end">${s.toLocaleString(LOCALE, { minimumFractionDigits: stellen, maximumFractionDigits: stellen })} $</text>`).join('');
+  return T`<svg class="diagramm" id="${id}" viewBox="0 0 ${B} ${H}" role="group" aria-label="Kosten je Tag in Dollar">${gitter}${marken}${achseX}${treffer}</svg>`;
 }
 
 // ---------- Einstellungen: Ersteinrichtung, Ansicht, Bearbeiten ----------
 
 // Formular aus den Feldern des Servers, nach Gruppen. Geheimnisse: im Assistenten erzeugte sichtbar (zum
 // Übertragen in die Pebble-App), sonst Passwortfeld – leer lassen behält den gespeicherten Wert.
+// Sprachen heißen in ihrer eigenen Sprache.
+const WAHL = { de: 'Deutsch', en: 'English' };
 function einstellungsFormular(felder, { assistent }) {
   const gruppen = [...new Set(felder.map((f) => f.gruppe))];
   const feld = (f) => {
     const id = `f-${f.key}`;
-    const hilfe = f.hilfe ? `<p class="leise hilfe">${esc(f.hilfe)}</p>` : '';
+    const hilfe = f.hilfe ? T`<p class="leise hilfe">${esc(tx(f.hilfe))}</p>` : '';
     let eingabe;
     if (f.art === 'choice') {
-      eingabe = `<select id="${id}" name="${f.key}">${f.auswahl.map((c) => `<option${c === f.wert ? ' selected' : ''}>${esc(c)}</option>`).join('')}</select>`;
+      eingabe = T`<select id="${id}" name="${f.key}">${f.auswahl.map((c) => T`<option value="${esc(c)}"${c === f.wert ? ' selected' : ''}>${esc(WAHL[c] || tx(c))}</option>`).join('')}</select>`;
     } else if (f.art === 'secret') {
       const sichtbar = assistent && f.wert;
-      const platz = f.gesetzt ? 'gesetzt – leer lassen zum Behalten' : '';
-      eingabe = `<input type="${sichtbar ? 'text' : 'password'}" id="${id}" name="${f.key}" value="${esc(f.wert || '')}" placeholder="${platz}" autocomplete="off" spellcheck="false">`;
-      if (f.key === 'OPENAI_API_KEY' && assistent) eingabe = `<div class="mitknopf">${eingabe}<button type="button" class="btn klein" data-pruefen="1">Prüfen</button></div>`;
+      const platz = f.gesetzt ? tx('gesetzt – leer lassen zum Behalten') : '';
+      eingabe = T`<input type="${sichtbar ? 'text' : 'password'}" id="${id}" name="${f.key}" value="${esc(f.wert || '')}" placeholder="${platz}" autocomplete="off" spellcheck="false">`;
+      if (f.key === 'OPENAI_API_KEY' && assistent) eingabe = T`<div class="mitknopf">${eingabe}<button type="button" class="btn klein" data-pruefen="1">Prüfen</button></div>`;
     } else {
       const modus = f.art === 'int' ? ' inputmode="numeric"' : f.art === 'num' ? ' inputmode="decimal"' : '';
-      eingabe = `<input type="${f.art === 'url' ? 'url' : 'text'}" id="${id}" name="${f.key}" value="${esc(f.wert || '')}"${modus} autocomplete="off" spellcheck="false">`;
+      eingabe = T`<input type="${f.art === 'url' ? 'url' : 'text'}" id="${id}" name="${f.key}" value="${esc(f.wert || '')}"${modus} autocomplete="off" spellcheck="false">`;
     }
-    return `<label for="${id}">${esc(f.name)}${f.pflicht ? ' *' : ''}</label>${eingabe}${hilfe}`;
+    return T`<label for="${id}">${esc(tx(f.name))}${f.pflicht ? ' *' : ''}</label>${eingabe}${hilfe}`;
   };
-  return `<form class="einstellungen" novalidate>${gruppen.map((g) => `<fieldset><legend>${esc(g)}</legend>${felder.filter((f) => f.gruppe === g).map(feld).join('')}</fieldset>`).join('')}
+  return T`<form class="einstellungen" novalidate>${gruppen.map((g) => T`<fieldset><legend>${esc(tx(g))}</legend>${felder.filter((f) => f.gruppe === g).map(feld).join('')}</fieldset>`).join('')}
     <div class="leiste"><button class="btn haupt" type="submit">Speichern</button></div></form>`;
 }
 
@@ -2407,21 +2465,25 @@ async function warteAufNeustart() {
 
 async function zeigeErsteinrichtung() {
   const code = new URLSearchParams(location.search).get('code') || '';
-  seite.innerHTML = '<p class="leer">Lädt …</p>';
+  seite.innerHTML = T('<p class="leer">Lädt …</p>');
   let d;
   try {
-    d = await api(`/api/ersteinrichtung?code=${encodeURIComponent(code)}`);
+    d = await api(T`/api/ersteinrichtung?code=${encodeURIComponent(code)}`);
   } catch (f) {
-    seite.innerHTML = `<h1>Ersteinrichtung</h1><div class="hinweis schlecht">${esc(f.message)}</div>`;
+    seite.innerHTML = T`<h1>Ersteinrichtung</h1><div class="hinweis schlecht">${esc(f.message)}</div>`;
     return;
   }
   // Öffentliche Adresse: vorgeschlagen ist die, unter der der Assistent gerade läuft (falls https).
   for (const f of d.felder) if (f.key === 'PUBLIC_URL' && !f.wert && location.protocol === 'https:') f.wert = location.origin;
-  seite.innerHTML = `<h1>Ersteinrichtung</h1>
+  // Sprache: die Seite läuft schon in der gewählten (Browser, ?lang= oder gespeichert); Umschalten lädt neu.
+  for (const f of d.felder) if (f.key === 'LANGUAGE') f.wert = SPRACHE;
+  seite.innerHTML = T`<h1>Ersteinrichtung</h1>
     <p class="leise">Alle Werte sind mit Vorgaben gefüllt; Pflichtfelder tragen *. Webhook-Token und Signatur-Secret sind neu erzeugt – nach der Einrichtung stehen sie unter Status → Pebble zum Kopieren. Später änderbar unter Status → Einstellungen.</p>
-    ${d.fehler ? `<div class="hinweis schlecht">Die gespeicherten Einstellungen sind ungültig: ${esc(d.fehler)}</div>` : ''}
+    ${d.fehler ? T`<div class="hinweis schlecht">Die gespeicherten Einstellungen sind ungültig: ${esc(d.fehler)}</div>` : ''}
     ${einstellungsFormular(d.felder, { assistent: true })}<div id="ergebnis"></div>`;
   const form = seite.querySelector('form');
+  const sprache = form.querySelector('[name=LANGUAGE]');
+  if (sprache) sprache.onchange = () => { const u = new URL(location.href); u.searchParams.set('lang', sprache.value); location.replace(u); };
   form.onclick = async (ev) => {
     const b = ev.target.closest('[data-pruefen]');
     if (!b) return;
@@ -2429,7 +2491,7 @@ async function zeigeErsteinrichtung() {
     try {
       const w = einstellungsWerte(form);
       const r = await api('/api/ersteinrichtung/openai', { method: 'POST', body: { code, key: w.OPENAI_API_KEY, base_url: w.OPENAI_BASE_URL } });
-      melde(r.ok ? 'Schlüssel funktioniert' : `Schlüssel nicht gültig: ${r.fehler}`);
+      melde(r.ok ? tx('Schlüssel funktioniert') : T`Schlüssel nicht gültig: ${r.fehler}`);
     } catch (f) { melde(f.message); }
     b.disabled = false;
   };
@@ -2441,12 +2503,12 @@ async function zeigeErsteinrichtung() {
       const r = await api('/api/ersteinrichtung', { method: 'POST', body: { code, werte: einstellungsWerte(form) } });
       form.hidden = true;
       const box = document.getElementById('ergebnis');
-      box.innerHTML = `<div class="hinweis gut">Gespeichert. Der Dienst startet neu …</div>`;
+      box.innerHTML = T`<div class="hinweis gut">Gespeichert. Der Dienst startet neu …</div>`;
       window.scrollTo(0, 0);
       await warteAufNeustart();
       box.innerHTML = r.weiter
-        ? `<div class="hinweis gut">Eingerichtet. Jetzt unter der öffentlichen Adresse den ersten Passkey anlegen (Link 15 Minuten gültig).</div><div class="leiste"><a class="btn haupt" href="${esc(r.weiter)}" target="_self">Passkey einrichten</a></div>`
-        : `<div class="hinweis gut">Eingerichtet.</div><div class="leiste"><a class="btn haupt" href="${esc(r.adresse)}/" target="_self">Zur Web-App</a></div>`;
+        ? T`<div class="hinweis gut">Eingerichtet. Jetzt unter der öffentlichen Adresse den ersten Passkey anlegen (Link 15 Minuten gültig).</div><div class="leiste"><a class="btn haupt" href="${esc(r.weiter)}" target="_self">Passkey einrichten</a></div>`
+        : T`<div class="hinweis gut">Eingerichtet.</div><div class="leiste"><a class="btn haupt" href="${esc(r.adresse)}/" target="_self">Zur Web-App</a></div>`;
     } catch (f) {
       knopf.disabled = false;
       melde(f.message);
@@ -2456,33 +2518,33 @@ async function zeigeErsteinrichtung() {
 
 // Reiter der Statusseite (Buttongruppe): Übersicht, Pebble-App, Joplin (nur wenn aktiv), Konfiguration, Theme.
 let joplinAktiv = (() => { try { return localStorage.getItem('joplin-aktiv') === '1'; } catch { return false; } })();
-const statusReiter = (aktiv) => `<nav class="btn-group unter reiter4" aria-label="Status">${[['status', '/status', 'Übersicht'], ['pebble', '/pebble', 'Pebble-App'],
-  ...(joplinAktiv ? [['joplin', '/status/joplin', 'Joplin']] : []), ['einstellungen', '/status/einstellungen', 'Konfiguration'], ['darstellung', '/status/darstellung', 'Theme']]
-  .map(([n, href, text]) => `<a class="btn${n === aktiv ? ' aktiv' : ''}" href="${href}"${n === aktiv ? ' aria-current="page"' : ''}>${text}</a>`).join('')}</nav>`;
+const statusReiter = (aktiv) => T`<nav class="btn-group unter reiter4" aria-label="Status">${[['status', '/status', tx('Übersicht')], ['pebble', '/pebble', tx('Pebble-App')],
+  ...(joplinAktiv ? [['joplin', '/status/joplin', tx('Joplin')]] : []), ['einstellungen', '/status/einstellungen', tx('Konfiguration')], ['darstellung', '/status/darstellung', tx('Theme')]]
+  .map(([n, href, text]) => T`<a class="btn${n === aktiv ? ' aktiv' : ''}" href="${href}"${n === aktiv ? ' aria-current="page"' : ''}>${text}</a>`).join('')}</nav>`;
 
 // Konfiguration: je Wert „?“ (Erklärung darunter ein-/ausklappen) und ✎ (eigene Bearbeitungsseite für diesen Wert).
-const STIFT = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16zM14 6l4 4" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/></svg>';
+const STIFT = T('<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16zM14 6l4 4" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/></svg>');
 async function zeigeEinstellungen() {
-  seite.innerHTML = `${statusReiter('einstellungen')}<p class="leer">Lädt …</p>`;
+  seite.innerHTML = T`${statusReiter('einstellungen')}<p class="leer">Lädt …</p>`;
   const d = await api('/api/einstellungen');
   if (aktuell?.name !== 'einstellungen') return;
   // Joplin-Zugang wird unter Status → Joplin eingerichtet; hier steht nur der Schalter.
   d.felder = d.felder.filter((f) => f.gruppe !== 'Joplin' || f.key === 'JOPLIN_ENABLED');
   const gruppen = [...new Set(d.felder.map((f) => f.gruppe))];
-  const wert = (f) => (f.art === 'secret' ? (f.gesetzt ? 'gesetzt' : '<span class="leise">leer</span>') : f.wert ? esc(f.wert) : '<span class="leise">leer</span>');
-  const zeile = (f) => `<div class="konfzeile">
-      <button class="konfhilfe" data-hilfe="${f.key}" aria-expanded="false" aria-controls="hilfe-${f.key}" aria-label="Erklärung zu ${esc(f.name)}">?</button>
-      <span class="konfname">${esc(f.name)}</span>
-      <a class="konfedit" href="/status/einstellungen/${f.key}" aria-label="${esc(f.name)} bearbeiten">${STIFT}</a>
+  const wert = (f) => (f.art === 'secret' ? (f.gesetzt ? tx('gesetzt') : T('<span class="leise">leer</span>')) : f.wert ? esc(f.art === 'choice' ? WAHL[f.wert] || tx(f.wert) : f.wert) : T('<span class="leise">leer</span>'));
+  const zeile = (f) => T`<div class="konfzeile">
+      <button class="konfhilfe" data-hilfe="${f.key}" aria-expanded="false" aria-controls="hilfe-${f.key}" aria-label="${esc(tx('Erklärung zu {0}', tx(f.name)))}">?</button>
+      <span class="konfname">${esc(tx(f.name))}</span>
+      <a class="konfedit" href="/status/einstellungen/${f.key}" aria-label="${esc(tx('{0} bearbeiten', tx(f.name)))}">${STIFT}</a>
       <span class="konfwert">${wert(f)}</span>
-      <p class="konfinfo" id="hilfe-${f.key}" hidden>${esc(f.hilfe || 'Keine Erklärung hinterlegt.')}${f.vorgabe ? ` <span class="leise">Vorgabe: ${esc(f.vorgabe)}</span>` : ''}</p></div>`;
-  seite.innerHTML = `${statusReiter('einstellungen')}<h1>Konfiguration</h1>
+      <p class="konfinfo" id="hilfe-${f.key}" hidden>${esc(f.hilfe ? tx(f.hilfe) : tx('Keine Erklärung hinterlegt.'))}${f.vorgabe ? T` <span class="leise">Vorgabe: ${esc(f.vorgabe)}</span>` : ''}</p></div>`;
+  seite.innerHTML = T`${statusReiter('einstellungen')}<h1>Konfiguration</h1>
     <p class="leise">? erklärt einen Wert, ✎ ändert ihn. Nach dem Speichern startet der Dienst kurz neu.</p>
-    ${gruppen.map((g) => `<h2>${esc(g)}</h2><div class="karte konfliste">${d.felder.filter((f) => f.gruppe === g).map(zeile).join('')}</div>`).join('')}`;
+    ${gruppen.map((g) => T`<h2>${esc(tx(g))}</h2><div class="karte konfliste">${d.felder.filter((f) => f.gruppe === g).map(zeile).join('')}</div>`).join('')}`;
   seite.onclick = (ev) => {
     const b = ev.target.closest('[data-hilfe]');
     if (!b) return;
-    const info = document.getElementById(`hilfe-${b.dataset.hilfe}`);
+    const info = document.getElementById(T`hilfe-${b.dataset.hilfe}`);
     info.hidden = !info.hidden;
     b.setAttribute('aria-expanded', String(!info.hidden));
   };
@@ -2491,18 +2553,18 @@ async function zeigeEinstellungen() {
 
 // Joplin einrichten und testen (Reiter nur bei JOPLIN_ENABLED = aktiv).
 async function zeigeJoplin() {
-  seite.innerHTML = `${statusReiter('joplin')}<p class="leer">Lädt …</p>`;
+  seite.innerHTML = T`${statusReiter('joplin')}<p class="leer">Lädt …</p>`;
   const [d, st] = await Promise.all([api('/api/einstellungen'), api('/api/status').catch(() => null)]);
   if (aktuell?.name !== 'joplin') return;
   const felder = d.felder.filter((f) => f.gruppe === 'Joplin' && f.key !== 'JOPLIN_ENABLED');
   const j = st?.joplin;
-  const zustand = !j?.aktiv ? '<div class="hinweis warn">Noch nicht eingerichtet: Server, Konto und Passwort eintragen, testen, speichern.</div>'
-    : j.fehler ? `<div class="hinweis schlecht"><strong>Fehler:</strong> ${esc(j.fehler)}</div>` : `<div class="hinweis gut">Verbunden${j.offene_planungen ? `, ${j.offene_planungen} Planung(en) noch nicht übertragen` : ''}.</div>`;
-  seite.innerHTML = `${statusReiter('joplin')}<h1>Joplin</h1>
+  const zustand = !j?.aktiv ? T('<div class="hinweis warn">Noch nicht eingerichtet: Server, Konto und Passwort eintragen, testen, speichern.</div>')
+    : j.fehler ? T`<div class="hinweis schlecht"><strong>Fehler:</strong> ${esc(j.fehler)}</div>` : T`<div class="hinweis gut">Verbunden${j.offene_planungen ? T`, ${j.offene_planungen} Planung(en) noch nicht übertragen` : ''}.</div>`;
+  seite.innerHTML = T`${statusReiter('joplin')}<h1>Joplin</h1>
     <p class="leise">Fertige Notizen, Planungen und Listen werden auf deinen Joplin-Server übertragen (nur schreibend, E2EE muss aus sein). Abschalten unter Konfiguration → Joplin.</p>
     ${zustand}
-    ${einstellungsFormular(felder, { assistent: false }).replace(/<fieldset><legend>[^<]*<\/legend>/, '<fieldset>').replace('<div class="leiste"><button class="btn haupt" type="submit">Speichern</button></div>',
-      '<div class="leiste"><button class="btn" type="button" data-testen="1">Verbindung testen</button><button class="btn haupt" type="submit">Speichern</button></div>')}
+    ${einstellungsFormular(felder, { assistent: false }).replace(/<fieldset><legend>[^<]*<\/legend>/, '<fieldset>').replace(T('<div class="leiste"><button class="btn haupt" type="submit">Speichern</button></div>'),
+      T('<div class="leiste"><button class="btn" type="button" data-testen="1">Verbindung testen</button><button class="btn haupt" type="submit">Speichern</button></div>'))}
     <div id="testergebnis"></div>`;
   const form = seite.querySelector('form');
   const werte = () => einstellungsWerte(form);
@@ -2511,12 +2573,12 @@ async function zeigeJoplin() {
     if (!b) return;
     b.disabled = true;
     const box = document.getElementById('testergebnis');
-    box.innerHTML = '<div class="hinweis">Teste …</div>';
+    box.innerHTML = T('<div class="hinweis">Teste …</div>');
     try {
       const w = werte();
       const r = await api('/api/joplin/pruefen', { method: 'POST', body: { url: w.JOPLIN_URL, email: w.JOPLIN_EMAIL, passwort: w.JOPLIN_PASSWORD } });
-      box.innerHTML = r.ok ? '<div class="hinweis gut">Verbindung und Anmeldung in Ordnung.</div>' : `<div class="hinweis schlecht">Test fehlgeschlagen: ${esc(r.fehler)}</div>`;
-    } catch (f) { box.innerHTML = `<div class="hinweis schlecht">${esc(f.message)}</div>`; }
+      box.innerHTML = r.ok ? T('<div class="hinweis gut">Verbindung und Anmeldung in Ordnung.</div>') : T`<div class="hinweis schlecht">Test fehlgeschlagen: ${esc(r.fehler)}</div>`;
+    } catch (f) { box.innerHTML = T`<div class="hinweis schlecht">${esc(f.message)}</div>`; }
     b.disabled = false;
   };
   form.onsubmit = async (ev) => {
@@ -2525,7 +2587,7 @@ async function zeigeJoplin() {
     knopf.disabled = true;
     try {
       await api('/api/einstellungen', { method: 'PUT', body: { werte: werte() } });
-      melde('Gespeichert – Dienst startet neu');
+      melde(tx('Gespeichert – Dienst startet neu'));
       await warteAufNeustart();
       geheZu('/status/joplin', true);
     } catch (f) { knopf.disabled = false; melde(f.message); }
@@ -2535,12 +2597,12 @@ async function zeigeJoplin() {
 
 // Einen Wert der Konfiguration ändern (eigene Seite, Formular mit nur diesem Feld).
 async function zeigeEinstellungBearbeiten(key) {
-  seite.innerHTML = `${statusReiter('einstellungen')}<p class="leer">Lädt …</p>`;
+  seite.innerHTML = T`${statusReiter('einstellungen')}<p class="leer">Lädt …</p>`;
   const d = await api('/api/einstellungen');
   if (aktuell?.name !== 'einstellungBearbeiten') return;
   const f = d.felder.find((x) => x.key === key);
-  if (!f) { seite.innerHTML = `${statusReiter('einstellungen')}<div class="hinweis schlecht">Unbekannte Einstellung.</div>`; return; }
-  seite.innerHTML = `${statusReiter('einstellungen')}<h1>${esc(f.name)}</h1><p class="leise">${esc(f.gruppe)}</p>
+  if (!f) { seite.innerHTML = T`${statusReiter('einstellungen')}<div class="hinweis schlecht">Unbekannte Einstellung.</div>`; return; }
+  seite.innerHTML = T`${statusReiter('einstellungen')}<h1>${esc(tx(f.name))}</h1><p class="leise">${esc(tx(f.gruppe))}</p>
     ${einstellungsFormular([f], { assistent: false }).replace(/<fieldset><legend>[^<]*<\/legend>/, '<fieldset>')}
     <div class="leiste"><a class="btn" href="/status/einstellungen">Abbrechen</a></div>`;
   const form = seite.querySelector('form');
@@ -2548,13 +2610,14 @@ async function zeigeEinstellungBearbeiten(key) {
   form.onsubmit = async (ev) => {
     ev.preventDefault();
     const werte = einstellungsWerte(form);
-    if (key === 'PUBLIC_URL' && werte.PUBLIC_URL !== f.wert && !confirm('Die öffentliche Adresse ändert sich: alle Passkeys werden ungültig. Trotzdem speichern?')) return;
+    if (key === 'PUBLIC_URL' && werte.PUBLIC_URL !== f.wert && !confirm(tx('Die öffentliche Adresse ändert sich: alle Passkeys werden ungültig. Trotzdem speichern?'))) return;
     const knopf = form.querySelector('[type=submit]');
     knopf.disabled = true;
     try {
       await api('/api/einstellungen', { method: 'PUT', body: { werte } });
-      melde('Gespeichert – Dienst startet neu');
+      melde(tx('Gespeichert – Dienst startet neu'));
       await warteAufNeustart();
+      if (key === 'LANGUAGE') { location.replace('/status/einstellungen'); return; }
       await ladeZaehler();
       geheZu('/status/einstellungen', true);
     } catch (fehler) {
@@ -2573,7 +2636,7 @@ function aenderungenHtml(text) {
   let html = '', liste = false;
   for (const z of zeilen) {
     const punkt = z.match(/^\s*[-*] (.*)$/);
-    if (punkt) { if (!liste) { html += '<ul>'; liste = true; } html += `<li>${esc(punkt[1])}</li>`; continue; }
+    if (punkt) { if (!liste) { html += '<ul>'; liste = true; } html += T`<li>${esc(punkt[1])}</li>`; continue; }
     if (liste) { html += '</ul>'; liste = false; }
     const kopf = z.match(/^#{1,6} (.*)$/);
     if (kopf) html += `<h3>${esc(kopf[1])}</h3>`;
@@ -2583,31 +2646,31 @@ function aenderungenHtml(text) {
 }
 
 async function zeigeUpdate() {
-  seite.innerHTML = `<p class="leer">Lädt …</p>`;
+  seite.innerHTML = T`<p class="leer">Lädt …</p>`;
   const KANAL = { stable: 'stable', beta: 'beta', nightly: 'nightly' };
-  const KANAL_TEXT = { stable: 'stable – Langzeit-Versionen', beta: 'beta – neue Funktionen, noch nicht ausgereift', nightly: 'nightly – jede Änderung, ungetestet' };
+  const KANAL_TEXT = { stable: tx('stable – Langzeit-Versionen'), beta: tx('beta – neue Funktionen, noch nicht ausgereift'), nightly: tx('nightly – jede Änderung, ungetestet') };
   const laden = async (pruefen) => {
-    const u = await api(`/api/update${pruefen ? '?pruefen=1' : ''}`);
+    const u = await api(T`/api/update${pruefen ? '?pruefen=1' : ''}`);
     if (aktuell?.name !== 'update') return;
     const neu = u.neuer || [], alt = u.aeltere || [];
     const laeuft = /^(requested|running)/.test(u.status || '');
-    const status = u.status ? (u.status.startsWith('error') ? `<div class="hinweis schlecht">Letztes Update: ${esc(u.status)}</div>`
-      : laeuft ? `<div class="hinweis warn">Update läuft (${esc(u.status)}) …</div>` : `<div class="hinweis gut">Letztes Update: ${esc(u.status)}</div>`) : '';
-    const knopf = (r, haupt, aelter) => (u.installierbar ? `<button class="btn klein${haupt ? ' haupt' : ''}" data-installieren="${esc(r.version)}" data-aelter="${aelter ? '1' : ''}"${laeuft ? ' disabled' : ''}>Installieren</button>` : '');
-    const karte = (r, haupt, aelter) => `<div class="karte"><div class="zeile"><span><strong>${esc(r.version)}</strong> <span class="badge ${r.kanal === 'stable' ? 'fertig' : 'in_arbeit'}">${esc(KANAL[r.kanal] || r.kanal)}</span></span><span class="leise">${esc(r.datum)}</span></div>
+    const status = u.status ? (u.status.startsWith('error') ? T`<div class="hinweis schlecht">Letztes Update: ${esc(u.status)}</div>`
+      : laeuft ? T`<div class="hinweis warn">Update läuft (${esc(u.status)}) …</div>` : T`<div class="hinweis gut">Letztes Update: ${esc(u.status)}</div>`) : '';
+    const knopf = (r, haupt, aelter) => (u.installierbar ? T`<button class="btn klein${haupt ? ' haupt' : ''}" data-installieren="${esc(r.version)}" data-aelter="${aelter ? '1' : ''}"${laeuft ? ' disabled' : ''}>Installieren</button>` : '');
+    const karte = (r, haupt, aelter) => T`<div class="karte"><div class="zeile"><span><strong>${esc(r.version)}</strong> <span class="badge ${r.kanal === 'stable' ? 'fertig' : 'in_arbeit'}">${esc(KANAL[r.kanal] || r.kanal)}</span></span><span class="leise">${esc(r.datum)}</span></div>
       ${aenderungenHtml(r.aenderungen)}<div class="leiste">${knopf(r, haupt, aelter)}</div></div>`;
-    seite.innerHTML = `<h1>Updates</h1>
+    seite.innerHTML = T`<h1>Updates</h1>
       <div class="karte version aktuell"><div class="zeile"><span><strong>${esc(u.aktuell)}</strong> <span class="badge fertig">installiert</span></span></div>
-        ${u.aktuell_aenderungen ? aenderungenHtml(u.aktuell_aenderungen) : '<p class="leise">Keine Änderungsliste zu dieser Version.</p>'}</div>
-      ${(u.fruehere || []).length ? `<details class="einklapp fruehere"><summary>Frühere Änderungen (${u.fruehere.length})</summary>
-        <p class="leise">${u.notizen === 'releases' ? 'Zusammengefasst je beta/stable-Version: nur was Bestand hat.' : 'Jede einzelne Version (wie im Kanal nightly).'}</p>
-        ${u.fruehere.map((f) => `<div class="frueher"><div class="zeile"><strong>${esc(f.version)}</strong><span class="leise">${esc(f.datum || '')}</span></div>${aenderungenHtml(f.text)}</div>`).join('')}</details>` : ''}
-      <dl><dt>Quelle</dt><dd>${esc(u.quelle || 'aus')}</dd>${u.geprueft ? `<dt>Geprüft</dt><dd>${zeit(u.geprueft)}</dd>` : ''}</dl>
-      <label for="kanal">Kanal</label><select id="kanal">${(u.kanaele || []).map((k) => `<option value="${k}"${k === u.kanal ? ' selected' : ''}>${esc(KANAL_TEXT[k] || k)}</option>`).join('')}</select>
-      ${u.fehler ? `<div class="hinweis warn">${esc(u.fehler)}</div>` : ''}${status}
-      ${u.installierbar ? '' : '<div class="hinweis">Installieren aus der App braucht die Installation per <code>install.sh</code>; sonst das Skript mit <code>--version</code> ausführen.</div>'}
-      ${neu.length ? `<h2>Neuere Versionen</h2>${neu.map((r, i) => karte(r, i === 0)).join('')}` : (u.fehler ? '' : '<div class="hinweis gut">Die installierte Version ist die neueste im Kanal.</div>')}
-      ${alt.length ? `<details><summary>Ältere Version installieren (${alt.length})</summary><p class="leise">Vor jedem Wechsel wird die Datenbank gesichert. Ältere Versionen kennen neuere Funktionen nicht; zurück bis ${esc(u.mindestens)}.</p>${alt.map((r) => karte(r, false, true)).join('')}</details>` : ''}
+        ${u.aktuell_aenderungen ? aenderungenHtml(u.aktuell_aenderungen) : T('<p class="leise">Keine Änderungsliste zu dieser Version.</p>')}</div>
+      ${(u.fruehere || []).length ? T`<details class="einklapp fruehere"><summary>Frühere Änderungen (${u.fruehere.length})</summary>
+        <p class="leise">${u.notizen === 'releases' ? tx('Zusammengefasst je beta/stable-Version: nur was Bestand hat.') : tx('Jede einzelne Version (wie im Kanal nightly).')}</p>
+        ${u.fruehere.map((f) => T`<div class="frueher"><div class="zeile"><strong>${esc(f.version)}</strong><span class="leise">${esc(f.datum || '')}</span></div>${aenderungenHtml(f.text)}</div>`).join('')}</details>` : ''}
+      <dl><dt>Quelle</dt><dd>${esc(u.quelle || 'aus')}</dd>${u.geprueft ? T`<dt>Geprüft</dt><dd>${zeit(u.geprueft)}</dd>` : ''}</dl>
+      <label for="kanal">Kanal</label><select id="kanal">${(u.kanaele || []).map((k) => T`<option value="${k}"${k === u.kanal ? ' selected' : ''}>${esc(KANAL_TEXT[k] || k)}</option>`).join('')}</select>
+      ${u.fehler ? T`<div class="hinweis warn">${esc(u.fehler)}</div>` : ''}${status}
+      ${u.installierbar ? '' : T('<div class="hinweis">Installieren aus der App braucht die Installation per <code>install.sh</code>; sonst das Skript mit <code>--version</code> ausführen.</div>')}
+      ${neu.length ? T`<h2>Neuere Versionen</h2>${neu.map((r, i) => karte(r, i === 0)).join('')}` : (u.fehler ? '' : T('<div class="hinweis gut">Die installierte Version ist die neueste im Kanal.</div>'))}
+      ${alt.length ? T`<details><summary>Ältere Version installieren (${alt.length})</summary><p class="leise">Vor jedem Wechsel wird die Datenbank gesichert. Ältere Versionen kennen neuere Funktionen nicht; zurück bis ${esc(u.mindestens)}.</p>${alt.map((r) => karte(r, false, true)).join('')}</details>` : ''}
       <div class="leiste"><button class="btn" data-pruefen="1">Jetzt prüfen</button></div>`;
   };
   aktuell.neuLaden = () => laden(false);
@@ -2616,7 +2679,7 @@ async function zeigeUpdate() {
     ev.target.disabled = true;
     try {
       await api('/api/update/kanal', { method: 'POST', body: { kanal: ev.target.value } });
-      melde(`Kanal: ${ev.target.value}`);
+      melde(T`Kanal: ${ev.target.value}`);
       ladeZaehler();
     } catch (f) { melde(f.message); }
     laden(false);
@@ -2628,16 +2691,16 @@ async function zeigeUpdate() {
     try {
       if (b.dataset.pruefen) { await laden(true); return ladeZaehler(); }
       const ziel = b.dataset.installieren;
-      const frage = b.dataset.aelter ? `Auf die ältere Version ${ziel} wechseln? Die Datenbank wird vorher gesichert; Funktionen neuerer Versionen fehlen danach.` : `Version ${ziel} installieren? Der Dienst startet dabei neu.`;
+      const frage = b.dataset.aelter ? T`Auf die ältere Version ${ziel} wechseln? Die Datenbank wird vorher gesichert; Funktionen neuerer Versionen fehlen danach.` : T`Version ${ziel} installieren? Der Dienst startet dabei neu.`;
       if (!ziel || !confirm(frage)) { b.disabled = false; return; }
       await api('/api/update', { method: 'POST', body: { version: ziel } });
-      melde('Update angestoßen');
+      melde(tx('Update angestoßen'));
       // Warten, bis die gewählte Version läuft (Updater sichert, lädt, prüft, ersetzt und startet neu).
       for (let i = 0; i < 90; i++) {
         await new Promise((r) => setTimeout(r, 2000));
         try {
           const s = await api('/api/update');
-          if (s.aktuell === ziel) { melde(`Version ${ziel} läuft`); return location.reload(); }
+          if (s.aktuell === ziel) { melde(T`Version ${ziel} läuft`); return location.reload(); }
           if ((s.status || '').startsWith('error')) return laden(false);
         } catch (f) { /* Neustart */ }
       }
@@ -2653,32 +2716,32 @@ async function zeigeUpdate() {
 // ---------- Papierkorb: gelöschte Einträge und Planungen, wiederherstellbar bis zur Endlöschung ----------
 
 async function zeigePapierkorb() {
-  seite.innerHTML = `<p class="leer">Lädt …</p>`;
+  seite.innerHTML = T`<p class="leer">Lädt …</p>`;
   const laden = async () => {
     const k = await api('/api/papierkorb');
     if (aktuell?.name !== 'papierkorb') return;
     const titel = (e) => e.typ === 'planung'
-      ? `${esc(e.titel || 'Planung ohne Titel')} <span class="leise">· ${e.runden} ${e.runden === 1 ? 'Runde' : 'Runden'}</span>`
-      : e.runde ? `${esc(e.planung || 'Planung')} <span class="leise">· Runde ${e.runde}: ${esc(e.titel || '')}</span>` : esc(e.titel || 'ohne Titel');
-    seite.innerHTML = `<h1>Papierkorb</h1>
-      <p class="leise">Gelöschte Einträge mit Listenpunkten und Aufnahme${k.tage > 0 ? `; nach ${k.tage} Tagen endgültig gelöscht` : ''}.</p>
-      ${k.eintraege.length ? k.eintraege.map((e) => `<div class="karte"><div class="zeile"><span>${nrHtml(e.nr)}<span class="badge ${esc(e.modus)}">${esc(MODUS[e.modus] || e.modus)}</span> ${titel(e)}</span></div>
-        <div class="leise">${e.eingang ? `eingegangen ${zeit(e.eingang)} · ` : ''}gelöscht ${zeit(e.geloescht)}${e.endgueltig ? ` · endgültig ab ${zeit(e.endgueltig)}` : ''}</div>
+      ? T`${esc(e.titel || tx('Planung ohne Titel'))} <span class="leise">· ${e.runden} ${e.runden === 1 ? tx('Runde') : tx('Runden')}</span>`
+      : e.runde ? T`${esc(e.planung || tx('Planung'))} <span class="leise">· Runde ${e.runde}: ${esc(e.titel || '')}</span>` : esc(e.titel || tx('ohne Titel'));
+    seite.innerHTML = T`<h1>Papierkorb</h1>
+      <p class="leise">Gelöschte Einträge mit Listenpunkten und Aufnahme${k.tage > 0 ? T`; nach ${k.tage} Tagen endgültig gelöscht` : ''}.</p>
+      ${k.eintraege.length ? k.eintraege.map((e) => T`<div class="karte"><div class="zeile"><span>${nrHtml(e.nr)}<span class="badge ${esc(e.modus)}">${esc(MODUS[e.modus] || e.modus)}</span> ${titel(e)}</span></div>
+        <div class="leise">${e.eingang ? T`eingegangen ${zeit(e.eingang)} · ` : ''}gelöscht ${zeit(e.geloescht)}${e.endgueltig ? T` · endgültig ab ${zeit(e.endgueltig)}` : ''}</div>
         <div class="leiste"><button class="btn klein haupt" data-a="wiederherstellen" data-typ="${esc(e.typ)}" data-id="${esc(e.id)}">Wiederherstellen</button>
           <button class="btn klein gefahr" data-a="loeschen" data-typ="${esc(e.typ)}" data-id="${esc(e.id)}">Endgültig löschen</button></div></div>`).join('')
-    : '<p class="leer">Der Papierkorb ist leer.</p>'}`;
+    : T('<p class="leer">Der Papierkorb ist leer.</p>')}`;
   };
   aktuell.neuLaden = laden;
   seite.onclick = async (ev) => {
     const b = ev.target.closest('button[data-a]');
     if (!b) return;
-    const pfad = `/api/papierkorb/${b.dataset.typ}/${b.dataset.id}`;
+    const pfad = T`/api/papierkorb/${b.dataset.typ}/${b.dataset.id}`;
     try {
-      if (b.dataset.a === 'loeschen' && !confirm('Endgültig löschen? Das lässt sich nicht rückgängig machen.')) return;
+      if (b.dataset.a === 'loeschen' && !confirm(tx('Endgültig löschen? Das lässt sich nicht rückgängig machen.'))) return;
       b.disabled = true;
       await api(`${pfad}/${b.dataset.a}`, { method: 'POST' });
       verlaufStand = null;
-      melde(b.dataset.a === 'wiederherstellen' ? 'Wiederhergestellt' : 'Endgültig gelöscht');
+      melde(b.dataset.a === 'wiederherstellen' ? tx('Wiederhergestellt') : tx('Endgültig gelöscht'));
       await laden();
     } catch (f) {
       b.disabled = false;
@@ -2689,47 +2752,47 @@ async function zeigePapierkorb() {
 }
 
 async function zeigeKosten() {
-  seite.innerHTML = `<p class="leer">Lädt …</p>`;
+  seite.innerHTML = T`<p class="leer">Lädt …</p>`;
   const laden = async () => {
     let k;
     try { k = await apiAbgelegt('/api/kosten'); } catch (f) {
-      if (f instanceof NetzFehler) { if (aktuell?.name === 'kosten') seite.innerHTML = `<p class="leer">Offline – die Kosten sind noch nicht gespeichert.</p>`; return; }
+      if (f instanceof NetzFehler) { if (aktuell?.name === 'kosten') seite.innerHTML = T`<p class="leer">Offline – die Kosten sind noch nicht gespeichert.</p>`; return; }
       throw f;
     }
     if (aktuell?.name !== 'kosten') return;
     const t7 = k.tage.slice(-7);
     const summe = (liste, feld) => liste.reduce((s, t) => s + t[feld], 0);
     const d = k.summen.diktat, p = k.summen.planung;
-    const kachel = (titel, s) => `<div class="kachel"><div class="leise">${titel}</div><div class="zahl">${usd(s.usd)}</div>
-      <div class="leise">${s.anzahl} ${s.anzahl === 1 ? 'Auftrag' : 'Aufträge'}${s.anzahl ? ` · Ø ${usd(s.usd / s.anzahl)}` : ''}</div>
-      ${s.ohne_kosten ? `<div class="leise">${s.ohne_kosten} ohne vollständigen Betrag</div>` : ''}</div>`;
-    const legende = '<div class="legende"><span><i class="s1"></i>Notizen</span><span><i class="s2"></i>Aufgaben (Planungen)</span></div>';
-    const arten = [['Recherche', k.arten.recherche], ['Transkription', k.arten.transkription], ['Kurztitel und Zuordnung', k.arten.titel_zuordnung]];
+    const kachel = (titel, s) => T`<div class="kachel"><div class="leise">${titel}</div><div class="zahl">${usd(s.usd)}</div>
+      <div class="leise">${s.anzahl} ${s.anzahl === 1 ? tx('Auftrag') : tx('Aufträge')}${s.anzahl ? ` · Ø ${usd(s.usd / s.anzahl)}` : ''}</div>
+      ${s.ohne_kosten ? T`<div class="leise">${s.ohne_kosten} ohne vollständigen Betrag</div>` : ''}</div>`;
+    const legende = T('<div class="legende"><span><i class="s1"></i>Notizen</span><span><i class="s2"></i>Aufgaben (Planungen)</span></div>');
+    const arten = [[tx('Recherche'), k.arten.recherche], [tx('Transkription'), k.arten.transkription], [tx('Kurztitel und Zuordnung'), k.arten.titel_zuordnung]];
     const artMax = Math.max(...arten.map((a) => a[1]), 1e-9);
-    const fehlt = Object.entries({ transkription: 'Transkription (PRICE_TRANSCRIBE_PER_MIN)', titel: 'Kurztitel/Zuordnung (PRICE_TITLE_*)', recherche: 'Recherche (PRICE_PLAN_*, PRICE_SEARCH_PER_CALL)' }).filter(([s]) => !k.preise[s]).map(([, n]) => n);
-    const tabelle = (tage) => `<details><summary>Als Tabelle</summary><table class="werte"><thead><tr><th>Tag</th><th>Notizen</th><th>Aufgaben</th><th>Summe</th></tr></thead><tbody>${tage.map((t) => `<tr><td>${esc(kurzTag(t.tag, true))}</td><td>${usd(t.diktat)}</td><td>${usd(t.planung)}</td><td>${usd(t.diktat + t.planung)}</td></tr>`).join('')}</tbody></table></details>`;
-    seite.innerHTML = `<h1>KI-Kosten</h1>
+    const fehlt = Object.entries({ transkription: tx('Transkription (PRICE_TRANSCRIBE_PER_MIN)'), titel: tx('Kurztitel/Zuordnung (PRICE_TITLE_*)'), recherche: tx('Recherche (PRICE_PLAN_*, PRICE_SEARCH_PER_CALL)') }).filter(([s]) => !k.preise[s]).map(([, n]) => n);
+    const tabelle = (tage) => T`<details><summary>Als Tabelle</summary><table class="werte"><thead><tr><th>Tag</th><th>Notizen</th><th>Aufgaben</th><th>Summe</th></tr></thead><tbody>${tage.map((t) => T`<tr><td>${esc(kurzTag(t.tag, true))}</td><td>${usd(t.diktat)}</td><td>${usd(t.planung)}</td><td>${usd(t.diktat + t.planung)}</td></tr>`).join('')}</tbody></table></details>`;
+    seite.innerHTML = T`<h1>KI-Kosten</h1>
       <p class="leise">OpenAI-Kosten je Auftrag, berechnet aus Verbrauch und den Preisen der Konfiguration. Zugeordnet nach Eingangstag.</p>
-      ${fehlt.length ? `<div class="hinweis warn">Preis fehlt für: ${esc(fehlt.join(', '))}. Diese Anteile sind nicht enthalten.</div>` : ''}
+      ${fehlt.length ? T`<div class="hinweis warn">Preis fehlt für: ${esc(fehlt.join(', '))}. Diese Anteile sind nicht enthalten.</div>` : ''}
       <h2>Letzte 30 Tage</h2>
-      <div class="kacheln">${kachel('Gesamt', { usd: d.usd + p.usd, anzahl: d.anzahl + p.anzahl, ohne_kosten: d.ohne_kosten + p.ohne_kosten })}${kachel('Notizen', d)}${kachel('Aufgaben (Planungen)', p)}</div>
+      <div class="kacheln">${kachel(tx('Gesamt'), { usd: d.usd + p.usd, anzahl: d.anzahl + p.anzahl, ohne_kosten: d.ohne_kosten + p.ohne_kosten })}${kachel(tx('Notizen'), d)}${kachel(tx('Aufgaben (Planungen)'), p)}</div>
       <h2>Letzte 7 Tage – ${usd(summe(t7, 'diktat') + summe(t7, 'planung'))}</h2>
       <div class="karte">${legende}${saeulen(t7, 'd7', true)}<div class="ablesen" id="d7-wert">Säule antippen für die Werte des Tages.</div>${tabelle(t7)}</div>
       <h2>Verlauf 30 Tage</h2>
       <div class="karte">${legende}${saeulen(k.tage, 'd30', false)}<div class="ablesen" id="d30-wert">Säule antippen für die Werte des Tages.</div>${tabelle(k.tage.filter((t) => t.diktat + t.planung > 0))}</div>
       <h2>Wofür – 30 Tage</h2>
-      <div class="karte">${arten.map(([name, v]) => `<div class="balkenzeile"><span>${esc(name)}</span><span class="balken"><i class="${v > 0 ? '' : 'leer'}" data-anteil="${Math.round((v / artMax) * 100)}"></i></span><span class="wert">${usd(v)}</span></div>`).join('')}
+      <div class="karte">${arten.map(([name, v]) => T`<div class="balkenzeile"><span>${esc(name)}</span><span class="balken"><i class="${v > 0 ? '' : 'leer'}" data-anteil="${Math.round((v / artMax) * 100)}"></i></span><span class="wert">${usd(v)}</span></div>`).join('')}
         <p class="leise">Kostenlimit je Rechercheauftrag: ${usd(k.limit_usd)}.</p></div>`;
     seite.querySelectorAll('.balken i').forEach((el) => { el.style.width = `${Math.max(Number(el.dataset.anteil), el.classList.contains('leer') ? 0 : 1)}%`; });
     for (const [id, tage] of [['d7', t7], ['d30', k.tage]]) {
-      const svg = document.getElementById(id), wert = document.getElementById(`${id}-wert`);
+      const svg = document.getElementById(id), wert = document.getElementById(T`${id}-wert`);
       const zeigeTag = (ev) => {
         const r = ev.target.closest('.treffer');
         if (!r) return;
         const t = tage[Number(r.dataset.i)];
         svg.querySelectorAll('.treffer.an').forEach((e) => e.classList.remove('an'));
         r.classList.add('an');
-        wert.innerHTML = `<strong>${esc(kurzTag(t.tag, true))}</strong> · Notizen ${usd(t.diktat)} · Aufgaben ${usd(t.planung)} · Summe ${usd(t.diktat + t.planung)}`;
+        wert.innerHTML = T`<strong>${esc(kurzTag(t.tag, true))}</strong> · Notizen ${usd(t.diktat)} · Aufgaben ${usd(t.planung)} · Summe ${usd(t.diktat + t.planung)}`;
       };
       svg.addEventListener('pointerover', zeigeTag);
       svg.addEventListener('click', zeigeTag);
@@ -2744,10 +2807,10 @@ async function zeigeKosten() {
 
 // Pebble-App: Gesten und die Werte für die Webhook-Einrichtung.
 async function zeigePebble() {
-  seite.innerHTML = `${statusReiter('pebble')}<p class="leer">Lädt …</p>`;
+  seite.innerHTML = T`${statusReiter('pebble')}<p class="leer">Lädt …</p>`;
   let d;
   try { d = await api('/api/pebble'); } catch (f) {
-    if (f instanceof NetzFehler) { if (aktuell?.name === 'pebble') seite.innerHTML = '<p class="leer">Offline – die Einrichtungswerte brauchen eine Verbindung.</p>'; return; }
+    if (f instanceof NetzFehler) { if (aktuell?.name === 'pebble') seite.innerHTML = T('<p class="leer">Offline – die Einrichtungswerte brauchen eine Verbindung.</p>'); return; }
     throw f;
   }
   if (aktuell?.name !== 'pebble') return;
@@ -2756,20 +2819,20 @@ async function zeigePebble() {
   aufraeumen = () => { seite.onclick = null; };
 }
 function pebbleSeite(d) {
-  const wert = (name, schluessel, geheim) => `<div class="karte"><div class="zeile"><strong>${esc(name)}</strong>
-    <span>${geheim ? `<button class="btn klein" data-zeigen="${schluessel}">Anzeigen</button> ` : ''}<button class="btn klein" data-kopieren="${schluessel}">Kopieren</button></span></div>
+  const wert = (name, schluessel, geheim) => T`<div class="karte"><div class="zeile"><strong>${esc(name)}</strong>
+    <span>${geheim ? T`<button class="btn klein" data-zeigen="${schluessel}">Anzeigen</button> ` : ''}<button class="btn klein" data-kopieren="${schluessel}">Kopieren</button></span></div>
     <div class="link" id="wert-${schluessel}">${geheim ? '••••••••••••••••' : esc(d[schluessel])}</div></div>`;
-  return `<h1>Pebble-App</h1>
+  return T`<h1>Pebble-App</h1>
     <dl><dt>Halten</dt><dd>${esc(MODUS[d.halten])}</dd><dt>Klick + Halten</dt><dd>${esc(MODUS[d.doppelklick_halten])}</dd>
-      <dt>Transkription</dt><dd>${d.transkription === 'openai' ? 'OpenAI' : 'Pebble-App'}</dd></dl>
+      <dt>Transkription</dt><dd>${d.transkription === 'openai' ? tx('OpenAI') : tx('Pebble-App')}</dd></dl>
     <h2>Einrichten</h2>
     <p class="leise">In der Pebble-App unter Index 01 → Webhooks, für beide Gesten gleich eintragen.</p>
-    ${wert('Webhook-URL', 'url')}
+    ${wert(tx('Webhook-URL'), 'url')}
     <dl><dt>Payload-Modus</dt><dd><strong>Both</strong> (Aufnahme und Transkript)</dd><dt>Größe</dt><dd>bis ${d.max_mb} MB je Aufnahme</dd></dl>
     <p class="leise">Unter „Headers“ ein Paar aus Name und Wert anlegen:</p>
-    ${wert('Header-Name', 'header')}${wert('Header-Wert', 'token', true)}
+    ${wert(tx('Header-Name'), 'header')}${wert(tx('Header-Wert'), 'token', true)}
     <p class="leise">„Signed requests“ einschalten und dieses Secret eintragen, ohne Leerzeichen:</p>
-    ${wert('Signatur-Secret', 'secret', true)}
+    ${wert(tx('Signatur-Secret'), 'secret', true)}
     <ol><li>„Send test event“ – im Verlauf erscheint „Test-Event“.</li>
       <li>Je Geste eine kurze Aufnahme.</li>
       <li>Kommt nichts an: „Recent runs“ in der Pebble-App zeigt die Antwort (401 = Header oder Signatur falsch).</li></ol>
@@ -2777,14 +2840,14 @@ function pebbleSeite(d) {
 }
 async function pebbleKlick(b, d) {
   if (b.dataset.zeigen) {
-    const el = document.getElementById(`wert-${b.dataset.zeigen}`);
-    const offen = b.textContent === 'Verbergen';
+    const el = document.getElementById(T`wert-${b.dataset.zeigen}`);
+    const offen = b.textContent === tx('Verbergen');
     el.textContent = offen ? '••••••••••••••••' : d[b.dataset.zeigen];
-    b.textContent = offen ? 'Anzeigen' : 'Verbergen';
+    b.textContent = offen ? tx('Anzeigen') : tx('Verbergen');
     return true;
   }
   if (b.dataset.kopieren) {
-    try { await navigator.clipboard.writeText(d[b.dataset.kopieren]); melde('Kopiert'); } catch (f) { melde('Kopieren nicht möglich – Wert anzeigen und von Hand übernehmen'); }
+    try { await navigator.clipboard.writeText(d[b.dataset.kopieren]); melde(tx('Kopiert')); } catch (f) { melde(tx('Kopieren nicht möglich – Wert anzeigen und von Hand übernehmen')); }
     return true;
   }
   return false;
@@ -2793,17 +2856,17 @@ async function pebbleKlick(b, d) {
 // ---------- Weiteres Gerät: 4-stelliger Code, gültig nur solange diese Seite offen ist ----------
 
 async function zeigeGeraetNeu() {
-  seite.innerHTML = '<p class="leer">Lädt …</p>';
+  seite.innerHTML = T('<p class="leer">Lädt …</p>');
   const d = await api('/api/geraete/code', { method: 'POST' });
   if (aktuell?.name !== 'geraetNeu') { api('/api/geraete/code', { method: 'DELETE' }).catch(() => {}); return; }
   let gueltig = true;
   const male = () => {
     const rest = Math.max(0, Math.round((d.bis - Date.now()) / 1000));
     if (rest === 0) gueltig = false;
-    seite.innerHTML = `<h1>Weiteres Gerät hinzufügen</h1>
-      ${gueltig ? `<p class="geraetecode" aria-label="Code ${d.code.split('').join(' ')}">${esc(d.code)}</p>
+    seite.innerHTML = T`<h1>Weiteres Gerät hinzufügen</h1>
+      ${gueltig ? T`<p class="geraetecode" aria-label="Code ${d.code.split('').join(' ')}">${esc(d.code)}</p>
       <p class="mitte leise">noch ${Math.floor(rest / 60)}:${String(rest % 60).padStart(2, '0')} min · nur solange diese Seite offen ist</p>`
-    : '<div class="hinweis warn">Der Code ist abgelaufen.</div><div class="leiste"><button class="btn haupt" data-a="neu">Neuen Code erzeugen</button></div>'}
+    : T('<div class="hinweis warn">Der Code ist abgelaufen.</div><div class="leiste"><button class="btn haupt" data-a="neu">Neuen Code erzeugen</button></div>')}
       <ol><li>Auf dem neuen Gerät diese Adresse öffnen: <strong>${esc(location.host)}</strong></li>
         <li>„Mit Code hinzufügen“ antippen und den Code eingeben.</li>
         <li>Namen eingeben und den Passkey anlegen.</li></ol>
@@ -2813,7 +2876,7 @@ async function zeigeGeraetNeu() {
   const uhr = setInterval(() => { if (gueltig) male(); }, 1000);
   // Lebenszeichen: ohne sie verfällt der Code nach 25 s auf dem Server.
   const halten = setInterval(async () => {
-    try { const r = await api('/api/geraete/code/halten', { method: 'POST' }); if (!r.gueltig && gueltig) { gueltig = false; male(); melde('Code verbraucht oder abgelaufen'); } } catch { /* offline: verfällt */ }
+    try { const r = await api('/api/geraete/code/halten', { method: 'POST' }); if (!r.gueltig && gueltig) { gueltig = false; male(); melde(tx('Code verbraucht oder abgelaufen')); } } catch { /* offline: verfällt */ }
   }, 10000);
   const weg = () => { fetch('/api/geraete/code', { method: 'DELETE', headers: { 'X-App': '1' }, credentials: 'same-origin', keepalive: true }).catch(() => {}); };
   window.addEventListener('pagehide', weg);
@@ -2832,20 +2895,20 @@ async function zeigeDarstellung() {
   let d = { modus: 'auto', palette: 'blau', ...(D.lies() || {}) };
   const male = () => {
     const eigene = D.gueltigeFarbe(d.farbe) ? d.farbe : '#2f6fde';
-    seite.innerHTML = `${statusReiter('darstellung')}<h1>Theme</h1>
+    seite.innerHTML = T`${statusReiter('darstellung')}<h1>Theme</h1>
       <p class="leise">Gilt auf diesem Gerät. Ein neues Gerät übernimmt beim ersten Öffnen das zuletzt gewählte Theme.</p>
       <h2>Tag/Nacht</h2>
-      <nav class="btn-group unter" aria-label="Tag/Nacht">${[['auto', 'Automatisch'], ['hell', 'Hell'], ['dunkel', 'Dunkel']]
-    .map(([m, n]) => `<button class="btn${d.modus === m ? ' aktiv' : ''}" data-modus="${m}" aria-pressed="${d.modus === m}">${n}</button>`).join('')}</nav>
+      <nav class="btn-group unter" aria-label="Tag/Nacht">${[['auto', tx('Automatisch')], ['hell', tx('Hell')], ['dunkel', tx('Dunkel')]]
+    .map(([m, n]) => T`<button class="btn${d.modus === m ? ' aktiv' : ''}" data-modus="${m}" aria-pressed="${d.modus === m}">${n}</button>`).join('')}</nav>
       <h2>Farbe</h2>
-      <div class="farbwahl">${Object.entries(D.PALETTEN).map(([k, [n, hell, dunkel]]) => `<button class="${d.palette === k ? 'an' : ''}" data-palette="${k}" aria-pressed="${d.palette === k}">
-          <span class="farbpunkt" data-hell="${hell}" data-dunkel="${dunkel}"></span>${n}</button>`).join('')}
+      <div class="farbwahl">${Object.entries(D.PALETTEN).map(([k, [n, hell, dunkel]]) => T`<button class="${d.palette === k ? 'an' : ''}" data-palette="${k}" aria-pressed="${d.palette === k}">
+          <span class="farbpunkt" data-hell="${hell}" data-dunkel="${dunkel}"></span>${tx(n)}</button>`).join('')}
         <label class="${d.palette === 'eigene' ? 'an' : ''}"><input type="color" id="eigenefarbe" value="${eigene}" aria-label="Eigene Farbe wählen">Eigene</label></div>
       <h2>Vorschau</h2>
-      <div id="vorschau">${beispiele ? beispiele.map(karte).join('') || '<p class="leer">Noch keine Einträge.</p>' : '<p class="leer">Lädt …</p>'}</div>
+      <div id="vorschau">${beispiele ? beispiele.map(karte).join('') || T('<p class="leer">Noch keine Einträge.</p>') : T('<p class="leer">Lädt …</p>')}</div>
       <div class="leiste"><button class="btn haupt" data-beispiel="1">Beispiel-Knopf</button><button class="btn">Normaler Knopf</button></div>`;
     // Farbpunkte über CSSOM (die CSP sperrt style-Attribute im HTML): links hell, rechts dunkel.
-    for (const p of seite.querySelectorAll('.farbpunkt')) p.style.background = `linear-gradient(135deg, ${p.dataset.hell} 50%, ${p.dataset.dunkel} 50%)`;
+    for (const p of seite.querySelectorAll('.farbpunkt')) p.style.background = T`linear-gradient(135deg, ${p.dataset.hell} 50%, ${p.dataset.dunkel} 50%)`;
   };
   const speichern = async () => {
     D.setze(d);
@@ -2870,15 +2933,15 @@ async function zeigeDarstellung() {
 // ---------- Tags verwalten ----------
 
 async function zeigeTagsVerwalten() {
-  seite.innerHTML = '<p class="leer">Lädt …</p>';
+  seite.innerHTML = T('<p class="leer">Lädt …</p>');
   const laden = async () => {
     const d = await api('/api/tags');
     if (aktuell?.name !== 'tagsVerwalten') return;
     try { localStorage.setItem('tag-vorrat', JSON.stringify(d.tags)); } catch { /* nur Zwischenspeicher */ }
     maleMenue();
-    seite.innerHTML = `<h1>Tags</h1><p class="leise">Tippen auf einen Tag zeigt seine Einträge. Löschen nimmt ihn aus allen Notizen und Planungen.</p>
-      ${d.tags.length ? `<div class="karte tagverwaltung">${d.tags.map((t) => `<div class="tagzeile"><span><a class="tagchip" href="/" data-zeige-tag="${esc(t.name)}" title="Einträge mit diesem Tag zeigen">${esc(t.name)}</a><br><span class="leise">${t.anzahl} ${t.anzahl === 1 ? 'Eintrag' : 'Einträge'}${t.zuletzt ? ` · zuletzt ${kurz(t.zuletzt)}` : ''}</span></span>
-        <button class="btn klein gefahr" data-tag="${esc(t.name)}">Löschen</button></div>`).join('')}</div>` : '<p class="leer">Noch keine Tags.</p>'}`;
+    seite.innerHTML = T`<h1>Tags</h1><p class="leise">Tippen auf einen Tag zeigt seine Einträge. Löschen nimmt ihn aus allen Notizen und Planungen.</p>
+      ${d.tags.length ? T`<div class="karte tagverwaltung">${d.tags.map((t) => T`<div class="tagzeile"><span><a class="tagchip" href="/" data-zeige-tag="${esc(t.name)}" title="Einträge mit diesem Tag zeigen">${esc(t.name)}</a><br><span class="leise">${t.anzahl} ${t.anzahl === 1 ? tx('Eintrag') : tx('Einträge')}${t.zuletzt ? T` · zuletzt ${kurz(t.zuletzt)}` : ''}</span></span>
+        <button class="btn klein gefahr" data-tag="${esc(t.name)}">Löschen</button></div>`).join('')}</div>` : T('<p class="leer">Noch keine Tags.</p>')}`;
   };
   aktuell.neuLaden = laden;
   seite.onclick = async (ev) => {
@@ -2891,14 +2954,14 @@ async function zeigeTagsVerwalten() {
     }
     const b = ev.target.closest('button[data-tag]');
     if (!b) return;
-    if (!confirm(`Tag „${b.dataset.tag}“ aus allen Einträgen entfernen?`)) return;
+    if (!confirm(T`Tag „${b.dataset.tag}“ aus allen Einträgen entfernen?`)) return;
     b.disabled = true;
     try {
-      const r = await api(`/api/tags/${encodeURIComponent(b.dataset.tag)}`, { method: 'DELETE' });
+      const r = await api(T`/api/tags/${encodeURIComponent(b.dataset.tag)}`, { method: 'DELETE' });
       // Gewählter Tag-Filter im Verlauf ohne den gelöschten Tag.
       try { localStorage.setItem('verlauf-tags', JSON.stringify(gewaehlteTags().filter((t) => t.toLowerCase() !== b.dataset.tag.toLowerCase()))); } catch { /* leer */ }
       verlaufStand = null;
-      melde(`„${b.dataset.tag}“ gelöscht (${r.eintraege} ${r.eintraege === 1 ? 'Eintrag' : 'Einträge'})`);
+      melde(T`„${b.dataset.tag}“ gelöscht (${r.eintraege} ${r.eintraege === 1 ? tx('Eintrag') : tx('Einträge')})`);
       await laden();
     } catch (f) { b.disabled = false; melde(f.message); }
   };
@@ -2935,13 +2998,13 @@ function credZuJson(c) {
 // Freigabe für eine App (OAuth für den MCP-Server): Name und Ziel zeigen, Erlauben oder Ablehnen.
 async function zeigeVerbinden() {
   const anfrage = location.search;
-  seite.innerHTML = '<p class="leer">Lädt …</p>';
+  seite.innerHTML = T('<p class="leer">Lädt …</p>');
   let d;
-  try { d = await api(`/api/oauth/anfrage${anfrage}`); } catch (f) {
-    seite.innerHTML = `<div class="mitte"><h1>App verbinden</h1><div class="hinweis schlecht">${esc(f.message)}</div></div>`;
+  try { d = await api(T`/api/oauth/anfrage${anfrage}`); } catch (f) {
+    seite.innerHTML = T`<div class="mitte"><h1>App verbinden</h1><div class="hinweis schlecht">${esc(f.message)}</div></div>`;
     return;
   }
-  seite.innerHTML = `<div class="mitte"><h1>App verbinden</h1>
+  seite.innerHTML = T`<div class="mitte"><h1>App verbinden</h1>
     <p><strong>${esc(d.name)}</strong> möchte auf deine Sprachnotizen zugreifen: Listen und Punkte lesen, Punkte abhaken oder wieder öffnen.</p>
     <p class="leise">Weiterleitung danach an <strong>${esc(d.ziel)}</strong>. Trennen jederzeit unter Status → Verbundene Apps.</p>
     <div class="leiste"><button class="btn haupt" data-erlauben="1">Erlauben</button><button class="btn" data-erlauben="0">Ablehnen</button></div></div>`;
@@ -2960,11 +3023,11 @@ async function zeigeVerbinden() {
 async function zeigeAnmelden() {
   const s = await api('/api/sitzung').catch(() => null);
   if (s?.angemeldet) return geheZu('/', true);
-  seite.innerHTML = `<div class="mitte"><h1>Anmelden</h1>
-    ${s && !s.eingerichtet ? '<div class="hinweis warn">Noch kein Passkey eingerichtet. Auf dem Server <code>pebble-webhook enroll</code> ausführen und den Einmal-Link öffnen.</div>' : ''}
+  seite.innerHTML = T`<div class="mitte"><h1>Anmelden</h1>
+    ${s && !s.eingerichtet ? T('<div class="hinweis warn">Noch kein Passkey eingerichtet. Auf dem Server <code>pebble-webhook enroll</code> ausführen und den Einmal-Link öffnen.</div>') : ''}
     <p class="leise">Anmeldung mit dem Passkey dieses Geräts.</p>
     <p><button class="btn haupt" id="los"${window.PublicKeyCredential ? '' : ' disabled'}>Mit Passkey anmelden</button></p>
-    ${window.PublicKeyCredential ? '' : '<p class="leise">Dieser Browser unterstützt keine Passkeys.</p>'}
+    ${window.PublicKeyCredential ? '' : T('<p class="leise">Dieser Browser unterstützt keine Passkeys.</p>')}
     <h2>Neues Gerät?</h2>
     <p class="leise">Auf einem angemeldeten Gerät unter Status → „Weiteres Gerät hinzufügen“ den Code anzeigen lassen.</p>
     <form id="codeform" class="codeform"><label for="code">Code</label>
@@ -2976,7 +3039,7 @@ async function zeigeAnmelden() {
   const warte = (sek) => {
     clearInterval(sperre);
     let rest = sek;
-    const zeige = () => { knopf.disabled = rest > 0; knopf.textContent = rest > 0 ? `Nächster Versuch in ${rest} s` : 'Mit Code hinzufügen'; };
+    const zeige = () => { knopf.disabled = rest > 0; knopf.textContent = rest > 0 ? T`Nächster Versuch in ${rest} s` : tx('Mit Code hinzufügen'); };
     zeige();
     sperre = setInterval(() => { rest--; zeige(); if (rest <= 0) clearInterval(sperre); }, 1000);
   };
@@ -2986,7 +3049,7 @@ async function zeigeAnmelden() {
     knopf.disabled = true;
     try {
       const r = await api('/api/auth/code', { method: 'POST', body: { code: document.getElementById('code').value } });
-      geheZu(`/einrichten#${r.token}`);
+      geheZu(T`/einrichten#${r.token}`);
     } catch (f) {
       melde(f.message);
       warte(f instanceof ApiFehler && f.code === 'warten' ? Number(f.message.match(/\d+/)?.[0] || 5) : 5);
@@ -2997,7 +3060,7 @@ async function zeigeAnmelden() {
     try {
       const start = await api('/api/auth/anmelden/start', { method: 'POST' });
       const cred = await navigator.credentials.get(optionenAusJson(start.optionen, false));
-      await api(`/api/auth/anmelden/ende?vorgang=${start.vorgang}`, { method: 'POST', body: credZuJson(cred) });
+      await api(T`/api/auth/anmelden/ende?vorgang=${start.vorgang}`, { method: 'POST', body: credZuJson(cred) });
       besuche.anmeldung();
       starteLive();
       let weiter = '/';
@@ -3005,31 +3068,31 @@ async function zeigeAnmelden() {
       geheZu(weiter.startsWith('/verbinden?') ? weiter : '/', true);
     } catch (f) {
       ev.target.disabled = false;
-      melde(f.name === 'NotAllowedError' ? 'Anmeldung abgebrochen' : f.message);
+      melde(f.name === 'NotAllowedError' ? tx('Anmeldung abgebrochen') : f.message);
     }
   };
 }
 
 async function zeigeEinrichten() {
   const token = location.hash.slice(1);
-  seite.innerHTML = `<h1>Passkey einrichten</h1>
+  seite.innerHTML = T`<h1>Passkey einrichten</h1>
     <p class="leise">Dieses Gerät bekommt einen Passkey. Ein Passwort gibt es nicht.</p>
     <label for="name">Name des Geräts</label><input type="text" id="name" maxlength="40" placeholder="z. B. Handy">
     <div class="leiste"><button class="btn haupt" id="los"${token && window.PublicKeyCredential ? '' : ' disabled'}>Passkey anlegen</button></div>
-    ${token ? '' : '<div class="hinweis schlecht">Der Link enthält keinen Einrichtungs-Code.</div>'}`;
+    ${token ? '' : T('<div class="hinweis schlecht">Der Link enthält keinen Einrichtungs-Code.</div>')}`;
   document.getElementById('los').onclick = async (ev) => {
     ev.target.disabled = true;
     try {
       const start = await api('/api/auth/einrichten/start', { method: 'POST', body: { token, name: document.getElementById('name').value } });
       const cred = await navigator.credentials.create(optionenAusJson(start.optionen, true));
-      await api(`/api/auth/einrichten/ende?vorgang=${start.vorgang}`, { method: 'POST', body: credZuJson(cred) });
+      await api(T`/api/auth/einrichten/ende?vorgang=${start.vorgang}`, { method: 'POST', body: credZuJson(cred) });
       besuche.anmeldung();
-      melde('Passkey angelegt');
+      melde(tx('Passkey angelegt'));
       starteLive();
       geheZu('/', true);
     } catch (f) {
       ev.target.disabled = false;
-      melde(f.name === 'NotAllowedError' ? 'Einrichtung abgebrochen' : f.message);
+      melde(f.name === 'NotAllowedError' ? tx('Einrichtung abgebrochen') : f.message);
     }
   };
 }
@@ -3049,36 +3112,36 @@ function maleMenue() {
   let neuZahlen = {};
   try { zahlen = JSON.parse(lokal('verlauf-zahlen', 'null')) || {}; neuZahlen = JSON.parse(lokal('verlauf-neu', 'null')) || {}; } catch { /* noch nie geladen */ }
   // Gelb (gedimmt): neu seit zuletzt gesehen, wie im Verlauf markiert.
-  const neuZahl = (n) => (n > 0 ? ` <span class="zaehler neu" title="${n} neu">${n}</span>` : '');
+  const neuZahl = (n) => (n > 0 ? T` <span class="zaehler neu" title="${tx('{0} neu', n)}">${n}</span>` : '');
   gruppen = [...gruppen.filter(([g]) => g !== '-').slice(0, 5), ...gruppen.filter(([g]) => g === '-')];
   let tagZahl;
   try { tagZahl = JSON.parse(lokal('tag-vorrat', 'null'))?.length; } catch { /* noch nie geladen */ }
   const art = lokal('verlauf-art', 'alles'), gruppe = name === 'listen' && aktuell.arg ? decodeURIComponent(aktuell.arg) : '';
   // Zähler rechts an jedem zählbaren Punkt, auch 0 (dann grau).
-  const zahl = (n, still) => (typeof n === 'number' ? ` <span class="zaehler${still || !n ? ' still' : ''}">${n}</span>` : '');
+  const zahl = (n, still) => (typeof n === 'number' ? T` <span class="zaehler${still || !n ? ' still' : ''}">${n}</span>` : '');
   const teile = [
-    { id: 'verlauf', name: 'Verlauf', href: '/', setze: ['verlauf-art', 'alles'], unter: ARTEN.map(([a, n]) => ({ name: n, href: '/', setze: ['verlauf-art', a], an: name === 'verlauf' && art === a, extra: (a === 'fragen' ? '' : neuZahl(neuZahlen[a])) + zahl(zahlen[a] ?? 0, a !== 'fragen') })) },
-    { id: 'listen', name: 'Listen', href: '/listen', unter: gruppen.map(([g, offen, neu]) => ({ name: gruppenTitel(g), href: gruppenPfad(g), an: !!gruppe && gruppe.toLowerCase() === g.toLowerCase(), extra: neuZahl(neu) + zahl(offen, true) })) },
-    { id: 'status', name: 'Einstellungen', href: '/status', unter: [
-      { name: 'Status', href: '/status', an: ['status', 'pebble', 'joplin', 'einstellungen', 'einstellungBearbeiten', 'geraetNeu', 'darstellung'].includes(name) },
-      { name: 'Updates', href: '/status/update', an: name === 'update', extra: neueVersion ? ` ${updateSymbol}` : '' },
-      { name: 'Gedächtnis', href: '/status/gedaechtnis', an: name === 'gedaechtnis' || name === 'gedaechtnisBearbeiten', extra: zahl(offeneVorschlaege) },
-      { name: 'Tags', href: '/status/tags', an: name === 'tagsVerwalten', extra: zahl(tagZahl, true) },
-      { name: 'KI-Kosten', href: '/status/kosten', an: name === 'kosten' },
-      { name: 'Papierkorb', href: '/status/papierkorb', an: name === 'papierkorb', extra: zahl(papierkorbZahl, true) },
+    { id: 'verlauf', name: tx('Verlauf'), href: '/', setze: ['verlauf-art', 'alles'], unter: ARTEN.map(([a, n]) => ({ name: a === 'termin' ? tx('Termine') : n, href: '/', setze: ['verlauf-art', a], an: name === 'verlauf' && art === a, extra: (a === 'fragen' ? '' : neuZahl(neuZahlen[a])) + zahl(zahlen[a] ?? 0, a !== 'fragen') })) },
+    { id: 'listen', name: tx('Listen'), href: '/listen', unter: gruppen.map(([g, offen, neu]) => ({ name: gruppenTitel(g), href: gruppenPfad(g), an: !!gruppe && gruppe.toLowerCase() === g.toLowerCase(), extra: neuZahl(neu) + zahl(offen, true) })) },
+    { id: 'status', name: tx('Einstellungen'), href: '/status', unter: [
+      { name: tx('Status'), href: '/status', an: ['status', 'pebble', 'joplin', 'einstellungen', 'einstellungBearbeiten', 'geraetNeu', 'darstellung'].includes(name) },
+      { name: tx('Updates'), href: '/status/update', an: name === 'update', extra: neueVersion ? ` ${updateSymbol}` : '' },
+      { name: tx('Gedächtnis'), href: '/status/gedaechtnis', an: name === 'gedaechtnis' || name === 'gedaechtnisBearbeiten', extra: zahl(offeneVorschlaege) },
+      { name: tx('Tags'), href: '/status/tags', an: name === 'tagsVerwalten', extra: zahl(tagZahl, true) },
+      { name: tx('KI-Kosten'), href: '/status/kosten', an: name === 'kosten' },
+      { name: tx('Papierkorb'), href: '/status/papierkorb', an: name === 'papierkorb', extra: zahl(papierkorbZahl, true) },
     ] },
   ];
   // Verlauf-Filter ohne Einträge (Zähler 0) sind nicht anklickbar: der Verlauf fiele sonst auf „Alles“ zurück.
-  const link = (k, x) => (x.leer && !x.an ? `<span class="${k} gesperrt" aria-disabled="true"><span>${esc(x.name)}</span>${x.extra || ''}</span>` : linkAktiv(k, x));
-  const linkAktiv = (k, x) => `<a class="${k}${x.an ? ' aktiv' : ''}" href="${x.href}"${x.setze ? ` data-setze="${x.setze[0]}" data-wert="${esc(x.setze[1])}"` : ''}${x.an ? ' aria-current="page"' : ''}><span>${esc(x.name)}</span>${x.extra || ''}</a>`;
-  nav.innerHTML = `<div class="menuekopf"><span class="marke">Sprachnotizen</span><button type="button" class="btn klein rund" data-menue-zu aria-label="Menü schließen">×</button></div>
-    ${teile.map((t) => `<div class="menuegruppe">${link('menuehaupt', { ...t, an: bereich === t.id })}${t.unter.map((u) => link('menueunter', u)).join('')}</div>`).join('')}
+  const link = (k, x) => (x.leer && !x.an ? T`<span class="${k} gesperrt" aria-disabled="true"><span>${esc(x.name)}</span>${x.extra || ''}</span>` : linkAktiv(k, x));
+  const linkAktiv = (k, x) => T`<a class="${k}${x.an ? ' aktiv' : ''}" href="${x.href}"${x.setze ? T` data-setze="${x.setze[0]}" data-wert="${esc(x.setze[1])}"` : ''}${x.an ? ' aria-current="page"' : ''}><span>${esc(x.name)}</span>${x.extra || ''}</a>`;
+  nav.innerHTML = T`<div class="menuekopf"><span class="marke">Sprachnotizen</span><button type="button" class="btn klein rund" data-menue-zu aria-label="Menü schließen">×</button></div>
+    ${teile.map((t) => T`<div class="menuegruppe">${link('menuehaupt', { ...t, an: bereich === t.id })}${t.unter.map((u) => link('menueunter', u)).join('')}</div>`).join('')}
     <div class="menuegruppe"><button type="button" class="menueunter abmelden" data-menue-abmelden><span>Abmelden</span></button></div>
-    <div class="menuefuss"><div class="menuefusszeile">${appVersion ? `<a href="/status/update">Version ${esc(appVersion)}</a>` : '<span></span>'}<a class="themeknopf" href="/status/darstellung" title="Theme" aria-label="Theme"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 3a9 9 0 0 0 0 18z" fill="currentColor"/></svg></a></div></div>`;
+    <div class="menuefuss"><div class="menuefusszeile">${appVersion ? T`<a href="/status/update">Version ${esc(appVersion)}</a>` : '<span></span>'}<a class="themeknopf" href="/status/darstellung" title="Theme" aria-label="Theme"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 3a9 9 0 0 0 0 18z" fill="currentColor"/></svg></a></div></div>`;
   const punkt = menueKnopf.querySelector('.punkt');
   punkt.hidden = !neueVersion && !offeneVorschlaege;
   punkt.classList.toggle('vorschlag', !neueVersion);
-  menueKnopf.title = neueVersion ? `Update ${neueVersion} verfügbar` : offeneVorschlaege ? `${offeneVorschlaege} Gedächtnis-Vorschläge` : '';
+  menueKnopf.title = neueVersion ? T`Update ${neueVersion} verfügbar` : offeneVorschlaege ? T`${offeneVorschlaege} Gedächtnis-Vorschläge` : '';
 }
 menueKnopf.onclick = () => { maleMenue(); menue.showModal(); };
 // Breite Bildschirme: Menü fest links sichtbar (nicht modal), ohne Menüknopf; schmal: Klappmenü.
@@ -3095,7 +3158,7 @@ breit.addEventListener('change', menueModus);
 menue.addEventListener('click', (e) => { if (menue.matches(':modal') && (e.target === menue || e.target.closest('[data-menue-zu]'))) menue.close(); });
 menue.addEventListener('click', async (e) => {
   const b = e.target.closest('[data-menue-abmelden]');
-  if (!b || !confirm('Auf diesem Gerät abmelden?')) return;
+  if (!b || !confirm(tx('Auf diesem Gerät abmelden?'))) return;
   b.disabled = true;
   try { await api('/api/auth/abmelden', { method: 'POST' }); if (menue.open) menue.close(); geheZu('/anmelden', true); } catch (f) { b.disabled = false; melde(f.message); }
 });
@@ -3105,7 +3168,7 @@ let offeneVorschlaege = 0;
 const vorschlagZahl = () => (offeneVorschlaege ? ` (${offeneVorschlaege})` : '');
 // Neue Version (Hintergrund-Prüfung alle 4 h): Punkt am Menüknopf, Pfeil an „Updates“, Hinweiskarte auf der Statusseite.
 let neueVersion = '', papierkorbZahl = 0, appVersion = lokal('app-version');
-const updateSymbol = '<svg class="updatesymbol" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="11" fill="currentColor"/><path d="M12 17V7m-4.5 4.5L12 7l4.5 4.5" fill="none" stroke="var(--flaeche)" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+const updateSymbol = T('<svg class="updatesymbol" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="11" fill="currentColor"/><path d="M12 17V7m-4.5 4.5L12 7l4.5 4.5" fill="none" stroke="var(--flaeche)" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>');
 async function ladeZaehler() {
   try {
     const z = await api('/api/zaehler');

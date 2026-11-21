@@ -8,6 +8,7 @@ import (
 	"slices"
 	"time"
 
+	"pebble-webhook/internal/i18n"
 	"pebble-webhook/internal/joplin"
 	"pebble-webhook/internal/store"
 )
@@ -101,7 +102,7 @@ func (a *App) process(ctx context.Context, j *store.Job) {
 			a.changed(j.ID)
 			// Benachrichtigt wird nur zu Planungen; Diktate und leere Aufnahmen stehen im Verlauf und auf der Statusseite.
 			if j.Failed && !j.Empty && j.Mode == "planung" {
-				a.notify("Planung fehlgeschlagen", store.Preview(j.Error, 120), "/eintrag/"+j.ID)
+				a.notify(i18n.T("Planung fehlgeschlagen"), store.Preview(j.Error, 120), "/eintrag/"+j.ID)
 			}
 			return
 		}
@@ -151,7 +152,7 @@ func (a *App) step(ctx context.Context, j *store.Job) error {
 			j.State = store.StateAssigned
 			return nil
 		}
-		return permanentError{"Kein Aktionsmodus für diesen Auftrag"}
+		return permanentError{i18n.T("Kein Aktionsmodus für diesen Auftrag")}
 	case store.StateAssigned:
 		p, err := a.DB.Planning(j.PlanningID)
 		if err != nil {
@@ -178,7 +179,7 @@ func (a *App) step(ctx context.Context, j *store.Job) error {
 		j.State = store.StateDone
 		return nil
 	}
-	return permanentError{"Unbekannter Verarbeitungsstand " + j.State}
+	return permanentError{i18n.T("Unbekannter Verarbeitungsstand") + " " + j.State}
 }
 
 func (a *App) transcribe(ctx context.Context, j *store.Job) error {
@@ -192,19 +193,19 @@ func (a *App) transcribe(ctx context.Context, j *store.Job) error {
 		}
 	case a.Cfg.Transcription == "pebble" && j.Source == "pebble":
 		if j.PebbleText == "" {
-			return emptyError{"Pebble hat kein Transkript mitgeschickt (TRANSCRIPTION=pebble)"}
+			return emptyError{i18n.T("Pebble hat kein Transkript mitgeschickt (TRANSCRIPTION=pebble)")}
 		}
 		j.Transcript, j.TranscriptSource = j.PebbleText, "pebble"
 	default:
 		if j.AudioPath == "" || j.AudioDeletedAt != 0 {
 			if j.PebbleText == "" {
-				return permanentError{"Kein Audio (mehr) vorhanden – Transkription nicht möglich"}
+				return permanentError{i18n.T("Kein Audio (mehr) vorhanden – Transkription nicht möglich")}
 			}
 			// Ohne Aufnahme bleibt das Transkript der Pebble-App.
 			j.Transcript, j.TranscriptSource = j.PebbleText, "pebble"
 			break
 		}
-		text, seconds, err := a.AI.Transcribe(ctx, a.Cfg.TranscribeModel, j.AudioPath, j.AudioMime, "de")
+		text, seconds, err := a.AI.Transcribe(ctx, a.Cfg.TranscribeModel, j.AudioPath, j.AudioMime, i18n.TranscribeLanguage())
 		if err != nil {
 			return err
 		}
@@ -219,7 +220,7 @@ func (a *App) transcribe(ctx context.Context, j *store.Job) error {
 			// OpenAI hört nichts, die Pebble-App hat aber Text erkannt: den nehmen.
 			j.Transcript, j.TranscriptSource = j.PebbleText, "pebble"
 		default:
-			return emptyError{"Die Transkription ist leer – keine Sprache erkannt"}
+			return emptyError{i18n.T("Die Transkription ist leer – keine Sprache erkannt")}
 		}
 	}
 	j.State = store.StateTranscribed
@@ -294,7 +295,7 @@ func (a *App) pushJob(j *store.Job) (err error) {
 func (a *App) pushPlanning(p *store.Planning) error {
 	plan := parsePlan(p.Plan)
 	if plan == nil {
-		return permanentError{"Planung ohne Ergebnis"}
+		return permanentError{i18n.T("Planung ohne Ergebnis")}
 	}
 	rounds, err := a.DB.Rounds(p.ID)
 	if err != nil {
@@ -387,14 +388,14 @@ func (a *App) notifyDone(j *store.Job) {
 	if j.Mode != "planung" {
 		return
 	}
-	title, body := "Planung fertig", j.Title
+	title, body := i18n.T("Planung fertig"), j.Title
 	if plan := parsePlan(j.Result); plan != nil && len(plan.OffeneFragen) == 1 {
-		title = "Planung fertig · 1 Frage"
+		title = i18n.T("Planung fertig · 1 Frage")
 	} else if plan != nil && len(plan.OffeneFragen) > 1 {
-		title = fmt.Sprintf("Planung fertig · %d Fragen", len(plan.OffeneFragen))
+		title = i18n.Tf("Planung fertig · %d Fragen", len(plan.OffeneFragen))
 	}
 	if j.LimitHit {
-		body += " (Kostenlimit erreicht)"
+		body += i18n.T(" (Kostenlimit erreicht)")
 	}
 	a.notify(title, body, "/planung/"+j.PlanningID)
 }

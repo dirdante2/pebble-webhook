@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strings"
 
+	"pebble-webhook/internal/i18n"
 	"pebble-webhook/internal/openai"
 	"pebble-webhook/internal/store"
 )
@@ -96,7 +97,7 @@ func cleanName(s string) string {
 func (a *App) findList(group, name string) (*store.List, error) {
 	group, name = cleanName(group), cleanName(name)
 	if name == "" || len([]rune(name)) > 40 || len([]rune(group)) > 40 {
-		return nil, errNotSorted{fmt.Sprintf("Liste „%s“ (Gruppe „%s“) ist leer oder länger als 40 Zeichen", name, group)}
+		return nil, errNotSorted{i18n.Tf("Liste „%s“ (Gruppe „%s“) ist leer oder länger als 40 Zeichen", name, group)}
 	}
 	lists, err := a.DB.Lists()
 	if err != nil {
@@ -217,7 +218,7 @@ func (a *App) sortPlanning(ctx context.Context, p *store.Planning) error {
 	for _, f := range plan.Eckdaten {
 		facts = append(facts, f.Name+": "+f.Wert)
 	}
-	res, err := a.AI.Respond(ctx, openai.Request{
+	res, err := a.respond(ctx, openai.Request{
 		Model: a.Cfg.DictationModel, Instructions: planSortInstructions, SchemaName: "einsortieren", Schema: planSortSchema,
 		MaxOutputTokens: 1000, ReasoningEffort: a.Cfg.PlanReasoningEffort,
 		Input: fmt.Sprintf("%s\n%s\nPlanung #%d:\nTitel: %s\nVorhaben: %s\nGesagt: %s\nEckdaten: %s",
@@ -391,7 +392,7 @@ func (a *App) describe(ctx context.Context) (int, error) {
 	if len(due) == 0 {
 		return 0, nil
 	}
-	res, err := a.AI.Respond(ctx, openai.Request{
+	res, err := a.respond(ctx, openai.Request{
 		Model: a.Cfg.TitleModel, Instructions: describeInstructions, SchemaName: "beschreibungen", Schema: describeSchema,
 		MaxOutputTokens: 400 * len(due), Input: in.String(),
 	})
@@ -535,7 +536,7 @@ func (a *App) handleGroupDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if conflict != "" {
-		writeErr(w, http.StatusConflict, "doppelt", fmt.Sprintf("Die Liste „%s“ gibt es schon ohne Gruppe; erst umbenennen oder verschieben", conflict))
+		writeErr(w, http.StatusConflict, "doppelt", i18n.Tf("Die Liste „%s“ gibt es schon ohne Gruppe; erst umbenennen oder verschieben", conflict))
 		return
 	}
 	a.observe("korrektur", fmt.Sprintf("Korrektur: Die Gruppe „%s“ hat der Nutzer aufgelöst; ihre Listen gehören zu keiner Gruppe.", name))
@@ -624,7 +625,7 @@ func (a *App) BackfillNoteLists(ctx context.Context) (checked, sorted int, cost 
 			if err != nil {
 				return checked, sorted, cost, err
 			}
-			res, err := a.AI.Respond(ctx, openai.Request{
+			res, err := a.respond(ctx, openai.Request{
 				Model: a.Cfg.DictationModel, Instructions: noteSortInstructions, SchemaName: "einsortieren", Schema: planSortSchema,
 				MaxOutputTokens: 1000, ReasoningEffort: a.Cfg.PlanReasoningEffort,
 				Input: fmt.Sprintf("%s\n%s\nNotiz #%d:\nTitel: %s\nText: %s\nWortlaut: %s",

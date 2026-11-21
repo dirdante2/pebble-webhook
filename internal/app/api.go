@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"pebble-webhook/internal/i18n"
 	"pebble-webhook/internal/store"
 )
 
@@ -24,7 +25,8 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 }
 
 func writeErr(w http.ResponseWriter, status int, code, msg string) {
-	writeJSON(w, status, map[string]string{"code": code, "fehler": msg})
+	writeJSON(w, status, map[string]string{"code": code, "fehler": i18n.T(msg)})
+
 }
 
 func readJSON(r *http.Request, v any) error {
@@ -120,7 +122,7 @@ func (a *App) jobSummary(j *store.Job) map[string]any {
 		}
 	}
 	if j.State != store.StateDone {
-		m["schritt"] = stepLabel[j.State]
+		m["schritt"] = i18n.T(stepLabel[j.State])
 	}
 	if j.Error != "" {
 		m["fehler"] = j.Error
@@ -151,7 +153,7 @@ func (a *App) planningSummary(p *store.Planning, rounds []*store.Job) map[string
 		m["nr"] = p.Nr
 	}
 	if last.State != store.StateDone {
-		m["schritt"] = stepLabel[last.State]
+		m["schritt"] = i18n.T(stepLabel[last.State])
 	}
 	if last.Error != "" {
 		m["fehler"] = last.Error
@@ -439,7 +441,7 @@ func (a *App) handlePlanning(w http.ResponseWriter, r *http.Request) {
 			"naechster_versuch": rd.NextTryAt, "limit_erreicht": rd.LimitHit, "zuordnung": rd.AssignHow, "audio": audioState(rd),
 			"letzte": i == len(rounds)-1, "aktuell": i == current, "loeschbar": true}
 		if rd.State != store.StateDone {
-			rm["schritt"] = stepLabel[rd.State]
+			rm["schritt"] = i18n.T(stepLabel[rd.State])
 		}
 		if rd.Error != "" {
 			rm["fehler"] = rd.Error

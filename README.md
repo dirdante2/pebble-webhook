@@ -1,6 +1,6 @@
 # pebble-webhook
 
-Self-hosted backend for the **Pebble Index 01** voice ring. It receives recordings via webhook, transcribes them with OpenAI and turns them into notes, appointments or research plannings. An AI sorts everything into groups and lists; a mobile web app (PWA, German UI) shows the history, sends web push notifications and lets you answer follow-up questions.
+Self-hosted backend for the **Pebble Index 01** voice ring. It receives recordings via webhook, transcribes them with OpenAI and turns them into notes, appointments or research plannings. An AI sorts everything into groups and lists; a mobile web app (PWA, English or German) shows the history, sends web push notifications and lets you answer follow-up questions.
 
 One Go binary: webhook, worker, SQLite and web app. No queue, no second database.
 
@@ -12,11 +12,12 @@ One Go binary: webhook, worker, SQLite and web app. No queue, no second database
 - **Memory**: the AI learns names, terms and sorting rules you confirm
 - Optional one-way export to a **Joplin** server
 - Built-in **MCP server** with OAuth: connect Claude, ChatGPT & co., read lists and tick items off from AI chats
+- **English or German** – UI, messages, push and MCP answers, and the texts the AI writes; chosen in the setup wizard (preset from the browser), changeable under Status → Configuration
 - Passkey login (new devices with a 4-digit code), setup wizard, settings with explanations and validation, **themes** (day/night, colour palettes) and **updates** in the web app
 
 ## Screenshots
 
-Demo data; the web app itself is German.
+Demo data, English UI, mobile, dark mode.
 
 | History | Menu | Lists | Note |
 |---|---|---|---|

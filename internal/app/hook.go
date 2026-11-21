@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"pebble-webhook/internal/i18n"
 	"pebble-webhook/internal/store"
 )
 
@@ -122,7 +123,7 @@ func (a *App) handleHook(w http.ResponseWriter, r *http.Request) {
 	case j.IsTest || trigger == "test-event":
 		// Test-Event: nur anzeigen, nichts verarbeiten.
 		j.IsTest, j.Mode, j.State = true, "test", store.StateDone
-		j.Transcript, j.TranscriptSource, j.Title = j.PebbleText, "pebble", "Test-Event"
+		j.Transcript, j.TranscriptSource, j.Title = j.PebbleText, "pebble", i18n.T("Test-Event")
 	case trigger == "single-click-hold":
 		j.Mode = a.Cfg.TriggerSingle
 	case trigger == "double-click-hold":
@@ -130,7 +131,7 @@ func (a *App) handleHook(w http.ResponseWriter, r *http.Request) {
 	default:
 		// Unbekannte Geste: sichtbar abweisen statt still verwerfen.
 		j.FailedAt = now
-		j.Mode, j.Failed, j.Error = "unbekannt", true, "Unbekannte Geste „"+store.Preview(trigger, 60)+"“ – keine Aktion zugeordnet"
+		j.Mode, j.Failed, j.Error = "unbekannt", true, i18n.Tf("Unbekannte Geste „%s“ – keine Aktion zugeordnet", store.Preview(trigger, 60))
 	}
 	if !j.IsTest && len(audio) == 0 && j.PebbleText == "" {
 		hookReply(w, http.StatusBadRequest, "weder Audio noch Transkript")

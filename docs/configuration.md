@@ -1,6 +1,6 @@
 # Configuration
 
-All settings except the three start values live in the database and are edited in the web app. The UI is German; this page uses the English meaning with the German label in brackets.
+All settings except the three start values live in the database and are edited in the web app. The UI is English or German (setting `LANGUAGE`); this page uses the English labels, with the German one in brackets where it differs.
 
 ## Start values (`/etc/pebble-webhook/env`)
 
@@ -26,6 +26,7 @@ Every save is validated first: number ranges (e.g. max recording 1–2048 MB, re
 
 | Group | Settings |
 |---|---|
+| Language (Sprache) | German or English (`LANGUAGE`, `de`/`en`): web app, messages, push, MCP answers and the texts the AI writes; transcription follows it. The setup wizard starts in the browser language and switches at once |
 | Address (Adresse) | public HTTPS address, reverse proxy IP |
 | Pebble app | token header name, webhook token, signing secret, gesture → notes or planning, max size, rate limit |
 | OpenAI | API key and base URL, transcription (OpenAI or Pebble transcript), models for transcription, titles, research and notes, reasoning effort, cost limit per research, max output tokens |

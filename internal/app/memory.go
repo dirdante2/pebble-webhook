@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"pebble-webhook/internal/i18n"
 	"pebble-webhook/internal/openai"
 	"pebble-webhook/internal/store"
 )
@@ -316,12 +317,12 @@ func (a *App) train(ctx context.Context) (info TrainInfo) {
 	}
 	input := fmt.Sprintf("Heute ist der %s.\n\n%s\n\nVorhandene Listen: %s\n%s\n\nNotizen:\n%s\nPlanungen:\n%s\nBeobachtungen (Korrekturen und Antworten des Nutzers, meist Einzelfälle):\n%s",
 		time.Now().Format("02.01.2006"), a.memoryHint(), strings.Join(names, ", "), a.tagHint(), notes.String(), plans.String(), obs.String())
-	res, err := a.AI.Respond(ctx, openai.Request{
+	res, err := a.respond(ctx, openai.Request{
 		Model: a.Cfg.DictationModel, Instructions: fmt.Sprintf(trainInstructions, trainNewMax), Input: input,
 		MaxOutputTokens: 3000, ReasoningEffort: a.Cfg.PlanReasoningEffort, SchemaName: "lernlauf", Schema: trainSchema,
 	})
 	if err != nil {
-		info.Fehler = "KI nicht erreichbar: " + err.Error()
+		info.Fehler = i18n.T("KI nicht erreichbar:") + " " + err.Error()
 		return
 	}
 	info.KostenUSD = a.cost(res)
@@ -329,7 +330,7 @@ func (a *App) train(ctx context.Context) (info TrainInfo) {
 		Eintraege []string `json:"eintraege"`
 	}
 	if err := json.Unmarshal([]byte(res.Text), &out); err != nil {
-		info.Fehler = "Antwort der KI nicht lesbar"
+		info.Fehler = i18n.T("Antwort der KI nicht lesbar")
 		return
 	}
 	info.Neu = a.remember("lernlauf", out.Eintraege[:min(trainNewMax, len(out.Eintraege))]...)
@@ -484,7 +485,7 @@ func (a *App) learnObservations(ctx context.Context) {
 	for _, l := range lists {
 		names = append(names, listRef(l))
 	}
-	res, err := a.AI.Respond(ctx, openai.Request{
+	res, err := a.respond(ctx, openai.Request{
 		Model: a.Cfg.DictationModel, Instructions: fmt.Sprintf(observeInstructions, 4), SchemaName: "beobachtungen", Schema: trainSchema,
 		MaxOutputTokens: 1500, ReasoningEffort: a.Cfg.PlanReasoningEffort,
 		Input: fmt.Sprintf("%s\n\nListen: %s\n\nBeobachtungen:\n%s", a.memoryHint(), strings.Join(names, ", "), obs.String()),

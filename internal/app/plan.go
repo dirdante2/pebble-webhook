@@ -9,6 +9,7 @@ import (
 	"time"
 	"unicode"
 
+	"pebble-webhook/internal/i18n"
 	"pebble-webhook/internal/openai"
 	"pebble-webhook/internal/store"
 )
@@ -244,7 +245,7 @@ func (a *App) assign(ctx context.Context, j *store.Job) error {
 		}
 		fmt.Fprintf(&list, "- id: %s | titel: %s | vorhaben: %s\n", p.ID, store.Preview(p.Title, 100), vorhaben)
 	}
-	res, err := a.AI.Respond(ctx, openai.Request{
+	res, err := a.respond(ctx, openai.Request{
 		Model: a.Cfg.TitleModel, SchemaName: "zuordnung", Schema: assignSchema, MaxOutputTokens: 2000,
 		Instructions: "Entscheide, ob eine neue Sprachnotiz eine der offenen Planungen fortsetzt. Antworte als JSON: " +
 			"planung = Id der fortgesetzten Planung oder \"neu\"; sicher = true nur, wenn die Zuordnung eindeutig ist. " +
@@ -365,7 +366,7 @@ func (a *App) research(ctx context.Context, j *store.Job, p *store.Planning) err
 		fmt.Fprintf(&in, "Neue Planung, Transkript des Nutzers:\n%s\n", j.Transcript)
 	}
 
-	res, err := a.AI.Respond(ctx, openai.Request{
+	res, err := a.respond(ctx, openai.Request{
 		Model: a.Cfg.PlanModel, Instructions: fmt.Sprintf(planInstructions, depth), Input: in.String(),
 		MaxOutputTokens: a.Cfg.ResearchMaxOutTokens, ReasoningEffort: a.Cfg.PlanReasoningEffort,
 		WebSearch: true, SearchContext: size, MaxToolCalls: calls, SchemaName: "planung", Schema: planSchema,
@@ -450,11 +451,14 @@ func (a *App) research(ctx context.Context, j *store.Job, p *store.Planning) err
 	return nil
 }
 
-func when(ms int64) string { return time.UnixMilli(ms).Format("02.01.2006 15:04") }
+func when(ms int64) string {
+	t := time.UnixMilli(ms)
+	return i18n.Date(t) + " " + t.Format("15:04")
+}
 
 func sourceLabel(j *store.Job) string {
 	if j.Source == "web" {
-		return "Web-App"
+		return i18n.T("Web-App")
 	}
 	return "Pebble"
 }
@@ -466,7 +470,8 @@ func (a *App) renderPlan(plan *Plan, rounds []*store.Job) string {
 		if len(items) == 0 {
 			return
 		}
-		fmt.Fprintf(&b, "## %s\n\n", title)
+		fmt.Fprintf(&b, "## %s\n\n", i18n.T(title))
+
 		for _, it := range items {
 			fmt.Fprintf(&b, "%s%s\n", prefix, strings.TrimSpace(it))
 		}
@@ -475,7 +480,7 @@ func (a *App) renderPlan(plan *Plan, rounds []*store.Job) string {
 	fmt.Fprintf(&b, "%s\n\n", strings.TrimSpace(plan.Vorhaben))
 	writeFacts(&b, plan.Eckdaten)
 	if s := strings.TrimSpace(plan.Ergebnisse); s != "" {
-		fmt.Fprintf(&b, "## Hintergrund\n\n%s\n\n", s)
+		fmt.Fprintf(&b, i18n.T("## Hintergrund\n\n%s\n\n"), s)
 	}
 	list("Tipps", plan.Tipps, "- ")
 	list("Nächste Schritte", plan.NaechsteSchritte, "- [ ] ")
@@ -490,17 +495,17 @@ func (a *App) renderPlan(plan *Plan, rounds []*store.Job) string {
 	list("Offene Fragen", questions, "- ")
 	list("Annahme / unklar", plan.Annahmen, "- ")
 	writeSources(&b, plan.Quellen)
-	b.WriteString("---\n\n## Verlauf\n\n")
+	b.WriteString(i18n.T("---\n\n## Verlauf\n\n"))
 	for _, r := range rounds {
 		if r.Result == "" {
 			continue
 		}
-		fmt.Fprintf(&b, "### Runde %d – %s (%s)\n\n", r.RoundNo, when(r.RecordedAt), sourceLabel(r))
+		fmt.Fprintf(&b, i18n.T("### Runde %d – %s (%s)\n\n"), r.RoundNo, when(r.RecordedAt), sourceLabel(r))
 		for _, line := range strings.Split(strings.TrimSpace(r.Transcript), "\n") {
 			fmt.Fprintf(&b, "> %s\n", line)
 		}
 		if r.LimitHit {
-			fmt.Fprintf(&b, "\nKostenlimit (%.2f $) in dieser Runde erreicht.\n", a.Cfg.ResearchLimitUSD)
+			fmt.Fprintf(&b, i18n.T("\nKostenlimit (%.2f $) in dieser Runde erreicht.\n"), a.Cfg.ResearchLimitUSD)
 		}
 		b.WriteString("\n")
 	}
@@ -522,7 +527,7 @@ func writeSources(b *strings.Builder, sources []Source) {
 	if len(sources) == 0 {
 		return
 	}
-	b.WriteString("## Quellen\n\n")
+	b.WriteString(i18n.T("## Quellen\n\n"))
 	for _, s := range sources {
 		title := strings.TrimSpace(s.Titel)
 		if title == "" {
@@ -540,20 +545,21 @@ func renderDictation(j *store.Job) string {
 	if d := parseDictation(j.Result); d != nil {
 		writeFacts(&b, d.Eckdaten)
 		if len(d.Hinweise) > 0 {
-			b.WriteString("## Hinweise\n\n")
+			b.WriteString(i18n.T("## Hinweise\n\n"))
 			for _, h := range d.Hinweise {
 				fmt.Fprintf(&b, "- %s\n", h)
 			}
 			b.WriteString("\n")
 		}
 		if b.Len() > 0 {
-			b.WriteString("## Wortlaut\n\n")
+			b.WriteString(i18n.T("## Wortlaut\n\n"))
 		}
 		fmt.Fprintf(&b, "%s\n\n", strings.TrimSpace(j.Transcript))
 		writeSources(&b, d.Quellen)
 	} else {
 		fmt.Fprintf(&b, "%s\n\n", strings.TrimSpace(j.Transcript))
 	}
-	fmt.Fprintf(&b, "---\n\nAufgenommen: %s · %s", when(j.RecordedAt), sourceLabel(j))
+	fmt.Fprintf(&b, "---\n\n"+i18n.T("Aufgenommen: %s · %s"), when(j.RecordedAt), sourceLabel(j))
+
 	return b.String()
 }

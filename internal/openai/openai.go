@@ -14,6 +14,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"pebble-webhook/internal/i18n"
 )
 
 type Client struct {
@@ -35,23 +37,23 @@ type APIError struct {
 func (e *APIError) Error() string {
 	switch e.Status {
 	case 401:
-		return "OpenAI lehnt den API-Schlüssel ab (HTTP 401)"
+		return i18n.T("OpenAI lehnt den API-Schlüssel ab (HTTP 401)")
 	case 429:
-		return "OpenAI: Limit erreicht (HTTP 429, " + e.Code + ")"
+		return i18n.Tf("OpenAI: Limit erreicht (HTTP 429, %s)", e.Code)
 	}
-	return fmt.Sprintf("OpenAI-Fehler HTTP %d: %s", e.Status, e.Message)
+	return i18n.Tf("OpenAI-Fehler HTTP %d: %s", e.Status, e.Message)
 }
 
 func (c *Client) send(req *http.Request, out any) error {
 	req.Header.Set("Authorization", "Bearer "+c.Key)
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
-		return fmt.Errorf("OpenAI nicht erreichbar: %w", err)
+		return i18n.Errorf("OpenAI nicht erreichbar: %w", err)
 	}
 	defer resp.Body.Close()
 	data, err := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
 	if err != nil {
-		return fmt.Errorf("OpenAI-Antwort unvollständig: %w", err)
+		return i18n.Errorf("OpenAI-Antwort unvollständig: %w", err)
 	}
 	if resp.StatusCode != 200 {
 		var e struct {
@@ -69,7 +71,7 @@ func (c *Client) send(req *http.Request, out any) error {
 		return &APIError{Status: resp.StatusCode, Code: code, Message: e.Error.Message}
 	}
 	if err := json.Unmarshal(data, out); err != nil {
-		return fmt.Errorf("OpenAI-Antwort nicht lesbar: %w", err)
+		return i18n.Errorf("OpenAI-Antwort nicht lesbar: %w", err)
 	}
 	return nil
 }
@@ -79,7 +81,7 @@ func (c *Client) send(req *http.Request, out any) error {
 func (c *Client) Transcribe(ctx context.Context, model, path, mime, language string) (string, float64, error) {
 	audio, err := os.ReadFile(path)
 	if err != nil {
-		return "", -1, fmt.Errorf("Audio nicht lesbar: %w", err)
+		return "", -1, i18n.Errorf("Audio nicht lesbar: %w", err)
 	}
 	var body bytes.Buffer
 	w := multipart.NewWriter(&body)
@@ -232,7 +234,7 @@ func (c *Client) Respond(ctx context.Context, r Request) (*Result, error) {
 		case "message":
 			for _, part := range item.Content {
 				if part.Type == "refusal" {
-					return nil, fmt.Errorf("OpenAI hat die Anfrage abgelehnt: %s", part.Refusal)
+					return nil, i18n.Errorf("OpenAI hat die Anfrage abgelehnt: %s", part.Refusal)
 				}
 				if part.Type != "output_text" {
 					continue
@@ -254,7 +256,7 @@ func (c *Client) Respond(ctx context.Context, r Request) (*Result, error) {
 	}
 	res.Text = strings.TrimSpace(text.String())
 	if res.Text == "" {
-		return nil, fmt.Errorf("OpenAI hat keinen Text geliefert (Status %s, %s)", out.Status, res.Incomplete)
+		return nil, i18n.Errorf("OpenAI hat keinen Text geliefert (Status %s, %s)", out.Status, res.Incomplete)
 	}
 	return res, nil
 }

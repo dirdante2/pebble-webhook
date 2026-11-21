@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"pebble-webhook/internal/config"
+	"pebble-webhook/internal/i18n"
 	"pebble-webhook/internal/store"
 )
 
@@ -177,8 +178,28 @@ func (s *SetupServer) Handler() http.Handler {
 	mux.HandleFunc("GET /api/ersteinrichtung", s.handleGet)
 	mux.HandleFunc("POST /api/ersteinrichtung/openai", s.handleCheckOpenAI)
 	mux.HandleFunc("POST /api/ersteinrichtung", s.handleSave)
-	mux.HandleFunc("/", staticHandler())
-	return securityHeaders(mux)
+	mux.HandleFunc("/", staticHandler(s.lang))
+	// Meldungen des Assistenten in der Sprache der Seite.
+	inner := securityHeaders(mux)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		i18n.Set(s.lang(r))
+		inner.ServeHTTP(w, r)
+	})
+}
+
+// lang: Sprache des Assistenten – ?lang= (Umschalter), dann die der Seite (X-Sprache), dann eine
+// gespeicherte Einstellung, sonst die Sprache des Browsers.
+func (s *SetupServer) lang(r *http.Request) string {
+	if l := r.URL.Query().Get("lang"); l != "" {
+		return i18n.Norm(l)
+	}
+	if l := r.Header.Get("X-Sprache"); l != "" {
+		return i18n.Norm(l)
+	}
+	if v, err := s.DB.Settings(); err == nil && v["LANGUAGE"] != "" {
+		return i18n.Norm(v["LANGUAGE"])
+	}
+	return i18n.Norm(r.Header.Get("Accept-Language"))
 }
 
 // codeOK prüft den Einmal-Code; nach 20 Fehlversuchen ist bis zum Neustart Schluss.
@@ -273,7 +294,7 @@ func errText(err error) string {
 // checkOpenAI ruft GET /models mit dem Schlüssel ab.
 func checkOpenAI(ctx context.Context, base, key string) error {
 	if key == "" {
-		return fmt.Errorf("kein Schlüssel")
+		return i18n.Errorf("kein Schlüssel")
 	}
 	if base == "" {
 		base = "https://api.openai.com/v1"
@@ -291,7 +312,7 @@ func checkOpenAI(ctx context.Context, base, key string) error {
 	}
 	resp.Body.Close()
 	if resp.StatusCode != 200 {
-		return fmt.Errorf("OpenAI antwortet %d", resp.StatusCode)
+		return i18n.Errorf("OpenAI antwortet %d", resp.StatusCode)
 	}
 	return nil
 }

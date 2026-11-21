@@ -13,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"pebble-webhook/internal/i18n"
 )
 
 type Client struct {
@@ -81,7 +83,7 @@ func (c *Client) login() error {
 	body, _ := json.Marshal(map[string]string{"email": c.Email, "password": c.Password})
 	resp, err := c.HTTP.Post(c.URL+"/api/sessions", "application/json", bytes.NewReader(body))
 	if err != nil {
-		return fmt.Errorf("Joplin nicht erreichbar: %w", err)
+		return i18n.Errorf("Joplin nicht erreichbar: %w", err)
 	}
 	defer resp.Body.Close()
 	data, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
@@ -89,7 +91,7 @@ func (c *Client) login() error {
 		ID string `json:"id"`
 	}
 	if resp.StatusCode != 200 || json.Unmarshal(data, &out) != nil || out.ID == "" {
-		return fmt.Errorf("Joplin-Anmeldung abgelehnt (HTTP %d)", resp.StatusCode)
+		return i18n.Errorf("Joplin-Anmeldung abgelehnt (HTTP %d)", resp.StatusCode)
 	}
 	c.session = out.ID
 	return nil
@@ -114,7 +116,7 @@ func (c *Client) do(method, path string, body []byte) (int, error) {
 		}
 		resp, err := c.HTTP.Do(req)
 		if err != nil {
-			return 0, fmt.Errorf("Joplin nicht erreichbar: %w", err)
+			return 0, i18n.Errorf("Joplin nicht erreichbar: %w", err)
 		}
 		io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
 		resp.Body.Close()
@@ -134,7 +136,7 @@ func (c *Client) put(id, content string) error {
 		return err
 	}
 	if st != 200 {
-		return fmt.Errorf("Joplin hat das Schreiben abgelehnt (HTTP %d)", st)
+		return i18n.Errorf("Joplin hat das Schreiben abgelehnt (HTTP %d)", st)
 	}
 	return nil
 }
@@ -151,7 +153,7 @@ func (c *Client) Exists(id string) (bool, error) {
 	case 404:
 		return false, nil
 	}
-	return false, fmt.Errorf("Joplin antwortet mit HTTP %d", st)
+	return false, i18n.Errorf("Joplin antwortet mit HTTP %d", st)
 }
 
 // EnsureFolder legt ein Notizbuch an, wenn es fehlt.
@@ -178,7 +180,7 @@ func (c *Client) Delete(id string) error {
 		return err
 	}
 	if st != 200 && st != 404 {
-		return fmt.Errorf("Joplin hat das Löschen abgelehnt (HTTP %d)", st)
+		return i18n.Errorf("Joplin hat das Löschen abgelehnt (HTTP %d)", st)
 	}
 	return nil
 }

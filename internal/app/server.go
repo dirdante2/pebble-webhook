@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 
+	"pebble-webhook/internal/i18n"
 	"pebble-webhook/web"
 )
 
@@ -118,7 +119,7 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("POST /api/push/abo/entfernen", s(a.handlePushUnsubscribe))
 	mux.HandleFunc("POST /api/push/test", s(a.handlePushTest))
 
-	mux.HandleFunc("/", staticHandler())
+	mux.HandleFunc("/", staticHandler(func(*http.Request) string { return i18n.Lang() }))
 
 	return securityHeaders(mux)
 }
@@ -138,7 +139,8 @@ func securityHeaders(mux http.Handler) http.Handler {
 }
 
 // staticHandler liefert die PWA: Dateien unter static/, alle übrigen GET-Pfade bekommen die Hülle index.html.
-func staticHandler() http.HandlerFunc {
+// Die Hülle gibt es je Sprache: lang-Attribut, feste Texte und (bei Englisch) das Wörterbuch für app.js.
+func staticHandler(langFor func(*http.Request) string) http.HandlerFunc {
 	static, _ := fs.Sub(web.Files, "static")
 	files := http.FileServerFS(static)
 	// Ein Proxy davor kann .js/.css zwischenspeichern und Cache-Control übergehen. Deshalb tragen
@@ -152,13 +154,16 @@ func staticHandler() http.HandlerFunc {
 		sum.Write(data)
 		return data
 	}
-	index, worker := read("index.html"), read("sw.js")
+	index, worker, manifest := read("index.html"), read("sw.js"), read("manifest.webmanifest")
 	read("app.js")
 	read("app.css")
 	read("theme.js")
+	sum.Write(i18n.Dictionary("en"))
 	ver := []byte(hex.EncodeToString(sum.Sum(nil))[:12])
 	index = bytes.ReplaceAll(index, []byte("__V__"), ver)
 	worker = bytes.ReplaceAll(worker, []byte("__V__"), ver)
+	indexes := map[string][]byte{"de": localizeShell(index, "de"), "en": localizeShell(index, "en")}
+	manifests := map[string][]byte{"de": localizeShell(manifest, "de"), "en": localizeShell(manifest, "en")}
 	serve := func(w http.ResponseWriter, contentType string, data []byte) {
 		w.Header().Set("Content-Type", contentType)
 		w.Header().Set("Cache-Control", "no-cache")
@@ -175,6 +180,10 @@ func staticHandler() http.HandlerFunc {
 			serve(w, "text/javascript; charset=utf-8", worker)
 			return
 		}
+		if name == "manifest.webmanifest" {
+			serve(w, "application/manifest+json", manifests[langFor(r)])
+			return
+		}
 		if name != "" && name != "index.html" {
 			if f, err := static.Open(name); err == nil {
 				f.Close()
@@ -183,6 +192,25 @@ func staticHandler() http.HandlerFunc {
 			}
 		}
 		// Alle übrigen Pfade sind Seiten der Web-App: die Hülle ausliefern.
-		serve(w, "text/html; charset=utf-8", index)
+		serve(w, "text/html; charset=utf-8", indexes[langFor(r)])
 	}
+}
+
+// shellTexts: feste Texte in index.html und im Manifest, die je Sprache ersetzt werden.
+var shellTexts = []string{"Offline – gezeigt wird der zuletzt geladene Stand. Aktionen werden vorgemerkt.",
+	"Notizen und Planungen aus Pebble-Aufnahmen", "Alle Einträge durchsuchen …", "Menü öffnen", "Volltextsuche",
+	"Nach Tags filtern", "Suche löschen", "Sprachnotizen", "Menü", "Lädt …"}
+
+func localizeShell(src []byte, lang string) []byte {
+	s := string(src)
+	s = strings.ReplaceAll(s, `lang="__LANG__"`, `lang="`+lang+`"`)
+	s = strings.ReplaceAll(s, `"lang": "de"`, `"lang": "`+lang+`"`)
+	for _, t := range shellTexts {
+		u := i18n.In(lang, t)
+		s = strings.ReplaceAll(s, `"`+t+`"`, `"`+u+`"`)
+		s = strings.ReplaceAll(s, ">"+t+"<", ">"+u+"<")
+	}
+	// Wörterbuch zuletzt, damit die Ersetzungen oben es nicht treffen.
+	words := strings.ReplaceAll(string(i18n.Dictionary(lang)), "</", `<\/`)
+	return []byte(strings.ReplaceAll(s, "__WOERTER__", words))
 }

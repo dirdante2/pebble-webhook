@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"pebble-webhook/internal/i18n"
 	"pebble-webhook/internal/store"
 )
 
@@ -16,9 +17,8 @@ import (
 
 var mcpToolsNotes = []map[string]any{
 	{
-		"name": "termine",
-		"description": "Termine aus den Sprachnotizen mit Datum, Uhrzeit, Ort und Nummer (#N). Vorgabe: alle offenen ab heute und verpasste unbestätigte. " +
-			"Für Fragen wie „Was steht an?“, „Termine diese Woche?“. Die Antwort beginnt mit dem heutigen Datum.",
+		"name":        "termine",
+		"description": "Termine aus den Sprachnotizen mit Datum, Uhrzeit, Ort und Nummer (#N). Vorgabe: alle offenen ab heute und verpasste unbestätigte. Für Fragen wie „Was steht an?“, „Termine diese Woche?“. Die Antwort beginnt mit dem heutigen Datum.",
 		"inputSchema": map[string]any{"type": "object", "properties": map[string]any{
 			"tage":       map[string]any{"type": "integer", "description": "Nur Termine der nächsten N Tage (Vorgabe: alle kommenden)"},
 			"vergangene": map[string]any{"type": "integer", "description": "Zusätzlich vergangene Termine der letzten N Tage, auch bestätigte"},
@@ -41,7 +41,8 @@ var mcpToolsNotes = []map[string]any{
 }
 
 func mcpWhen(t time.Time) string {
-	return weekdayDE[t.Weekday()] + ", " + t.Format("02.01.2006")
+	return i18n.Weekday(t.Weekday()) + ", " + i18n.Date(t)
+
 }
 
 func (a *App) mcpAppointments(days, past int) (string, error) {
@@ -52,7 +53,7 @@ func (a *App) mcpAppointments(days, past int) (string, error) {
 	now := time.Now()
 	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
 	var b strings.Builder
-	fmt.Fprintf(&b, "Heute ist %s, %s Uhr.\n\n", mcpWhen(now), now.Format("15:04"))
+	fmt.Fprintf(&b, i18n.T("Heute ist %s, %s Uhr.\n\n"), mcpWhen(now), now.Format("15:04"))
 	n := 0
 	for _, j := range jobs {
 		t := time.UnixMilli(j.TerminAt)
@@ -75,17 +76,17 @@ func (a *App) mcpAppointments(days, past int) (string, error) {
 		}
 		when := mcpWhen(t)
 		if j.TerminAllDay {
-			when += ", ganztägig"
+			when += i18n.T(", ganztägig")
 		} else {
-			when += ", " + t.Format("15:04") + " Uhr"
+			when += ", " + i18n.Tf("%s Uhr", t.Format("15:04"))
 		}
-		fmt.Fprintf(&b, "- #%d %s – %s", j.Nr, shortTitle(j.Title), when)
+		fmt.Fprintf(&b, i18n.T("- #%d %s – %s"), j.Nr, shortTitle(j.Title), when)
 		if d := parseDictation(j.Result); d != nil && d.Termin != nil && d.Termin.Ort != "" {
-			fmt.Fprintf(&b, " · Ort: %s", d.Termin.Ort)
+			fmt.Fprintf(&b, i18n.T(" · Ort: %s"), d.Termin.Ort)
 		}
 		switch {
 		case missed:
-			b.WriteString(" [verpasst, nicht bestätigt]")
+			b.WriteString(i18n.T(" [verpasst, nicht bestätigt]"))
 		case !upcoming:
 			b.WriteString(" [vorbei]")
 		}
@@ -93,7 +94,7 @@ func (a *App) mcpAppointments(days, past int) (string, error) {
 		n++
 	}
 	if n == 0 {
-		b.WriteString("Keine Termine im gewählten Zeitraum.")
+		b.WriteString(i18n.T("Keine Termine im gewählten Zeitraum."))
 	}
 	return strings.TrimSpace(b.String()), nil
 }
@@ -107,15 +108,15 @@ func (a *App) mcpSearch(q string) string {
 		Anzahl  int              `json:"anzahl"`
 	}
 	if rec.Code != 200 || json.Unmarshal(rec.Body.Bytes(), &out) != nil {
-		return "Suche fehlgeschlagen"
+		return i18n.T("Suche fehlgeschlagen")
 	}
 	if len(out.Treffer) == 0 {
-		return "Keine Treffer für „" + q + "“ (mindestens 2 Zeichen)."
+		return i18n.Tf("Keine Treffer für „%s“ (mindestens 2 Zeichen).", q)
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "%d Treffer für „%s“", out.Anzahl, q)
+	fmt.Fprintf(&b, i18n.T("%d Treffer für „%s“"), out.Anzahl, q)
 	if out.Anzahl > 30 {
-		b.WriteString(" (die ersten 30)")
+		b.WriteString(i18n.T(" (die ersten 30)"))
 	}
 	b.WriteString(":\n")
 	for i, t := range out.Treffer {
@@ -152,7 +153,7 @@ func (a *App) mcpReadNumbers(refs []string) (string, error) {
 	for _, ref := range refs {
 		nr, err := strconv.ParseInt(strings.TrimPrefix(strings.TrimSpace(ref), "#"), 10, 64)
 		if err != nil {
-			fmt.Fprintf(&b, "%s: keine Nummer\n\n", ref)
+			fmt.Fprintf(&b, i18n.T("%s: keine Nummer\n\n"), ref)
 			continue
 		}
 		if text, ok := a.mcpJobByNr(jobs, nr); ok {
@@ -160,7 +161,7 @@ func (a *App) mcpReadNumbers(refs []string) (string, error) {
 		} else if text, ok := a.mcpPlanningByNr(plans, nr); ok {
 			b.WriteString(text + "\n\n")
 		} else {
-			fmt.Fprintf(&b, "#%d: nicht gefunden (oder im Papierkorb)\n\n", nr)
+			fmt.Fprintf(&b, i18n.T("#%d: nicht gefunden (oder im Papierkorb)\n\n"), nr)
 		}
 	}
 	return strings.TrimSpace(b.String()), nil
@@ -176,9 +177,9 @@ func (a *App) mcpJobByNr(jobs []*store.Job, nr int64) (string, bool) {
 		if j.DoneAt > 0 {
 			b.WriteString(" [erledigt]")
 		}
-		fmt.Fprintf(&b, "\nAufgenommen: %s, %s Uhr\n", mcpWhen(time.UnixMilli(j.ReceivedAt)), time.UnixMilli(j.ReceivedAt).Format("15:04"))
+		fmt.Fprintf(&b, i18n.T("\nAufgenommen: %s, %s Uhr\n"), mcpWhen(time.UnixMilli(j.ReceivedAt)), time.UnixMilli(j.ReceivedAt).Format("15:04"))
 		if j.TerminAt > 0 {
-			fmt.Fprintf(&b, "Termin: %s\n", appointmentText(j))
+			fmt.Fprintf(&b, i18n.T("Termin: %s\n"), appointmentText(j))
 		}
 		b.WriteString("\n")
 		if d := parseDictation(j.Result); d != nil && d.Notiz != "" {
@@ -198,9 +199,9 @@ func (a *App) mcpPlanningByNr(plans []*store.Planning, nr int64) (string, bool) 
 		rounds, _ := a.DB.Rounds(p.ID)
 		plan := parsePlan(p.Plan)
 		if plan == nil {
-			return fmt.Sprintf("## #%d %s (Planung ohne Stand)", p.Nr, p.Title), true
+			return i18n.Tf("## #%d %s (Planung ohne Stand)", p.Nr, p.Title), true
 		}
-		return fmt.Sprintf("## #%d Planung: %s [%s]\n\n%s", p.Nr, plan.Titel, p.Status, a.renderPlan(plan, rounds)), true
+		return i18n.Tf("## #%d Planung: %s [%s]\n\n%s", p.Nr, plan.Titel, p.Status, a.renderPlan(plan, rounds)), true
 	}
 	return "", false
 }

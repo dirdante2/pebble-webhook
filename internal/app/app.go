@@ -15,6 +15,7 @@ import (
 	"github.com/go-webauthn/webauthn/webauthn"
 
 	"pebble-webhook/internal/config"
+	"pebble-webhook/internal/i18n"
 	"pebble-webhook/internal/joplin"
 	"pebble-webhook/internal/openai"
 	"pebble-webhook/internal/store"
@@ -74,6 +75,7 @@ type App struct {
 }
 
 func New(cfg *config.Config, db *store.Store, ai AI, notes Notes) (*App, error) {
+	i18n.Set(cfg.Language)
 	a := &App{Cfg: cfg, DB: db, AI: ai, Notes: notes, wake: make(chan struct{}, 1), hub: newHub(),
 		rate: map[string][]int64{}, cer: map[string]ceremony{}, sortFails: map[string]int{}}
 	if err := a.initAuth(); err != nil {
@@ -146,3 +148,11 @@ func freeBytes(path string) (uint64, error) {
 }
 
 func logf(format string, args ...any) { log.Printf(format, args...) }
+
+// respond ruft die KI auf; bei Englisch bekommt jede Anweisung die Sprachregel dazu.
+func (a *App) respond(ctx context.Context, r openai.Request) (*openai.Result, error) {
+	if rule := i18n.LanguageRule(); rule != "" {
+		r.Instructions = strings.ReplaceAll(r.Instructions, "Antworte auf Deutsch", "Antworte auf Englisch") + "\n\n" + rule
+	}
+	return a.AI.Respond(ctx, r)
+}

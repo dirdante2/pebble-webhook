@@ -17,7 +17,7 @@ Detailed flows (German): [ABLAUF.md](../ABLAUF.md).
 
 ## Screenshots
 
-Demo data, mobile, dark mode.
+Demo data, English UI, mobile, dark mode.
 
 <img src="screenshots/history.png" width="220" alt="History"> <img src="screenshots/menu.png" width="220" alt="Menu"> <img src="screenshots/lists.png" width="220" alt="Lists"> <img src="screenshots/list.png" width="220" alt="List">
 

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"pebble-webhook/internal/i18n"
 	"pebble-webhook/internal/joplin"
 )
 
@@ -23,7 +24,7 @@ func (a *App) handleJoplinCheck(w http.ResponseWriter, r *http.Request) {
 	}
 	in.URL = strings.TrimRight(strings.TrimSpace(in.URL), "/")
 	if u, err := url.Parse(in.URL); err != nil || u.Host == "" || (u.Scheme != "https" && u.Scheme != "http") {
-		writeJSON(w, 200, map[string]any{"ok": false, "fehler": "Keine gültige http(s)-Adresse"})
+		writeJSON(w, 200, map[string]any{"ok": false, "fehler": i18n.T("Keine gültige http(s)-Adresse")})
 		return
 	}
 	if in.Password == "" {
@@ -31,7 +32,7 @@ func (a *App) handleJoplinCheck(w http.ResponseWriter, r *http.Request) {
 		in.Password = values["JOPLIN_PASSWORD"]
 	}
 	if strings.TrimSpace(in.Email) == "" || in.Password == "" {
-		writeJSON(w, 200, map[string]any{"ok": false, "fehler": "Konto (E-Mail) und Passwort fehlen"})
+		writeJSON(w, 200, map[string]any{"ok": false, "fehler": i18n.T("Konto (E-Mail) und Passwort fehlen")})
 		return
 	}
 	c := joplin.New(in.URL, strings.TrimSpace(in.Email), in.Password)

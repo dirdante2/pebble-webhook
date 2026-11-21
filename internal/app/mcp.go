@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 
+	"pebble-webhook/internal/i18n"
 	"pebble-webhook/internal/store"
 )
 
@@ -53,7 +54,7 @@ var mcpTools = []map[string]any{
 func (a *App) handleMCP(w http.ResponseWriter, r *http.Request) {
 	var req mcpRequest
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil || req.JSONRPC != "2.0" {
-		mcpReply(w, nil, nil, &mcpErr{-32700, "Anfrage nicht lesbar"})
+		mcpReply(w, nil, nil, &mcpErr{-32700, i18n.T("Anfrage nicht lesbar")})
 		return
 	}
 	if req.ID == nil { // Benachrichtigung (z. B. notifications/initialized): keine Antwort
@@ -72,18 +73,18 @@ func (a *App) handleMCP(w http.ResponseWriter, r *http.Request) {
 		}
 		mcpReply(w, req.ID, map[string]any{"protocolVersion": version, "capabilities": map[string]any{"tools": map[string]any{}},
 			"serverInfo":   map[string]any{"name": "pebble-webhook", "version": shortVersion(a.Version)},
-			"instructions": "Sprachnotizen des Nutzers: Listen (listen_uebersicht, punkt_lesen, punkte_abhaken mit Kennung wie #59.2), Termine (termine), Suche in allen Notizen (notizen_suchen) und Notiz per Nummer (notiz_lesen). Fragen nach Terminen immer mit termine beantworten, nicht aus den Listen."}, nil)
+			"instructions": i18n.T("Sprachnotizen des Nutzers: Listen (listen_uebersicht, punkt_lesen, punkte_abhaken mit Kennung wie #59.2), Termine (termine), Suche in allen Notizen (notizen_suchen) und Notiz per Nummer (notiz_lesen). Fragen nach Terminen immer mit termine beantworten, nicht aus den Listen.")}, nil)
 	case "ping":
 		mcpReply(w, req.ID, map[string]any{}, nil)
 	case "tools/list":
-		mcpReply(w, req.ID, map[string]any{"tools": append(append([]map[string]any{}, mcpTools...), mcpToolsNotes...)}, nil)
+		mcpReply(w, req.ID, map[string]any{"tools": mcpLocalize(append(append([]map[string]any{}, mcpTools...), mcpToolsNotes...))}, nil)
 	case "tools/call":
 		var p struct {
 			Name      string          `json:"name"`
 			Arguments json.RawMessage `json:"arguments"`
 		}
 		if json.Unmarshal(req.Params, &p) != nil {
-			mcpReply(w, req.ID, nil, &mcpErr{-32602, "Parameter nicht lesbar"})
+			mcpReply(w, req.ID, nil, &mcpErr{-32602, i18n.T("Parameter nicht lesbar")})
 			return
 		}
 		text, err := a.mcpCall(p.Name, p.Arguments)
@@ -93,8 +94,31 @@ func (a *App) handleMCP(w http.ResponseWriter, r *http.Request) {
 		}
 		mcpReply(w, req.ID, map[string]any{"content": []map[string]any{{"type": "text", "text": text}}}, nil)
 	default:
-		mcpReply(w, req.ID, nil, &mcpErr{-32601, "Unbekannte Methode: " + req.Method})
+		mcpReply(w, req.ID, nil, &mcpErr{-32601, i18n.T("Unbekannte Methode:") + " " + req.Method})
 	}
+}
+
+// mcpLocalize übersetzt die Beschreibungen der Werkzeuge und ihrer Parameter (Kopie, die Vorlage bleibt deutsch).
+func mcpLocalize(v any) any {
+	switch x := v.(type) {
+	case []map[string]any:
+		out := make([]any, len(x))
+		for i, m := range x {
+			out[i] = mcpLocalize(m)
+		}
+		return out
+	case map[string]any:
+		out := make(map[string]any, len(x))
+		for k, e := range x {
+			if s, ok := e.(string); ok && k == "description" {
+				out[k] = i18n.T(s)
+			} else {
+				out[k] = mcpLocalize(e)
+			}
+		}
+		return out
+	}
+	return v
 }
 
 type mcpErr struct {
@@ -154,7 +178,7 @@ func (a *App) mcpCall(name string, raw json.RawMessage) (string, error) {
 		Nummern    []string `json:"nummern"`
 	}
 	if len(raw) > 0 && json.Unmarshal(raw, &args) != nil {
-		return "", fmt.Errorf("Argumente nicht lesbar")
+		return "", i18n.Errorf("Argumente nicht lesbar")
 	}
 	switch name {
 	case "termine":
@@ -163,13 +187,13 @@ func (a *App) mcpCall(name string, raw json.RawMessage) (string, error) {
 		return a.mcpSearch(strings.TrimSpace(args.Suche)), nil
 	case "notiz_lesen":
 		if len(args.Nummern) == 0 {
-			return "", fmt.Errorf("Keine Nummern angegeben")
+			return "", i18n.Errorf("Keine Nummern angegeben")
 		}
 		return a.mcpReadNumbers(args.Nummern)
 	}
 	lists, items, err := a.mcpItems()
 	if err != nil {
-		return "", fmt.Errorf("Datenbankfehler")
+		return "", i18n.Errorf("Datenbankfehler")
 	}
 	switch name {
 	case "listen_uebersicht":
@@ -189,7 +213,7 @@ func (a *App) mcpCall(name string, raw json.RawMessage) (string, error) {
 		return strings.TrimSpace(b.String()), nil
 	case "punkte_abhaken":
 		if len(args.Punkte) == 0 {
-			return "", fmt.Errorf("Keine Punkte angegeben")
+			return "", i18n.Errorf("Keine Punkte angegeben")
 		}
 		var b strings.Builder
 		for _, ref := range args.Punkte {
@@ -200,15 +224,15 @@ func (a *App) mcpCall(name string, raw json.RawMessage) (string, error) {
 			}
 			for _, m := range found {
 				changed, err := a.setItemDone(m.item, !args.Offen)
-				state := "erledigt"
+				state := i18n.T("erledigt")
 				if args.Offen {
-					state = "offen"
+					state = i18n.T("offen")
 				}
 				switch {
 				case err != nil:
-					fmt.Fprintf(&b, "#%s: FEHLER beim Speichern\n", m.ref)
+					fmt.Fprintf(&b, i18n.T("#%s: FEHLER beim Speichern\n"), m.ref)
 				case !changed:
-					fmt.Fprintf(&b, "#%s %s: war schon %s\n", m.ref, m.item.Text, state)
+					fmt.Fprintf(&b, i18n.T("#%s %s: war schon %s\n"), m.ref, m.item.Text, state)
 				default:
 					fmt.Fprintf(&b, "#%s %s: %s\n", m.ref, m.item.Text, state)
 				}
@@ -216,7 +240,7 @@ func (a *App) mcpCall(name string, raw json.RawMessage) (string, error) {
 		}
 		return strings.TrimSpace(b.String()), nil
 	}
-	return "", fmt.Errorf("Unbekanntes Werkzeug: %s", name)
+	return "", i18n.Errorf("Unbekanntes Werkzeug: %s", name)
 }
 
 func mcpListLabel(l *store.List) string {
@@ -228,7 +252,7 @@ func mcpListLabel(l *store.List) string {
 
 func doneMark(it *store.ListItem) string {
 	if it.DoneAt != 0 {
-		return " (erledigt)"
+		return i18n.T(" (erledigt)")
 	}
 	return ""
 }
@@ -280,11 +304,11 @@ func mcpOverview(lists []*store.List, items []mcpItem, group, list string, all b
 			current = l.Project
 			name := l.Project
 			if name == "" {
-				name = "Ohne Gruppe"
+				name = i18n.T("Ohne Gruppe")
 			}
 			fmt.Fprintf(&b, "# %s\n\n", name)
 		}
-		fmt.Fprintf(&b, "## L%d %s (%d offen)\n", l.Nr, l.Name, l.Open)
+		fmt.Fprintf(&b, "## L%d %s (%s)\n", l.Nr, l.Name, i18n.Tf("%d offen", l.Open))
 		if l.Description != "" {
 			fmt.Fprintf(&b, "%s\n", l.Description)
 		}
@@ -293,7 +317,7 @@ func mcpOverview(lists []*store.List, items []mcpItem, group, list string, all b
 	if b.Len() == 0 {
 		return "Keine passenden Punkte."
 	}
-	fmt.Fprintf(&b, "%d offene Punkte", open)
+	fmt.Fprintf(&b, i18n.T("%d offene Punkte"), open)
 	return b.String()
 }
 
@@ -301,7 +325,7 @@ func mcpOverview(lists []*store.List, items []mcpItem, group, list string, all b
 func mcpFind(items []mcpItem, ref string) ([]mcpItem, error) {
 	r := strings.TrimPrefix(strings.TrimSpace(ref), "#")
 	if r == "" {
-		return nil, fmt.Errorf("Leere Kennung")
+		return nil, i18n.Errorf("Leere Kennung")
 	}
 	if base, ok := strings.CutSuffix(r, ".*"); ok {
 		var out []mcpItem
@@ -311,7 +335,7 @@ func mcpFind(items []mcpItem, ref string) ([]mcpItem, error) {
 			}
 		}
 		if len(out) == 0 {
-			return nil, fmt.Errorf("#%s: kein Punkt", r)
+			return nil, i18n.Errorf("#%s: kein Punkt", r)
 		}
 		return out, nil
 	}
@@ -325,9 +349,9 @@ func mcpFind(items []mcpItem, ref string) ([]mcpItem, error) {
 		}
 	}
 	if len(candidates) > 0 {
-		return nil, fmt.Errorf("#%s hat mehrere Punkte – einzeln angeben: %s (oder #%s.* für alle)", r, strings.Join(candidates, ", "), r)
+		return nil, i18n.Errorf("#%s hat mehrere Punkte – einzeln angeben: %s (oder #%s.* für alle)", r, strings.Join(candidates, ", "), r)
 	}
-	return nil, fmt.Errorf("#%s: kein Punkt", r)
+	return nil, i18n.Errorf("#%s: kein Punkt", r)
 }
 
 // mcpFullText: Notiz (Kurzfassung, Eckdaten, Hinweise, Wortlaut) bzw. Stand der Planung zu einem Punkt.
@@ -335,20 +359,20 @@ func (a *App) mcpFullText(it *store.ListItem) string {
 	if it.PlanningID != "" {
 		p, err := a.DB.Planning(it.PlanningID)
 		if err != nil {
-			return "(Planung nicht gefunden)"
+			return i18n.T("(Planung nicht gefunden)")
 		}
 		rounds, _ := a.DB.Rounds(p.ID)
 		if plan := parsePlan(p.Plan); plan != nil {
 			return "# " + plan.Titel + "\n\n" + a.renderPlan(plan, rounds)
 		}
-		return "(Planung ohne Stand)"
+		return i18n.T("(Planung ohne Stand)")
 	}
 	if it.JobID == "" {
-		return "(Punkt ohne Notiz)"
+		return i18n.T("(Punkt ohne Notiz)")
 	}
 	j, err := a.DB.Job(it.JobID)
 	if err != nil {
-		return "(Notiz nicht gefunden)"
+		return i18n.T("(Notiz nicht gefunden)")
 	}
 	var b strings.Builder
 	if d := parseDictation(j.Result); d != nil && d.Notiz != "" {

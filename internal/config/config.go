@@ -12,9 +12,12 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+
+	"pebble-webhook/internal/i18n"
 )
 
 type Config struct {
+	Language     string // de | en (Oberfläche, Meldungen, KI-Texte)
 	Listen       string
 	PublicURL    string // https://host, ohne Slash am Ende
 	DataDir      string
@@ -151,20 +154,20 @@ func FromValues(boot Bootstrap, lookup func(string) string) (*Config, error) {
 			}
 			switch {
 			case err != nil:
-				errs = append(errs, f.Label+": keine ganze Zahl")
+				errs = append(errs, i18n.T(f.Label)+i18n.T(": keine ganze Zahl"))
 			case n < lim[0] || n > lim[1]:
-				errs = append(errs, fmt.Sprintf("%s: erlaubt %d bis %d", f.Label, lim[0], lim[1]))
+				errs = append(errs, i18n.Tf("%s: erlaubt %d bis %d", i18n.T(f.Label), lim[0], lim[1]))
 			}
 		case f.Kind == "url" && f.Key != "PUBLIC_URL": // die öffentliche Adresse prüft unten eine eigene, strengere Regel
 			if u, err := url.Parse(v); err != nil || u.Host == "" || !hostRe.MatchString(u.Host) || (u.Scheme != "https" && u.Scheme != "http") || strings.ContainsAny(v, " \t\n<>\"'") {
-				errs = append(errs, f.Label+": keine gültige http(s)-Adresse")
+				errs = append(errs, i18n.T(f.Label)+i18n.T(": keine gültige http(s)-Adresse"))
 			}
 		case f.Kind == "num":
 			if n, err := strconv.ParseFloat(v, 64); err != nil || n < 0 || n > 1_000_000 || math.IsNaN(n) {
-				errs = append(errs, f.Label+": keine Zahl")
+				errs = append(errs, i18n.T(f.Label)+i18n.T(": keine Zahl"))
 			}
 		case f.Kind == "choice" && !slices.Contains(f.Choices, v):
-			errs = append(errs, f.Label+": unbekannter Wert")
+			errs = append(errs, i18n.T(f.Label)+i18n.T(": unbekannter Wert"))
 		}
 	}
 	str := func(k, def string) string {
@@ -178,9 +181,9 @@ func FromValues(boot Bootstrap, lookup func(string) string) (*Config, error) {
 		if v == "" {
 			name := k
 			if f, ok := FieldByKey(k); ok {
-				name = f.Label
+				name = i18n.T(f.Label)
 			}
-			errs = append(errs, name+" fehlt")
+			errs = append(errs, i18n.Tf("%s fehlt", name))
 		}
 		return v
 	}
@@ -209,7 +212,7 @@ func FromValues(boot Bootstrap, lookup func(string) string) (*Config, error) {
 	mode := func(k, def string) string {
 		v := str(k, def)
 		if v != "diktat" && v != "planung" {
-			errs = append(errs, k+" muss diktat oder planung sein")
+			errs = append(errs, k+i18n.T(" muss diktat oder planung sein"))
 		}
 		return v
 	}
@@ -234,6 +237,7 @@ func FromValues(boot Bootstrap, lookup func(string) string) (*Config, error) {
 		TriggerDouble: mode("TRIGGER_DOUBLE", "planung"),
 
 		Transcription:        str("TRANSCRIPTION", "openai"),
+		Language:             i18n.Norm(str("LANGUAGE", "de")),
 		OpenAIKey:            need("OPENAI_API_KEY"),
 		OpenAIBaseURL:        strings.TrimRight(str("OPENAI_BASE_URL", "https://api.openai.com/v1"), "/"),
 		TranscribeModel:      str("OPENAI_TRANSCRIBE_MODEL", "gpt-4o-transcribe"),
@@ -276,51 +280,51 @@ func FromValues(boot Bootstrap, lookup func(string) string) (*Config, error) {
 	}
 	c.DictationModel = str("OPENAI_DICTATION_MODEL", c.PlanModel)
 	if c.Transcription != "openai" && c.Transcription != "pebble" {
-		errs = append(errs, "TRANSCRIPTION muss openai oder pebble sein")
+		errs = append(errs, i18n.T("TRANSCRIPTION muss openai oder pebble sein"))
 	}
 	limit := str("RESEARCH_LIMIT_USD", "0.50")
 	f, err := strconv.ParseFloat(limit, 64)
 	if err != nil || f <= 0 {
-		errs = append(errs, "RESEARCH_LIMIT_USD ist keine positive Zahl")
+		errs = append(errs, i18n.T("RESEARCH_LIMIT_USD ist keine positive Zahl"))
 	}
 	c.ResearchLimitUSD = f
 	if c.PublicURL != "" {
 		u, err := url.Parse(c.PublicURL)
 		switch {
 		case err != nil || u.Host == "" || !hostRe.MatchString(u.Host):
-			errs = append(errs, "Öffentliche Adresse: keine gültige Adresse (erlaubt: Buchstaben, Ziffern, Punkt, Bindestrich, :Port)")
+			errs = append(errs, i18n.T("Öffentliche Adresse: keine gültige Adresse (erlaubt: Buchstaben, Ziffern, Punkt, Bindestrich, :Port)"))
 		case u.Scheme != "https" && u.Hostname() != "localhost":
-			errs = append(errs, "Öffentliche Adresse: muss mit https:// beginnen")
+			errs = append(errs, i18n.T("Öffentliche Adresse: muss mit https:// beginnen"))
 		case u.Path != "" || u.RawQuery != "" || u.Fragment != "" || u.User != nil:
-			errs = append(errs, "Öffentliche Adresse: nur https://host, ohne Pfad, ? oder #")
+			errs = append(errs, i18n.T("Öffentliche Adresse: nur https://host, ohne Pfad, ? oder #"))
 		}
 	}
 	if c.APIToken != "" && len(c.APIToken) < 32 {
-		errs = append(errs, "API_TOKEN braucht mindestens 32 Zeichen")
+		errs = append(errs, i18n.T("API_TOKEN braucht mindestens 32 Zeichen"))
 	}
 	// Joplin: inaktiv → aus, auch wenn Werte stehen; aktiv ohne Server → noch nicht eingerichtet (kein Fehler).
 	if !c.JoplinEnabled {
 		c.JoplinURL = ""
 	} else if c.JoplinURL != "" && (c.JoplinEmail == "" || c.JoplinPassword == "") {
-		errs = append(errs, "Joplin: Konto (E-Mail) und Passwort fehlen")
+		errs = append(errs, i18n.T("Joplin: Konto (E-Mail) und Passwort fehlen"))
 	}
 	if c.TrustedProxy != "" && net.ParseIP(c.TrustedProxy) == nil {
-		errs = append(errs, "Reverse-Proxy: keine IP-Adresse")
+		errs = append(errs, i18n.T("Reverse-Proxy: keine IP-Adresse"))
 	}
 	if !headerRe.MatchString(c.HookTokenHeader) {
-		errs = append(errs, "Header für den Token: nur Buchstaben, Ziffern und Bindestriche")
+		errs = append(errs, i18n.T("Header für den Token: nur Buchstaben, Ziffern und Bindestriche"))
 	}
 	for _, k := range []string{"OPENAI_TRANSCRIBE_MODEL", "OPENAI_TITLE_MODEL", "OPENAI_PLAN_MODEL", "OPENAI_DICTATION_MODEL"} {
 		if v := str(k, ""); v != "" && !modelRe.MatchString(v) {
 			f, _ := FieldByKey(k)
-			errs = append(errs, f.Label+": ungültiger Modellname")
+			errs = append(errs, i18n.T(f.Label)+i18n.T(": ungültiger Modellname"))
 		}
 	}
 	if c.VAPIDSubject != "" && !strings.HasPrefix(c.VAPIDSubject, "mailto:") && !strings.HasPrefix(c.VAPIDSubject, "https://") {
-		errs = append(errs, "Kontakt für Web-Push: mailto:… oder https://…")
+		errs = append(errs, i18n.T("Kontakt für Web-Push: mailto:… oder https://…"))
 	}
 	if c.UpdateRepo != "" && !repoRe.MatchString(c.UpdateRepo) {
-		errs = append(errs, "Update-Quelle: owner/repo oder aus")
+		errs = append(errs, i18n.T("Update-Quelle: owner/repo oder aus"))
 	}
 	if len(errs) > 0 {
 		return nil, fmt.Errorf("Konfiguration: %s", strings.Join(errs, "; "))

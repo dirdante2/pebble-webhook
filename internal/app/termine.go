@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"pebble-webhook/internal/i18n"
 	"pebble-webhook/internal/openai"
 	"pebble-webhook/internal/store"
 )
@@ -71,7 +72,7 @@ func appointmentTimes(raw rawAppointment, recordedAt int64) (*Appointment, error
 		ap.Beginn, ap.Erinnerung = at.UnixMilli(), at.UnixMilli()
 		return ap, nil
 	case b == "":
-		return nil, errNoAppointment{"kein Zeitpunkt genannt"}
+		return nil, errNoAppointment{i18n.T("kein Zeitpunkt genannt")}
 	}
 	noTime := false
 	if t, err := time.ParseInLocation("2006-01-02T15:04", b, time.Local); err == nil {
@@ -79,7 +80,7 @@ func appointmentTimes(raw rawAppointment, recordedAt int64) (*Appointment, error
 	} else if t, err := time.ParseInLocation("2006-01-02", b, time.Local); err == nil {
 		ap.Beginn, noTime = t.UnixMilli(), true
 	} else {
-		return nil, errNoAppointment{"Zeitpunkt „" + store.Preview(b, 40) + "“ nicht lesbar"}
+		return nil, errNoAppointment{i18n.Tf("Zeitpunkt „%s“ nicht lesbar", store.Preview(b, 40))}
 	}
 	start := time.UnixMilli(ap.Beginn)
 	if raw.Ganztag {
@@ -133,9 +134,9 @@ func setAppointment(j *store.Job, ap *Appointment) {
 // appointmentText: „Di 25.11., 10:00“ bzw. „Di 25.11., ganztägig“.
 func appointmentText(j *store.Job) string {
 	t := time.UnixMilli(j.TerminAt)
-	s := weekdayDE[t.Weekday()][:2] + " " + t.Format("02.01.")
+	s := i18n.Weekday(t.Weekday())[:2] + " " + i18n.DayMonth(t)
 	if j.TerminAllDay {
-		return s + ", ganztägig"
+		return s + i18n.T(", ganztägig")
 	}
 	return s + ", " + t.Format("15:04")
 }
@@ -163,7 +164,7 @@ func (a *App) remindDue() {
 			if d := parseDictation(j.Result); d != nil && d.Termin != nil && d.Termin.Ort != "" {
 				body += " · " + d.Termin.Ort
 			}
-			a.notify("Termin: "+shortTitle(j.Title), body, "/eintrag/"+j.ID)
+			a.notify(i18n.T("Termin: ")+shortTitle(j.Title), body, "/eintrag/"+j.ID)
 		}
 		if err := a.DB.MarkReminded(j.ID); err != nil {
 			logf("Erinnerung %s: %v", j.ID, err)
@@ -217,7 +218,7 @@ func (a *App) BackfillAppointments(ctx context.Context, days int) (checked, foun
 			continue
 		}
 		checked++
-		res, err := a.AI.Respond(ctx, openai.Request{
+		res, err := a.respond(ctx, openai.Request{
 			Model: a.Cfg.TitleModel, Instructions: backfillInstructions, MaxOutputTokens: 400,
 			SchemaName: "termin", Schema: backfillSchema,
 			Input: appointmentHint(j.RecordedAt) + "\n\nNotiz:\n" + j.Transcript,
@@ -442,7 +443,8 @@ func (a *App) handleReschedule(w http.ResponseWriter, r *http.Request) {
 		if d.Termin != nil {
 			ap.Ort = d.Termin.Ort
 		}
-		d.Hinweise = append(d.Hinweise, fmt.Sprintf("Verschoben am %s; vorher: %s", time.Now().Format("02.01.2006, 15:04"), old))
+		d.Hinweise = append(d.Hinweise, i18n.Tf("Verschoben am %s; vorher: %s", i18n.DateTime(time.Now()), old))
+
 		d.Termin = ap
 		if b, err := json.Marshal(d); err == nil {
 			j.Result = string(b)

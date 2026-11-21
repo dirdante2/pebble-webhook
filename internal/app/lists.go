@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"pebble-webhook/internal/i18n"
 	"pebble-webhook/internal/joplin"
 	"pebble-webhook/internal/openai"
 	"pebble-webhook/internal/store"
@@ -125,7 +126,7 @@ func (a *App) analyseDictation(ctx context.Context, j *store.Job) error {
 	}
 	if j.CostUSD != nil && *j.CostUSD >= a.Cfg.ResearchLimitUSD {
 		j.LimitHit = true
-		return plain("Kostenlimit erreicht")
+		return plain(i18n.T("Kostenlimit erreicht"))
 	}
 	// Erneute Auswertung nach beantworteten Rückfragen: die Antworten gehen mit und bleiben an der Notiz.
 	var answered []Answer
@@ -163,7 +164,7 @@ func (a *App) analyseDictation(ctx context.Context, j *store.Job) error {
 		NeueTags  []string       `json:"neue_tags"`
 		Merken    []string       `json:"merken"`
 	}
-	res, err := a.AI.Respond(ctx, req)
+	res, err := a.respond(ctx, req)
 	if err == nil {
 		addCost(&j.CostUSD, a.cost(res))
 		if err = json.Unmarshal([]byte(res.Text), &full); err != nil {
@@ -226,7 +227,7 @@ func (a *App) analyseDictation(ctx context.Context, j *store.Job) error {
 		ap, err := appointmentTimes(full.RawTermin, j.RecordedAt)
 		if err != nil {
 			d.Art = "notiz"
-			d.Hinweise = append(d.Hinweise, "Termin nicht erkannt: "+err.Error())
+			d.Hinweise = append(d.Hinweise, i18n.T("Termin nicht erkannt:")+" "+err.Error())
 		} else {
 			d.Termin = ap
 			d.Liste, d.Gruppe, d.Punkte = "", "", nil
@@ -255,7 +256,7 @@ func (a *App) analyseDictation(ctx context.Context, j *store.Job) error {
 		var ns errNotSorted
 		if list, err = a.findList(d.Gruppe, d.Liste); errors.As(err, &ns) {
 			// Sichtbar an der Notiz statt still verworfen.
-			d.Hinweise = append(d.Hinweise, "Nicht einsortiert: "+ns.reason)
+			d.Hinweise = append(d.Hinweise, i18n.T("Nicht einsortiert:")+" "+ns.reason)
 			list = nil
 		} else if err != nil {
 			return err

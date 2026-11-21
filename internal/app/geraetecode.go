@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"pebble-webhook/internal/i18n"
 )
 
 // Weiteres Gerät per Kurz-Code: ein angemeldetes Gerät erzeugt einen 4-stelligen Code (höchstens 5 Minuten, nur im
@@ -89,7 +91,7 @@ func (a *App) handleDeviceCodeRedeem(w http.ResponseWriter, r *http.Request) {
 	if wait := codeEvery - time.Since(c.tried); wait > 0 {
 		c.mu.Unlock()
 		secs := int((wait + time.Second - 1) / time.Second)
-		writeErr(w, http.StatusTooManyRequests, "warten", fmt.Sprintf("Nächster Versuch in %d s", secs))
+		writeErr(w, http.StatusTooManyRequests, "warten", i18n.Tf("Nächster Versuch in %d s", secs))
 		return
 	}
 	c.tried = time.Now()

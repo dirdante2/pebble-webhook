@@ -15,6 +15,8 @@ import (
 	"time"
 
 	pebblewebhook "pebble-webhook"
+
+	"pebble-webhook/internal/i18n"
 )
 
 // Update-Prüfung: neuere Versionen aus den GitHub-Releases (UPDATE_REPO) samt Änderungsliste (Release-Text =
@@ -173,16 +175,16 @@ func (a *App) fetchReleases(ctx context.Context, force bool) ([]release, string)
 	req.Header.Set("User-Agent", "pebble-webhook/"+strings.Fields(a.Version + " ")[0])
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		c.err = "GitHub nicht erreichbar"
+		c.err = i18n.T("GitHub nicht erreichbar")
 		return nil, c.err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == 404 {
-		c.err = "Keine Versionen gefunden (" + repo + ")"
+		c.err = i18n.Tf("Keine Versionen gefunden (%s)", repo)
 		return nil, c.err
 	}
 	if resp.StatusCode != 200 {
-		c.err = fmt.Sprintf("GitHub antwortet %d", resp.StatusCode)
+		c.err = i18n.Tf("GitHub antwortet %d", resp.StatusCode)
 		return nil, c.err
 	}
 	var raw []struct {
@@ -194,7 +196,7 @@ func (a *App) fetchReleases(ctx context.Context, force bool) ([]release, string)
 		Prerelease bool   `json:"prerelease"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
-		c.err = "Antwort von GitHub nicht lesbar"
+		c.err = i18n.T("Antwort von GitHub nicht lesbar")
 		return nil, c.err
 	}
 	for _, r := range raw {
@@ -320,7 +322,7 @@ func (a *App) handleUpdate(w http.ResponseWriter, r *http.Request) {
 		"installierbar": updateInstallable(), "status": a.updateStatus(), "neuer": []release{}, "aeltere": []release{},
 		"mindestens": "1.14.0", "aktuell_aenderungen": now, "fruehere": earlier, "notizen": source}
 	if a.Cfg.UpdateRepo == "" {
-		out["fehler"] = "Update-Prüfung ist aus (Einstellung Update-Quelle)"
+		out["fehler"] = i18n.T("Update-Prüfung ist aus (Einstellung Update-Quelle)")
 		writeJSON(w, 200, out)
 		return
 	}
