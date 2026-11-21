@@ -7,6 +7,12 @@ Version numbers X.Y.Z:
 - **Y** – a new feature (e.g. appointments, multiple languages, theme choice with day/night mode).
 - **Z** – all other UI changes and small bug fixes; safe to install or roll back at any time.
 
+## [1.27.8] - 2026-11-22
+
+### Changed
+- Updates and backups are two tabs on the update page.
+- The installed version shows its channel (stable, beta, nightly, or local for own builds); a version counts as installed only if number and channel match. Coming from another channel, the newest version of the chosen one is marked "neueste" with a hint instead of "neu".
+
 ## [1.27.7] - 2026-11-22
 
 ### Fixed

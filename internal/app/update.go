@@ -111,8 +111,8 @@ type channelRelease struct {
 // channelList: Versionen eines Kanals, neueste Veröffentlichung zuerst (die Nummern der Kanäle hängen nicht
 // zusammen – eine stable kann eine höhere Nummer haben als die laufende nightly und umgekehrt).
 func (a *App) channelList(releases []release, channel string) []channelRelease {
-	cur, curChannel, curOK := parseVersion(a.Version)
 	current := strings.Fields(a.Version + " ")[0]
+	curChannel := a.installedChannel()
 	list := []channelRelease{}
 	for _, rel := range releases {
 		if rel.Channel != channel {
@@ -122,9 +122,8 @@ func (a *App) channelList(releases []release, channel string) []channelRelease {
 		if v.less(minRollback) {
 			continue
 		}
-		// Ein eigener Build ohne Kanal-Endung gilt als die Kanal-Version derselben Nummer.
-		same := rel.Version == current || (curOK && curChannel == "stable" && rel.Channel != "stable" && v[0] == cur[0] && v[1] == cur[1] && v[2] == cur[2])
-		list = append(list, channelRelease{release: rel, Installed: same})
+		// Installiert ist sie nur, wenn Nummer und Kanal stimmen (jeder Kanal kann dieselbe Nummer tragen).
+		list = append(list, channelRelease{release: rel, Installed: rel.Version == current && rel.Channel == curChannel})
 	}
 	sort.SliceStable(list, func(i, k int) bool { return list[i].Published > list[k].Published })
 	return list
@@ -132,12 +131,25 @@ func (a *App) channelList(releases []release, channel string) []channelRelease {
 
 // channelView: Versionen des gewählten Kanals; empfohlen ist die neueste, sofern sie nicht schon läuft.
 func (a *App) channelView(releases []release) (list []channelRelease, recommended string, installedChannel string) {
-	_, curChannel, _ := parseVersion(a.Version)
 	list = a.channelList(releases, a.updateChannel())
 	if len(list) > 0 && !list[0].Installed {
 		recommended = list[0].Version
 	}
-	return list, recommended, curChannel
+	return list, recommended, a.installedChannel()
+}
+
+// installedChannel: Kanal der laufenden Version – vom Installer in DATA_DIR/installed-channel vermerkt
+// (stable, beta, nightly; lokal = eigener Build). Fehlt die Datei, zählt die Endung der Versionsnummer.
+func (a *App) installedChannel() string {
+	if b, err := os.ReadFile(filepath.Join(a.Cfg.DataDir, "installed-channel")); err == nil {
+		if ch := strings.TrimSpace(string(b)); ch != "" {
+			return ch
+		}
+	}
+	if _, ch, ok := parseVersion(a.Version); ok {
+		return ch
+	}
+	return "lokal"
 }
 
 // savedState ist ein Backup vor einem Update oder Versionswechsel: Programm und Datenbank der Version, die
