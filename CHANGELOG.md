@@ -7,6 +7,13 @@ Version numbers X.Y.Z:
 - **Y** – a new feature (e.g. appointments, multiple languages, theme choice with day/night mode).
 - **Z** – all other UI changes and small bug fixes; safe to install or roll back at any time.
 
+## [1.27.6] - 2026-11-22
+
+### Changed
+- "Frühere Stände" is now "Backups": one per update or version switch, with version, channel (stable/beta/nightly, or local for own builds) and date, newest first.
+- Backups older than 30 days are deleted automatically (daily, and by the installer); the newest one always stays.
+- A backup holds only the live database files (no stray old copies).
+
 ## [1.27.5] - 2026-11-22
 
 ### Changed

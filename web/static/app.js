@@ -2695,10 +2695,10 @@ async function zeigeUpdate() {
       ${liste.length ? liste.map(zeile).join('') : u.fehler ? '' : T('<p class="leise">In diesem Kanal gibt es noch keine Version.</p>')}
       ${liste.length && !u.neueste ? T('<p class="leise">Die installierte Version ist die neueste im Kanal.</p>') : ''}
       ${u.installierbar ? T('<p class="leise">Vor jedem Wechsel werden Programm und Datenbank gesichert.</p>') : T('<div class="hinweis">Installieren aus der App braucht die Installation per <code>install.sh</code>; sonst das Skript mit <code>--version</code> ausführen.</div>')}
-      ${(u.staende || []).length ? T`<h2>Frühere Stände</h2><p class="leise">Programm und Datenbank, wie sie vor einem Update waren. Was seitdem dazukam, fehlt danach.</p>
-        ${u.staende.map((st) => T`<div class="karte versionzeile"><div class="versionkopf"><strong>${esc(st.version)}</strong><span class="leise">${zeit(st.zeit)}</span></div>
+      <h2>Backups</h2><p class="leise">Vor jedem Update und Versionswechsel: Programm und Datenbank der Version, die lief. Zurückwechseln ersetzt beides; was seitdem dazukam, fehlt danach. Backups älter als 30 Tage werden gelöscht.</p>
+      ${(u.staende || []).length ? u.staende.map((st) => T`<div class="karte versionzeile"><div class="versionkopf"><strong>${esc(st.version)}</strong>${st.kanal ? T`<span class="badge neutral">${esc(tx(st.kanal))}</span>` : ''}<span class="leise">${zeit(st.zeit)}</span></div>
           <div class="versionknoepfe">${st.vollstaendig ? (u.installierbar ? T`<button class="btn klein" data-zurueck="${esc(st.name)}" data-version="${esc(st.version)}"${laeuft ? ' disabled' : ''}>Zurückwechseln</button>` : '')
-    : T('<span class="leise">nur Datenbank</span>')}</div></div>`).join('')}` : ''}
+    : T('<span class="leise">nur Datenbank</span>')}</div></div>`).join('') : T('<p class="leise">Noch keine Backups.</p>')}
       <p class="leise">${esc(u.quelle || 'aus')}${u.geprueft ? T` · geprüft ${zeit(u.geprueft)}` : ''}</p>
       <div class="leiste"><button class="btn" data-pruefen="1">Jetzt prüfen</button></div>`;
   };

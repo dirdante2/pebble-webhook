@@ -426,6 +426,7 @@ func (a *App) AutoClose() {
 // auch bei fehlgeschlagenen Aufträgen. Texte und Verlauf bleiben. Vorher: abgelaufenen Papierkorb leeren.
 func (a *App) Cleanup() {
 	a.trashExpired()
+	a.cleanBackups()
 	cutoff := time.Now().AddDate(0, 0, -a.Cfg.AudioRetentionDays).UnixMilli()
 	jobs, err := a.DB.ExpiredAudio(cutoff)
 	if err != nil {

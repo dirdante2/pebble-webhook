@@ -140,10 +140,12 @@ func (a *App) channelView(releases []release) (list []channelRelease, recommende
 	return list, recommended, curChannel
 }
 
-// savedState ist ein Stand vor einem Update: Programm und Datenbank der Version, die damals lief.
+// savedState ist ein Backup vor einem Update oder Versionswechsel: Programm und Datenbank der Version, die
+// damals lief, mit ihrem Kanal (stable/beta/nightly, lokal = eigener Build).
 type savedState struct {
 	Name     string `json:"name"`
 	Version  string `json:"version"`
+	Channel  string `json:"kanal"`
 	At       int64  `json:"zeit"`
 	Complete bool   `json:"vollstaendig"` // mit Programm (ab 1.27.4); ältere Sicherungen haben nur die Datenbank
 }
@@ -166,10 +168,34 @@ func (a *App) savedStates() []savedState {
 		dir := filepath.Join(a.Cfg.DataDir, "backup", e.Name())
 		_, errBin := os.Stat(filepath.Join(dir, "pebble-webhook"))
 		_, errDB := os.Stat(filepath.Join(dir, "pebble.db"))
-		out = append(out, savedState{Name: e.Name(), Version: m[1], At: at.UnixMilli(), Complete: errBin == nil && errDB == nil})
+		channel := ""
+		if b, err := os.ReadFile(filepath.Join(dir, "kanal")); err == nil {
+			channel = strings.TrimSpace(string(b))
+		} else if _, ch, ok := parseVersion(m[1]); ok && ch != "stable" {
+			channel = ch // Vorabversion: am Namen erkennbar; ohne Endung bleibt es offen
+		}
+		out = append(out, savedState{Name: e.Name(), Version: m[1], Channel: channel, At: at.UnixMilli(), Complete: errBin == nil && errDB == nil})
 	}
 	sort.Slice(out, func(i, k int) bool { return out[i].At > out[k].At })
 	return out
+}
+
+// backupRetention: Backups älter als das löscht die tägliche Bereinigung (und der Installer beim nächsten Update).
+const backupRetention = 30 * 24 * time.Hour
+
+// cleanBackups löscht Backups älter als backupRetention; das jüngste bleibt immer.
+func (a *App) cleanBackups() {
+	states := a.savedStates()
+	for i, st := range states {
+		if i == 0 || time.Since(time.UnixMilli(st.At)) < backupRetention {
+			continue
+		}
+		if err := os.RemoveAll(filepath.Join(a.Cfg.DataDir, "backup", st.Name)); err != nil {
+			logf("Backups: %s: %v", st.Name, err)
+			continue
+		}
+		logf("Backups: %s gelöscht (älter als 30 Tage)", st.Name)
+	}
 }
 
 // handleUpdateRestore: zurück zu einem gespeicherten Stand (Programm und Datenbank) über den Updater.

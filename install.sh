@@ -104,7 +104,8 @@ case "$MODE" in
         # Copy first: the backup of the current state below may rotate the old one away.
         install -m 0755 "$RESTORE/pebble-webhook" "$TMP/pebble-webhook"
         install -d "$TMP/restore-db"
-        cp -p "$RESTORE"/pebble.db* "$TMP/restore-db/"
+        for f in pebble.db pebble.db-wal pebble.db-shm; do [ -f "$RESTORE/$f" ] && cp -p "$RESTORE/$f" "$TMP/restore-db/"; done
+        cp -p "$RESTORE/kanal" "$TMP/kanal" 2>/dev/null || true
         ;;
 esac
 "$TMP/pebble-webhook" version >/dev/null
@@ -125,17 +126,19 @@ EOF
     chmod 0640 /etc/pebble-webhook/env
 fi
 
-# --- 3. back up the database before replacing a running version (keeps the newest 5) ---
+# --- 3. back up program and database before replacing a running version (backups older than 30 days go) ---
 if [ -f "$DATA_DIR/pebble.db" ] && [ -x /usr/local/bin/pebble-webhook ]; then
     OLD="$(/usr/local/bin/pebble-webhook version 2>/dev/null | awk '{print $1}')"
     BACKUP="$DATA_DIR/backup/pebble-${OLD:-unknown}-$(date +%Y%m%d-%H%M%S)"
     systemctl stop pebble-webhook 2>/dev/null || true
     install -d -o pebble -g pebble -m 0750 "$DATA_DIR/backup" "$BACKUP"
-    cp -p "$DATA_DIR"/pebble.db* "$BACKUP/"
+    for f in pebble.db pebble.db-wal pebble.db-shm; do [ -f "$DATA_DIR/$f" ] && cp -p "$DATA_DIR/$f" "$BACKUP/"; done
     # The program too, so the web app can go back to exactly this state (program + database).
     cp -p /usr/local/bin/pebble-webhook "$BACKUP/pebble-webhook"
+    # Channel the running version came from (stable/beta/nightly, or "lokal" for own builds).
+    [ -f "$DATA_DIR/installed-channel" ] && cp -p "$DATA_DIR/installed-channel" "$BACKUP/kanal"
     chown -R pebble:pebble "$BACKUP"
-    ls -1dt "$DATA_DIR"/backup/pebble-* | tail -n +6 | xargs -r rm -rf
+    find "$DATA_DIR/backup" -mindepth 1 -maxdepth 1 -name 'pebble-*' -type d -mtime +30 -not -path "$BACKUP" -exec rm -rf {} +
     echo "Database backed up to $BACKUP"
 fi
 if [ "$MODE" = restore ]; then
@@ -222,6 +225,15 @@ systemctl restart pebble-webhook-update.path
 systemctl restart pebble-webhook
 sleep 2
 systemctl is-active -q pebble-webhook || { status "error: service did not start (journalctl -u pebble-webhook)"; exit 1; }
+
+# Remember where this version came from (shown with its backup later).
+case "$MODE" in
+    release) case "$VERSION" in *-beta.*) CH=beta ;; *-nightly.*) CH=nightly ;; "") CH=stable ;; *) CH=stable ;; esac ;;
+    restore) CH="$(cat "$TMP/kanal" 2>/dev/null || echo lokal)" ;;
+    *) CH=lokal ;;
+esac
+echo "$CH" > "$DATA_DIR/installed-channel"
+chown pebble:pebble "$DATA_DIR/installed-channel"
 
 NEW="$(/usr/local/bin/pebble-webhook version)"
 if [ -n "${FROM_REQUEST:-}" ]; then
