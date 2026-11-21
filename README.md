@@ -14,6 +14,16 @@ One Go binary: webhook, worker, SQLite and web app. No queue, no second database
 - Built-in **MCP server** with OAuth: connect Claude, ChatGPT & co., read lists and tick items off from AI chats
 - Passkey login (new devices with a 4-digit code), setup wizard, settings with explanations and validation, **themes** (day/night, colour palettes) and **updates** in the web app
 
+## Screenshots
+
+Demo data; the web app itself is German.
+
+| History | Menu | Lists | Note |
+|---|---|---|---|
+| <img src="docs/screenshots/history.png" width="200" alt="History with filters and next appointment"> | <img src="docs/screenshots/menu.png" width="200" alt="Menu with counters"> | <img src="docs/screenshots/lists.png" width="200" alt="Lists by group"> | <img src="docs/screenshots/note.png" width="200" alt="Note detail"> |
+| **Planning** | **Reschedule** | **List** | **Theme** |
+| <img src="docs/screenshots/planning.png" width="200" alt="Planning with research"> | <img src="docs/screenshots/reschedule.png" width="200" alt="Reschedule an appointment"> | <img src="docs/screenshots/list.png" width="200" alt="A single list"> | <img src="docs/screenshots/theme.png" width="200" alt="Theme settings"> |
+
 ## Quick start
 
 On a Debian/Ubuntu server with systemd:

@@ -7,6 +7,14 @@ Version numbers X.Y.Z:
 - **Y** – a new feature (e.g. appointments, multiple languages, theme choice with day/night mode).
 - **Z** – all other UI changes and small bug fixes; safe to install or roll back at any time.
 
+## [1.26.1] - 2026-11-21
+
+### Fixed
+- Detail page: with three main actions (e.g. a planning with open questions) the first one spans the full width; button labels no longer break mid-word.
+
+### Changed
+- Screenshots in the README and docs (demo data).
+
 ## [1.26.0] - 2026-11-21
 
 ### New
