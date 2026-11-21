@@ -425,10 +425,7 @@ func releaseNotes(current, channel string) (now string, earlier []noteSection, s
 
 func (a *App) handleUpdate(w http.ResponseWriter, r *http.Request) {
 	current := strings.Fields(a.Version + " ")[0]
-	now, earlier, source := releaseNotes(current, a.updateChannel())
-	if len(earlier) > 10 {
-		earlier = earlier[:10]
-	}
+	now, _, source := releaseNotes(current, a.updateChannel())
 	allNotes := ""
 	if a.Cfg.UpdateRepo != "" {
 		file := "CHANGELOG.md"
@@ -439,7 +436,7 @@ func (a *App) handleUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	out := map[string]any{"aktuell": current, "quelle": a.Cfg.UpdateRepo, "kanal": a.updateChannel(), "kanaele": []string{"stable", "beta", "nightly"},
 		"installierbar": updateInstallable(), "status": a.updateStatus(), "versionen": []channelRelease{},
-		"mindestens": "1.14.0", "staende": a.savedStates(), "aktuell_aenderungen": now, "fruehere": earlier, "notizen": source, "alle_aenderungen": allNotes}
+		"mindestens": "1.14.0", "staende": a.savedStates(), "aktuell_aenderungen": now, "alle_aenderungen": allNotes}
 	if a.Cfg.UpdateRepo == "" {
 		out["fehler"] = i18n.T("Update-Prüfung ist aus (Einstellung Update-Quelle)")
 		writeJSON(w, 200, out)
@@ -453,22 +450,10 @@ func (a *App) handleUpdate(w http.ResponseWriter, r *http.Request) {
 	out["geprueft"] = a.updates.at.UnixMilli()
 	a.updates.mu.Unlock()
 	list, rec, curChannel := a.channelView(releases)
-	out["versionen"], out["aktuell_kanal"] = list, curChannel
-	// Je Kanal die letzten 3 Versionen (der gewählte zuerst).
-	perChannel := []map[string]any{}
-	for _, ch := range []string{"stable", "beta", "nightly"} {
-		l := a.channelList(releases, ch)
-		if len(l) > 3 {
-			l = l[:3]
-		}
-		entry := map[string]any{"kanal": ch, "versionen": l}
-		if ch == a.updateChannel() {
-			perChannel = append([]map[string]any{entry}, perChannel...)
-		} else {
-			perChannel = append(perChannel, entry)
-		}
+	if len(list) > 3 {
+		list = list[:3] // die letzten 3 des gewählten Kanals
 	}
-	out["je_kanal"] = perChannel
+	out["versionen"], out["aktuell_kanal"] = list, curChannel
 	if rec != "" {
 		out["neueste"] = rec
 	}

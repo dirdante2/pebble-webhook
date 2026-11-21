@@ -153,8 +153,7 @@ table.werte th:first-child, table.werte td:first-child { text-align: left; }
 .zustand { display: inline-flex; align-items: center; gap: .25rem; font-size: .8rem; font-weight: 650; vertical-align: middle; white-space: nowrap; }
 .zustand svg { width: 1.05rem; height: 1.05rem; flex: none; }
 .zustand.offen { color: var(--warn); } .zustand.zu { color: var(--gut); }
-.karte.version.aktuell { border-color: var(--gut); border-width: 2px; }
-.karte.version details { border-top: 1px solid var(--linie); padding-top: .5rem; }
+.versionzeile.aktuell { border-color: var(--gut); border-width: 2px; }
 
 /* Tags */
 .tags { display: flex; flex-wrap: wrap; gap: .35rem; margin: .45rem 0 0; align-items: center; }
@@ -580,5 +579,12 @@ dialog.formblatt h2 { margin-top: 0; }
 .terminblatt #vok:focus:not(:focus-visible) { outline: none; }
 
 /* Update-Seite: frühere Änderungen */
-.fruehere .frueher { padding: .6rem 0; border-top: 1px solid var(--linie); }
-.fruehere .frueher ul { margin: .3rem 0 0; }
+
+/* Updates: kompakte Versionszeilen, Änderungen nur auf Knopfdruck im Blatt. */
+.versionzeile { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .5rem .75rem; }
+.versionkopf { display: flex; flex-wrap: wrap; align-items: baseline; gap: .25rem .6rem; min-width: 0; }
+.versionkopf strong { overflow-wrap: anywhere; }
+.versionknoepfe { display: flex; gap: .5rem; margin-left: auto; }
+.versionzeile.aktuell .versionkopf { flex-direction: column; gap: 0; }
+.versiongross { font-size: 1.35rem; }
+dialog.logblatt h2 { margin-top: 0; }

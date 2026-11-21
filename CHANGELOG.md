@@ -7,6 +7,11 @@ Version numbers X.Y.Z:
 - **Y** – a new feature (e.g. appointments, multiple languages, theme choice with day/night mode).
 - **Z** – all other UI changes and small bug fixes; safe to install or roll back at any time.
 
+## [1.27.5] - 2026-11-22
+
+### Changed
+- Update page rebuilt: installed version on top, channel as a button group, only the last 3 versions of the chosen channel as compact rows, earlier states below. Change lists open on demand in a sheet ("Änderungen") with a link to the full list on GitHub; no more long logs on the page.
+
 ## [1.27.4] - 2026-11-22
 
 ### New
