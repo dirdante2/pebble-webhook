@@ -239,8 +239,37 @@ systemctl daemon-reload
 systemctl enable -q pebble-webhook pebble-webhook-update.path
 systemctl restart pebble-webhook-update.path
 systemctl restart pebble-webhook
-sleep 2
-systemctl is-active -q pebble-webhook || { status "error: service did not start (journalctl -u pebble-webhook)"; exit 1; }
+
+# --- 5. health check: the service must answer /healthz (database opened and checked). Otherwise go back to the
+#        state saved in step 3 – program and database – so a broken update never leaves the app down. ---
+PORT="$(grep -oP '^LISTEN=.*:\K[0-9]+' /etc/pebble-webhook/env 2>/dev/null || echo 8080)"
+healthy() {
+    for _ in $(seq 1 30); do
+        sleep 1
+        systemctl is-active -q pebble-webhook && curl -fsS -m 3 "http://127.0.0.1:$PORT/healthz" >/dev/null 2>&1 && return 0
+    done
+    return 1
+}
+if ! healthy; then
+    if [ -n "${BACKUP:-}" ] && [ -x "$BACKUP/pebble-webhook" ] && [ -f "$BACKUP/pebble.db" ]; then
+        echo "New version not healthy – going back to ${OLD:-the previous version} (program and database from $BACKUP)" >&2
+        journalctl -u pebble-webhook -n 20 --no-pager >&2 || true
+        systemctl stop pebble-webhook || true
+        install -m 0755 "$BACKUP/pebble-webhook" /usr/local/bin/pebble-webhook
+        rm -f "$DATA_DIR"/pebble.db "$DATA_DIR"/pebble.db-wal "$DATA_DIR"/pebble.db-shm
+        for f in pebble.db pebble.db-wal pebble.db-shm; do [ -f "$BACKUP/$f" ] && cp -p "$BACKUP/$f" "$DATA_DIR/"; done
+        chown pebble:pebble "$DATA_DIR"/pebble.db*
+        systemctl start pebble-webhook
+        if healthy; then
+            status "error: ${VERSION:-new version} did not start – rolled back to ${OLD:-previous version}"
+        else
+            status "error: ${VERSION:-new version} did not start and the rollback to ${OLD:-previous version} failed (journalctl -u pebble-webhook)"
+        fi
+    else
+        status "error: service did not start (journalctl -u pebble-webhook)"
+    fi
+    exit 1
+fi
 
 # Remember where this version came from (shown with its backup later).
 case "$MODE" in

@@ -7,6 +7,15 @@ Version numbers X.Y.Z:
 - **Y** – a new feature (e.g. appointments, multiple languages, theme choice with day/night mode).
 - **Z** – all other UI changes and small bug fixes; safe to install or roll back at any time.
 
+## [1.28.1] - 2026-11-22
+
+### New
+- Safer updates: after installing, the installer waits up to 30 s for the service to answer /healthz. If it does not, it goes back to the version that ran before – program and database from the backup – and reports "rolled back" on the update page.
+- The service refuses to start on a damaged database (SQLite quick_check), which triggers that rollback after an update.
+
+### Fixed
+- Editing a setting from the update page (time of the automatic update) returns to the update page after saving or cancelling.
+
 ## [1.28.0] - 2026-11-22
 
 ### New

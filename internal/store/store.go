@@ -237,6 +237,15 @@ func Open(path string) (*Store, error) {
 		return nil, err
 	}
 	db.SetMaxOpenConns(1)
+	// Beschädigte Datenbank: nicht starten (der Installer wechselt nach einem Update dann zurück).
+	var check string
+	if err := db.QueryRow("PRAGMA quick_check").Scan(&check); err != nil || check != "ok" {
+		db.Close()
+		if err == nil {
+			err = fmt.Errorf("%s", check)
+		}
+		return nil, fmt.Errorf("Datenbank beschädigt (quick_check): %w", err)
+	}
 	if _, err := db.Exec(schema); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("Schema: %w", err)

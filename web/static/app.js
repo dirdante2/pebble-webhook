@@ -387,7 +387,7 @@ document.addEventListener('click', (e) => {
   e.preventDefault();
   // Menüpunkte für Filter (Verlauf-Art, Listen-Gruppe) merken ihren Wert, die Seite liest ihn beim Öffnen.
   if (a.dataset.setze) { try { localStorage.setItem(a.dataset.setze, a.dataset.wert || ''); } catch { /* nur Komfort */ } }
-  geheZu(a.pathname + a.hash);
+  geheZu(a.pathname + a.search + a.hash);
 });
 window.addEventListener('popstate', zeige);
 
@@ -2597,6 +2597,9 @@ async function zeigeJoplin() {
 
 // Einen Wert der Konfiguration ändern (eigene Seite, Formular mit nur diesem Feld).
 async function zeigeEinstellungBearbeiten(key) {
+  // Zurück dorthin, woher man kam (z. B. Updates → Uhrzeit), sonst zur Konfiguration.
+  const zurueckParam = new URLSearchParams(location.search).get('zurueck') || '';
+  const zurueck = /^\/status\/[a-z/]*$/.test(zurueckParam) ? zurueckParam : '/status/einstellungen';
   seite.innerHTML = T`${statusReiter('einstellungen')}<p class="leer">Lädt …</p>`;
   const d = await api('/api/einstellungen');
   if (aktuell?.name !== 'einstellungBearbeiten') return;
@@ -2604,7 +2607,7 @@ async function zeigeEinstellungBearbeiten(key) {
   if (!f) { seite.innerHTML = T`${statusReiter('einstellungen')}<div class="hinweis schlecht">Unbekannte Einstellung.</div>`; return; }
   seite.innerHTML = T`${statusReiter('einstellungen')}<h1>${esc(tx(f.name))}</h1><p class="leise">${esc(tx(f.gruppe))}</p>
     ${einstellungsFormular([f], { assistent: false }).replace(/<fieldset><legend>[^<]*<\/legend>/, '<fieldset>')}
-    <div class="leiste"><a class="btn" href="/status/einstellungen">Abbrechen</a></div>`;
+    <div class="leiste"><a class="btn" href="${zurueck}">Abbrechen</a></div>`;
   const form = seite.querySelector('form');
   form.querySelector('input,select')?.focus();
   form.onsubmit = async (ev) => {
@@ -2617,9 +2620,9 @@ async function zeigeEinstellungBearbeiten(key) {
       await api('/api/einstellungen', { method: 'PUT', body: { werte } });
       melde(tx('Gespeichert – Dienst startet neu'));
       await warteAufNeustart();
-      if (key === 'LANGUAGE') { location.replace('/status/einstellungen'); return; }
+      if (key === 'LANGUAGE') { location.replace(zurueck); return; }
       await ladeZaehler();
-      geheZu('/status/einstellungen', true);
+      geheZu(zurueck, true);
     } catch (fehler) {
       knopf.disabled = false;
       melde(fehler.message);
@@ -2702,7 +2705,7 @@ async function zeigeUpdate() {
       <h2>Automatisches Update</h2>
       <nav class="btn-group unter" aria-label="Automatisches Update">${[[true, tx('An')], [false, tx('Aus')]].map(([an, n]) => T`<button class="btn${u.auto === an ? ' aktiv' : ''}" data-auto="${an ? '1' : '0'}" aria-pressed="${u.auto === an}">${n}</button>`).join('')}</nav>
       <p class="leise">${u.auto ? esc(tx('Täglich um {0} die neueste Version aus {1} installieren, wenn sie neuer ist (vorher Backup).', u.auto_zeit, u.kanal)) : tx('Aus – Updates nur von Hand.')}
-        <a class="konfedit" href="/status/einstellungen/AUTO_UPDATE_TIME" aria-label="${esc(tx('Uhrzeit ändern'))}" title="${esc(tx('Uhrzeit ändern'))}">${STIFT}</a></p>
+        <a class="konfedit" href="/status/einstellungen/AUTO_UPDATE_TIME?zurueck=/status/update" aria-label="${esc(tx('Uhrzeit ändern'))}" title="${esc(tx('Uhrzeit ändern'))}">${STIFT}</a></p>
       ${u.auto_letzt ? T`<p class="leise">${esc(tx('Letzter Lauf: {0}', u.auto_letzt))}</p>` : ''}
       <p class="leise">${esc(u.quelle || 'aus')}${u.geprueft ? T` · geprüft ${zeit(u.geprueft)}` : ''}</p>
       <div class="leiste"><button class="btn" data-pruefen="1">Jetzt prüfen</button></div>`;
