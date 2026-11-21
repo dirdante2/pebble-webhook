@@ -272,7 +272,7 @@ func FromValues(boot Bootstrap, lookup func(string) string) (*Config, error) {
 		JoplinRoot:     str("JOPLIN_NOTEBOOK", "Sprachnotizen"),
 
 		VAPIDSubject:  str("VAPID_SUBJECT", ""),
-		UpdateRepo:    str("UPDATE_REPO", ""),
+		UpdateRepo:    str("UPDATE_REPO", "dirdante2/pebble-webhook"),
 		UpdateChannel: str("UPDATE_CHANNEL", "stable"),
 	}
 	if c.UpdateRepo == "aus" {

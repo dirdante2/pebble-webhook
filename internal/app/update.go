@@ -34,6 +34,8 @@ type release struct {
 	Date    string `json:"datum"`
 	Notes   string `json:"aenderungen"`
 	URL     string `json:"url"`
+
+	Published string `json:"veroeffentlicht,omitempty"` // Zeitpunkt (RFC 3339), zum Sortieren
 }
 
 type updateCache struct {
@@ -100,15 +102,15 @@ func (a *App) updateChannel() string {
 	return a.updates.channel
 }
 
-// channelRelease ist eine Version des gewählten Kanals mit ihrem Verhältnis zur installierten.
+// channelRelease ist eine Version des gewählten Kanals; installiert = sie läuft gerade.
 type channelRelease struct {
 	release
-	Relation string `json:"verhaeltnis"` // neuer | aelter | installiert
+	Installed bool `json:"installiert"`
 }
 
-// channelView: alle Versionen des gewählten Kanals (neueste zuerst, nicht älter als minRollback) und die
-// empfohlene – die neueste des Kanals, wenn sie neuer ist oder die installierte aus einem anderen Kanal stammt
-// (Kanalwechsel: von nightly auf stable soll die stable installiert werden, auch wenn ihre Nummer kleiner ist).
+// channelView: alle Versionen des gewählten Kanals, neueste Veröffentlichung zuerst (die Nummern der Kanäle
+// hängen nicht zusammen – eine stable kann eine höhere Nummer haben als die laufende nightly und umgekehrt).
+// Empfohlen ist die neueste des Kanals, sofern sie nicht schon läuft.
 func (a *App) channelView(releases []release) (list []channelRelease, recommended string, installedChannel string) {
 	channel := a.updateChannel()
 	cur, curChannel, curOK := parseVersion(a.Version)
@@ -122,22 +124,13 @@ func (a *App) channelView(releases []release) (list []channelRelease, recommende
 		if v.less(minRollback) {
 			continue
 		}
-		rc := channelRelease{release: rel, Relation: "neuer"}
-		switch {
-		case !curOK:
-		case rel.Version == current || (curChannel != rel.Channel && v[0] == cur[0] && v[1] == cur[1] && v[2] == cur[2]):
-			// gleiche Version; ein Build ohne Kanal-Endung (z. B. eigener Deploy) gilt als gleich zur Kanal-Version derselben Nummer
-			rc.Relation = "installiert"
-		case v.less(cur):
-			rc.Relation = "aelter"
-		}
-		list = append(list, rc)
+		// Ein eigener Build ohne Kanal-Endung gilt als die Kanal-Version derselben Nummer.
+		same := rel.Version == current || (curOK && curChannel == "stable" && rel.Channel != "stable" && v[0] == cur[0] && v[1] == cur[1] && v[2] == cur[2])
+		list = append(list, channelRelease{release: rel, Installed: same})
 	}
-	if len(list) > 0 {
-		top := list[0]
-		if top.Relation == "neuer" || (top.Relation == "aelter" && curOK && curChannel != channel) {
-			recommended = top.Version
-		}
+	sort.SliceStable(list, func(i, k int) bool { return list[i].Published > list[k].Published })
+	if len(list) > 0 && !list[0].Installed {
+		recommended = list[0].Version
 	}
 	return list, recommended, curChannel
 }
@@ -164,6 +157,14 @@ func (a *App) CheckUpdates(ctx context.Context) {
 			return
 		case <-t.C:
 		}
+		a.fetchReleases(ctx, false) // gespeicherten Stand laden
+		a.updates.mu.Lock()
+		due := time.Since(a.updates.at) >= updateInterval || a.updates.repo != a.Cfg.UpdateRepo
+		a.updates.mu.Unlock()
+		if !due {
+			t.Reset(time.Minute * 10)
+			continue
+		}
 		if _, err := a.fetchReleases(ctx, true); err == "" {
 			if v := a.AvailableUpdate(); v != "" {
 				logf("Update verfügbar: %s (Kanal %s)", v, a.updateChannel())
@@ -173,16 +174,39 @@ func (a *App) CheckUpdates(ctx context.Context) {
 	}
 }
 
-// fetchReleases holt die Releases (höchstens einmal je Stunde, mit force sofort).
+// updateCacheKey: letzter Stand der Releases in der kv-Tabelle, damit ein Neustart nicht erneut GitHub fragt.
+const updateCacheKey = "update-releases"
+
+type storedReleases struct {
+	At       int64     `json:"at"`
+	Repo     string    `json:"repo"`
+	Releases []release `json:"releases"`
+}
+
+// fetchReleases liefert die zwischengespeicherten Releases; GitHub wird nur mit force gefragt (Prüfung im
+// Hintergrund alle updateInterval oder „Jetzt prüfen“) – oder einmal, wenn noch gar nichts gespeichert ist.
 func (a *App) fetchReleases(ctx context.Context, force bool) ([]release, string) {
 	c := &a.updates
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	repo := a.Cfg.UpdateRepo
-	if !force && c.repo == repo && time.Since(c.at) < updateInterval {
+	if c.at.IsZero() {
+		if raw, err := a.DB.Get(updateCacheKey); err == nil && raw != "" {
+			var st storedReleases
+			if json.Unmarshal([]byte(raw), &st) == nil && st.Repo == repo {
+				c.at, c.repo, c.releases = time.UnixMilli(st.At), st.Repo, st.Releases
+			}
+		}
+	}
+	if !force && c.repo == repo && !c.at.IsZero() {
 		return c.releases, c.err
 	}
-	c.at, c.repo, c.releases, c.err = time.Now(), repo, nil, ""
+	previous := c.releases
+	if c.repo != repo {
+		previous = nil
+	}
+	c.at, c.repo, c.releases, c.err = time.Now(), repo, previous, ""
+	fresh := []release{}
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	req, _ := http.NewRequestWithContext(ctx, "GET", githubAPI+"/repos/"+repo+"/releases?per_page=100", nil)
@@ -191,16 +215,16 @@ func (a *App) fetchReleases(ctx context.Context, force bool) ([]release, string)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		c.err = i18n.T("GitHub nicht erreichbar")
-		return nil, c.err
+		return c.releases, c.err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == 404 {
 		c.err = i18n.Tf("Keine Versionen gefunden (%s)", repo)
-		return nil, c.err
+		return c.releases, c.err
 	}
 	if resp.StatusCode != 200 {
 		c.err = i18n.Tf("GitHub antwortet %d", resp.StatusCode)
-		return nil, c.err
+		return c.releases, c.err
 	}
 	var raw []struct {
 		Tag        string `json:"tag_name"`
@@ -212,7 +236,7 @@ func (a *App) fetchReleases(ctx context.Context, force bool) ([]release, string)
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
 		c.err = i18n.T("Antwort von GitHub nicht lesbar")
-		return nil, c.err
+		return c.releases, c.err
 	}
 	for _, r := range raw {
 		if r.Draft {
@@ -226,13 +250,15 @@ func (a *App) fetchReleases(ctx context.Context, force bool) ([]release, string)
 		if len(date) >= 10 {
 			date = date[:10]
 		}
-		c.releases = append(c.releases, release{Version: strings.TrimPrefix(r.Tag, "v"), Channel: channel, Date: date, Notes: r.Body, URL: r.URL})
+		fresh = append(fresh, release{Version: strings.TrimPrefix(r.Tag, "v"), Channel: channel, Date: date, Notes: r.Body, URL: r.URL, Published: r.Published})
 	}
-	sort.SliceStable(c.releases, func(i, k int) bool {
-		vi, _, _ := parseVersion(c.releases[i].Version)
-		vk, _, _ := parseVersion(c.releases[k].Version)
-		return vk.less(vi)
-	})
+	sort.SliceStable(fresh, func(i, k int) bool { return fresh[i].Published > fresh[k].Published })
+	c.releases = fresh
+	if b, err := json.Marshal(storedReleases{At: c.at.UnixMilli(), Repo: repo, Releases: fresh}); err == nil {
+		if err := a.DB.Set(updateCacheKey, string(b)); err != nil {
+			logf("Update-Cache: %v", err)
+		}
+	}
 	return c.releases, ""
 }
 
@@ -334,9 +360,20 @@ func releaseNotes(current, channel string) (now string, earlier []noteSection, s
 func (a *App) handleUpdate(w http.ResponseWriter, r *http.Request) {
 	current := strings.Fields(a.Version + " ")[0]
 	now, earlier, source := releaseNotes(current, a.updateChannel())
+	if len(earlier) > 10 {
+		earlier = earlier[:10]
+	}
+	allNotes := ""
+	if a.Cfg.UpdateRepo != "" {
+		file := "CHANGELOG.md"
+		if source == "releases" {
+			file = "RELEASES.md"
+		}
+		allNotes = "https://github.com/" + a.Cfg.UpdateRepo + "/blob/main/" + file
+	}
 	out := map[string]any{"aktuell": current, "quelle": a.Cfg.UpdateRepo, "kanal": a.updateChannel(), "kanaele": []string{"stable", "beta", "nightly"},
 		"installierbar": updateInstallable(), "status": a.updateStatus(), "versionen": []channelRelease{},
-		"mindestens": "1.14.0", "aktuell_aenderungen": now, "fruehere": earlier, "notizen": source}
+		"mindestens": "1.14.0", "aktuell_aenderungen": now, "fruehere": earlier, "notizen": source, "alle_aenderungen": allNotes}
 	if a.Cfg.UpdateRepo == "" {
 		out["fehler"] = i18n.T("Update-Prüfung ist aus (Einstellung Update-Quelle)")
 		writeJSON(w, 200, out)

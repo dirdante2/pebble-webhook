@@ -2655,19 +2655,21 @@ async function zeigeUpdate() {
     const liste = u.versionen || [];
     const empfohlen = liste.find((r) => r.version === u.neueste);
     const weitere = liste.filter((r) => r !== empfohlen);
-    const wechsel = u.aktuell_kanal && u.aktuell_kanal !== u.kanal;
+    // Eigene Builds ohne Endung gelten als stable; der Hinweis erscheint nur bei echten Vorabversionen.
+    const wechsel = u.aktuell_kanal && u.aktuell_kanal !== 'stable' && u.aktuell_kanal !== u.kanal;
     const laeuft = /^(requested|running)/.test(u.status || '');
     const status = u.status ? (u.status.startsWith('error') ? T`<div class="hinweis schlecht">Letztes Update: ${esc(u.status)}</div>`
       : laeuft ? T`<div class="hinweis warn">Update läuft (${esc(u.status)}) …</div>` : T`<div class="hinweis gut">Letztes Update: ${esc(u.status)}</div>`) : '';
-    const knopf = (r, haupt) => (u.installierbar && r.verhaeltnis !== 'installiert' ? T`<button class="btn klein${haupt ? ' haupt' : ''}" data-installieren="${esc(r.version)}" data-aelter="${r.verhaeltnis === 'aelter' ? '1' : ''}"${laeuft ? ' disabled' : ''}>Installieren</button>` : '');
-    const karte = (r, haupt) => T`<div class="karte"><div class="zeile"><span><strong>${esc(r.version)}</strong> <span class="badge ${r.kanal === 'stable' ? 'fertig' : 'in_arbeit'}">${esc(KANAL[r.kanal] || r.kanal)}</span>${r.verhaeltnis === 'installiert' ? T(' <span class="badge neutral">installiert</span>') : ''}</span><span class="leise">${esc(r.datum)}</span></div>
+    const knopf = (r, haupt) => (u.installierbar && !r.installiert ? T`<button class="btn klein${haupt ? ' haupt' : ''}" data-installieren="${esc(r.version)}" ${laeuft ? ' disabled' : ''}>Installieren</button>` : '');
+    const karte = (r, haupt) => T`<div class="karte"><div class="zeile"><span><strong>${esc(r.version)}</strong> <span class="badge ${r.kanal === 'stable' ? 'fertig' : 'in_arbeit'}">${esc(KANAL[r.kanal] || r.kanal)}</span>${r.installiert ? T(' <span class="badge neutral">installiert</span>') : ''}</span><span class="leise">${esc(r.datum)}</span></div>
       ${aenderungenHtml(r.aenderungen)}<div class="leiste">${knopf(r, haupt)}</div></div>`;
     seite.innerHTML = T`<h1>Updates</h1>
       <div class="karte version aktuell"><div class="zeile"><span><strong>${esc(u.aktuell)}</strong> <span class="badge fertig">installiert</span></span></div>
         ${u.aktuell_aenderungen ? aenderungenHtml(u.aktuell_aenderungen) : T('<p class="leise">Keine Änderungsliste zu dieser Version.</p>')}</div>
       ${(u.fruehere || []).length ? T`<details class="einklapp fruehere"><summary>Frühere Änderungen (${u.fruehere.length})</summary>
         <p class="leise">${u.notizen === 'releases' ? tx('Zusammengefasst je beta/stable-Version: nur was Bestand hat.') : tx('Jede einzelne Version (wie im Kanal nightly).')}</p>
-        ${u.fruehere.map((f) => T`<div class="frueher"><div class="zeile"><strong>${esc(f.version)}</strong><span class="leise">${esc(f.datum || '')}</span></div>${aenderungenHtml(f.text)}</div>`).join('')}</details>` : ''}
+        ${u.fruehere.map((f) => T`<div class="frueher"><div class="zeile"><strong>${esc(f.version)}</strong><span class="leise">${esc(f.datum || '')}</span></div>${aenderungenHtml(f.text)}</div>`).join('')}
+        ${u.alle_aenderungen ? T`<p><a href="${esc(u.alle_aenderungen)}" target="_blank" rel="noopener">Alle Änderungen auf GitHub</a></p>` : ''}</details>` : ''}
       <dl><dt>Quelle</dt><dd>${esc(u.quelle || 'aus')}</dd>${u.geprueft ? T`<dt>Geprüft</dt><dd>${zeit(u.geprueft)}</dd>` : ''}</dl>
       <label for="kanal">Kanal</label><select id="kanal">${(u.kanaele || []).map((k) => T`<option value="${k}"${k === u.kanal ? ' selected' : ''}>${esc(KANAL_TEXT[k] || k)}</option>`).join('')}</select>
       ${u.fehler ? T`<div class="hinweis warn">${esc(u.fehler)}</div>` : ''}${status}
@@ -2675,7 +2677,7 @@ async function zeigeUpdate() {
       <h2>${esc(tx('Kanal {0}', u.kanal))}</h2>
       ${empfohlen ? T`${wechsel ? T`<div class="hinweis warn">${esc(tx('Installiert ist eine Version aus {0}. Zum Wechsel die neueste aus {1} installieren.', u.aktuell_kanal, u.kanal))}</div>` : ''}${karte(empfohlen, true)}`
     : liste.length ? T('<div class="hinweis gut">Die installierte Version ist die neueste im Kanal.</div>') : (u.fehler ? '' : T('<p class="leise">In diesem Kanal gibt es noch keine Version.</p>'))}
-      ${weitere.length ? T`<details><summary>Weitere Versionen im Kanal (${weitere.length})</summary><p class="leise">Vor jedem Wechsel wird die Datenbank gesichert. Ältere Versionen kennen neuere Funktionen nicht; zurück bis ${esc(u.mindestens)}.</p>${weitere.map((r) => karte(r, false)).join('')}</details>` : ''}
+      ${weitere.length ? T`<details><summary>Weitere Versionen im Kanal (${weitere.length})</summary><p class="leise">Vor jedem Wechsel wird die Datenbank gesichert. Eine ältere Version kennt neuere Funktionen nicht.</p>${weitere.map((r) => karte(r, false)).join('')}</details>` : ''}
       <div class="leiste"><button class="btn" data-pruefen="1">Jetzt prüfen</button></div>`;
   };
   aktuell.neuLaden = () => laden(false);
@@ -2696,7 +2698,7 @@ async function zeigeUpdate() {
     try {
       if (b.dataset.pruefen) { await laden(true); return ladeZaehler(); }
       const ziel = b.dataset.installieren;
-      const frage = b.dataset.aelter ? T`Auf die ältere Version ${ziel} wechseln? Die Datenbank wird vorher gesichert; Funktionen neuerer Versionen fehlen danach.` : T`Version ${ziel} installieren? Der Dienst startet dabei neu.`;
+      const frage = tx('Version {0} installieren? Die Datenbank wird vorher gesichert, der Dienst startet neu.', ziel);
       if (!ziel || !confirm(frage)) { b.disabled = false; return; }
       await api('/api/update', { method: 'POST', body: { version: ziel } });
       melde(tx('Update angestoßen'));

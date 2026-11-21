@@ -7,6 +7,16 @@ Version numbers X.Y.Z:
 - **Y** – a new feature (e.g. appointments, multiple languages, theme choice with day/night mode).
 - **Z** – all other UI changes and small bug fixes; safe to install or roll back at any time.
 
+## [1.27.3] - 2026-11-22
+
+### Fixed
+- Update source defaults to the project repository; before, the update check was off unless the setting was saved once, so no releases showed up.
+- Updates: versions of a channel are ordered by release date, not by number – channels are independent (a stable can have a higher number than a nightly). The newest one of the channel is offered unless it is installed; every other version of the channel can be installed.
+
+### Changed
+- Releases are cached in the database; only the background check (every 4 hours) or "Jetzt prüfen" asks GitHub.
+- "Frühere Änderungen" shows the last 10 versions with a link to the full list on GitHub.
+
 ## [1.27.2] - 2026-11-21
 
 ### Fixed
