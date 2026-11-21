@@ -108,14 +108,12 @@ type channelRelease struct {
 	Installed bool `json:"installiert"`
 }
 
-// channelView: alle Versionen des gewählten Kanals, neueste Veröffentlichung zuerst (die Nummern der Kanäle
-// hängen nicht zusammen – eine stable kann eine höhere Nummer haben als die laufende nightly und umgekehrt).
-// Empfohlen ist die neueste des Kanals, sofern sie nicht schon läuft.
-func (a *App) channelView(releases []release) (list []channelRelease, recommended string, installedChannel string) {
-	channel := a.updateChannel()
+// channelList: Versionen eines Kanals, neueste Veröffentlichung zuerst (die Nummern der Kanäle hängen nicht
+// zusammen – eine stable kann eine höhere Nummer haben als die laufende nightly und umgekehrt).
+func (a *App) channelList(releases []release, channel string) []channelRelease {
 	cur, curChannel, curOK := parseVersion(a.Version)
 	current := strings.Fields(a.Version + " ")[0]
-	list = []channelRelease{}
+	list := []channelRelease{}
 	for _, rel := range releases {
 		if rel.Channel != channel {
 			continue
@@ -129,10 +127,78 @@ func (a *App) channelView(releases []release) (list []channelRelease, recommende
 		list = append(list, channelRelease{release: rel, Installed: same})
 	}
 	sort.SliceStable(list, func(i, k int) bool { return list[i].Published > list[k].Published })
+	return list
+}
+
+// channelView: Versionen des gewählten Kanals; empfohlen ist die neueste, sofern sie nicht schon läuft.
+func (a *App) channelView(releases []release) (list []channelRelease, recommended string, installedChannel string) {
+	_, curChannel, _ := parseVersion(a.Version)
+	list = a.channelList(releases, a.updateChannel())
 	if len(list) > 0 && !list[0].Installed {
 		recommended = list[0].Version
 	}
 	return list, recommended, curChannel
+}
+
+// savedState ist ein Stand vor einem Update: Programm und Datenbank der Version, die damals lief.
+type savedState struct {
+	Name     string `json:"name"`
+	Version  string `json:"version"`
+	At       int64  `json:"zeit"`
+	Complete bool   `json:"vollstaendig"` // mit Programm (ab 1.27.4); ältere Sicherungen haben nur die Datenbank
+}
+
+var backupNameRe = regexp.MustCompile(`^pebble-([0-9A-Za-z.+-]+)-(\d{8}-\d{6})$`)
+
+// savedStates liest DATA_DIR/backup (neueste zuerst); angelegt vom Installer vor jedem Wechsel.
+func (a *App) savedStates() []savedState {
+	out := []savedState{}
+	entries, _ := os.ReadDir(filepath.Join(a.Cfg.DataDir, "backup"))
+	for _, e := range entries {
+		m := backupNameRe.FindStringSubmatch(e.Name())
+		if !e.IsDir() || m == nil {
+			continue
+		}
+		at, err := time.ParseInLocation("20060102-150405", m[2], time.Local)
+		if err != nil {
+			continue
+		}
+		dir := filepath.Join(a.Cfg.DataDir, "backup", e.Name())
+		_, errBin := os.Stat(filepath.Join(dir, "pebble-webhook"))
+		_, errDB := os.Stat(filepath.Join(dir, "pebble.db"))
+		out = append(out, savedState{Name: e.Name(), Version: m[1], At: at.UnixMilli(), Complete: errBin == nil && errDB == nil})
+	}
+	sort.Slice(out, func(i, k int) bool { return out[i].At > out[k].At })
+	return out
+}
+
+// handleUpdateRestore: zurück zu einem gespeicherten Stand (Programm und Datenbank) über den Updater.
+func (a *App) handleUpdateRestore(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Name string `json:"name"`
+	}
+	if readJSON(r, &in) != nil || !backupNameRe.MatchString(in.Name) {
+		writeErr(w, 400, "ungueltig", "Stand fehlt")
+		return
+	}
+	if !updateInstallable() {
+		writeErr(w, http.StatusConflict, "nicht_moeglich", "Kein Updater installiert – Installation mit install.sh nötig")
+		return
+	}
+	found := false
+	for _, st := range a.savedStates() {
+		found = found || (st.Name == in.Name && st.Complete)
+	}
+	if !found {
+		writeErr(w, 404, "fehlt", "Stand nicht gefunden oder ohne Programm")
+		return
+	}
+	os.WriteFile(filepath.Join(a.Cfg.DataDir, "update-status"), []byte("requested restore "+in.Name+"\n"), 0o640)
+	if err := os.WriteFile(filepath.Join(a.Cfg.DataDir, "update-request"), []byte("restore "+in.Name+"\n"), 0o640); err != nil {
+		writeErr(w, 500, "speicher", "Anfrage nicht schreibbar")
+		return
+	}
+	writeJSON(w, 200, map[string]any{"ok": true})
 }
 
 // AvailableUpdate: empfohlene Version des Kanals aus der letzten Prüfung, ohne GitHub zu fragen ("" = keine).
@@ -373,7 +439,7 @@ func (a *App) handleUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	out := map[string]any{"aktuell": current, "quelle": a.Cfg.UpdateRepo, "kanal": a.updateChannel(), "kanaele": []string{"stable", "beta", "nightly"},
 		"installierbar": updateInstallable(), "status": a.updateStatus(), "versionen": []channelRelease{},
-		"mindestens": "1.14.0", "aktuell_aenderungen": now, "fruehere": earlier, "notizen": source, "alle_aenderungen": allNotes}
+		"mindestens": "1.14.0", "staende": a.savedStates(), "aktuell_aenderungen": now, "fruehere": earlier, "notizen": source, "alle_aenderungen": allNotes}
 	if a.Cfg.UpdateRepo == "" {
 		out["fehler"] = i18n.T("Update-Prüfung ist aus (Einstellung Update-Quelle)")
 		writeJSON(w, 200, out)
@@ -388,6 +454,21 @@ func (a *App) handleUpdate(w http.ResponseWriter, r *http.Request) {
 	a.updates.mu.Unlock()
 	list, rec, curChannel := a.channelView(releases)
 	out["versionen"], out["aktuell_kanal"] = list, curChannel
+	// Je Kanal die letzten 3 Versionen (der gewählte zuerst).
+	perChannel := []map[string]any{}
+	for _, ch := range []string{"stable", "beta", "nightly"} {
+		l := a.channelList(releases, ch)
+		if len(l) > 3 {
+			l = l[:3]
+		}
+		entry := map[string]any{"kanal": ch, "versionen": l}
+		if ch == a.updateChannel() {
+			perChannel = append([]map[string]any{entry}, perChannel...)
+		} else {
+			perChannel = append(perChannel, entry)
+		}
+	}
+	out["je_kanal"] = perChannel
 	if rec != "" {
 		out["neueste"] = rec
 	}

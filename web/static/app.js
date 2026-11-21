@@ -2654,7 +2654,6 @@ async function zeigeUpdate() {
     if (aktuell?.name !== 'update') return;
     const liste = u.versionen || [];
     const empfohlen = liste.find((r) => r.version === u.neueste);
-    const weitere = liste.filter((r) => r !== empfohlen);
     // Eigene Builds ohne Endung gelten als stable; der Hinweis erscheint nur bei echten Vorabversionen.
     const wechsel = u.aktuell_kanal && u.aktuell_kanal !== 'stable' && u.aktuell_kanal !== u.kanal;
     const laeuft = /^(requested|running)/.test(u.status || '');
@@ -2674,10 +2673,21 @@ async function zeigeUpdate() {
       <label for="kanal">Kanal</label><select id="kanal">${(u.kanaele || []).map((k) => T`<option value="${k}"${k === u.kanal ? ' selected' : ''}>${esc(KANAL_TEXT[k] || k)}</option>`).join('')}</select>
       ${u.fehler ? T`<div class="hinweis warn">${esc(u.fehler)}</div>` : ''}${status}
       ${u.installierbar ? '' : T('<div class="hinweis">Installieren aus der App braucht die Installation per <code>install.sh</code>; sonst das Skript mit <code>--version</code> ausführen.</div>')}
-      <h2>${esc(tx('Kanal {0}', u.kanal))}</h2>
-      ${empfohlen ? T`${wechsel ? T`<div class="hinweis warn">${esc(tx('Installiert ist eine Version aus {0}. Zum Wechsel die neueste aus {1} installieren.', u.aktuell_kanal, u.kanal))}</div>` : ''}${karte(empfohlen, true)}`
-    : liste.length ? T('<div class="hinweis gut">Die installierte Version ist die neueste im Kanal.</div>') : (u.fehler ? '' : T('<p class="leise">In diesem Kanal gibt es noch keine Version.</p>'))}
-      ${weitere.length ? T`<details><summary>Weitere Versionen im Kanal (${weitere.length})</summary><p class="leise">Vor jedem Wechsel wird die Datenbank gesichert. Eine ältere Version kennt neuere Funktionen nicht.</p>${weitere.map((r) => karte(r, false)).join('')}</details>` : ''}
+      ${(u.je_kanal || []).map((k, i) => {
+    const vs = k.versionen || [];
+    if (i === 0) {
+      const rest = vs.filter((r) => r.version !== u.neueste);
+      return T`<h2>${esc(tx('Kanal {0}', k.kanal))}</h2>
+        ${empfohlen ? T`${wechsel ? T`<div class="hinweis warn">${esc(tx('Installiert ist eine Version aus {0}. Zum Wechsel die neueste aus {1} installieren.', u.aktuell_kanal, u.kanal))}</div>` : ''}${karte(empfohlen, true)}`
+    : vs.length ? T('<div class="hinweis gut">Die installierte Version ist die neueste im Kanal.</div>') : (u.fehler ? '' : T('<p class="leise">In diesem Kanal gibt es noch keine Version.</p>'))}
+        ${rest.filter((r) => r !== empfohlen).slice(0, empfohlen ? 2 : 3).map((r) => karte(r, false)).join('')}`;
+    }
+    return vs.length ? T`<details class="einklapp"><summary>${esc(tx('Kanal {0}', k.kanal))} (${vs.length})</summary>${vs.map((r) => karte(r, false)).join('')}</details>` : '';
+  }).join('')}
+      <p class="leise">Vor jedem Wechsel werden Programm und Datenbank gesichert.</p>
+      ${(u.staende || []).length ? T`<h2>Frühere Stände</h2><p class="leise">Zurück zu Programm und Datenbank, wie sie vor einem Update waren. Was seitdem dazukam, fehlt danach (der jetzige Stand wird vorher gesichert).</p>
+        ${u.staende.map((st) => T`<div class="karte"><div class="zeile"><span><strong>${esc(st.version)}</strong></span><span class="leise">${zeit(st.zeit)}</span></div>
+          <div class="leiste">${st.vollstaendig ? (u.installierbar ? T`<button class="btn klein" data-zurueck="${esc(st.name)}" data-version="${esc(st.version)}"${laeuft ? ' disabled' : ''}>Zurückwechseln</button>` : '') : T('<span class="leise">Nur Datenbank gesichert (vor 1.27.4) – nicht zurückwechselbar.</span>')}</div></div>`).join('')}` : ''}
       <div class="leiste"><button class="btn" data-pruefen="1">Jetzt prüfen</button></div>`;
   };
   aktuell.neuLaden = () => laden(false);
@@ -2697,6 +2707,19 @@ async function zeigeUpdate() {
     b.disabled = true;
     try {
       if (b.dataset.pruefen) { await laden(true); return ladeZaehler(); }
+      if (b.dataset.zurueck) {
+        if (!confirm(tx('Zurück zum Stand von Version {0}? Programm und Datenbank werden ersetzt; was seitdem dazukam, fehlt danach. Der jetzige Stand wird vorher gesichert.', b.dataset.version))) { b.disabled = false; return; }
+        await api('/api/update/zurueck', { method: 'POST', body: { name: b.dataset.zurueck } });
+        melde(tx('Zurückwechseln angestoßen'));
+        for (let i = 0; i < 90; i++) {
+          await new Promise((r) => setTimeout(r, 2000));
+          try {
+            const st = await api('/api/update');
+            if ((st.status || '').startsWith('done') || (st.status || '').startsWith('error')) return location.reload();
+          } catch (f) { /* Neustart */ }
+        }
+        return laden(false);
+      }
       const ziel = b.dataset.installieren;
       const frage = tx('Version {0} installieren? Die Datenbank wird vorher gesichert, der Dienst startet neu.', ziel);
       if (!ziel || !confirm(frage)) { b.disabled = false; return; }

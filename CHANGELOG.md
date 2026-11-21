@@ -7,6 +7,12 @@ Version numbers X.Y.Z:
 - **Y** – a new feature (e.g. appointments, multiple languages, theme choice with day/night mode).
 - **Z** – all other UI changes and small bug fixes; safe to install or roll back at any time.
 
+## [1.27.4] - 2026-11-22
+
+### New
+- Updates: the last 3 versions of every channel (the chosen one first, the others folded).
+- "Frühere Stände": go back to program and database as they were before an update; the current state is backed up first. The installer now saves the program next to the database backup (older backups hold only the database).
+
 ## [1.27.3] - 2026-11-22
 
 ### Fixed

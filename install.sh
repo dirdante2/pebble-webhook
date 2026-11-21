@@ -9,7 +9,8 @@
 #   --repo OWNER/NAME   GitHub repository to download from (default below)
 #   --source            build from the source tree this script lives in (needs Go)
 #   --binary PATH       install a prebuilt binary (used by deploy/deploy.sh)
-#   --apply-request     run by pebble-webhook-update.service: install the version requested in the web app
+#   --apply-request     run by pebble-webhook-update.service: install the version requested in the web app,
+#                       or go back to a saved state (program and database from DATA_DIR/backup)
 #
 # Running it again updates the program; data, settings and the env file stay untouched.
 set -euo pipefail
@@ -48,11 +49,21 @@ if [ "$MODE" = request ]; then
     FROM_REQUEST=1
     read -r REQ_REPO REQ_VERSION < "$REQUEST" || true
     rm -f "$REQUEST"
+    if [ "$REQ_REPO" = restore ]; then
+        # "restore <backup>": program and database of an earlier state (saved before each update).
+        [[ "$REQ_VERSION" =~ ^pebble-[0-9A-Za-z.+-]+-[0-9]{8}-[0-9]{6}$ ]] || { status "error: invalid backup"; exit 1; }
+        RESTORE="$DATA_DIR/backup/$REQ_VERSION"
+        [ -x "$RESTORE/pebble-webhook" ] && [ -f "$RESTORE/pebble.db" ] || { status "error: backup incomplete"; exit 1; }
+        MODE="restore"
+        trap 'status "error: going back to $REQ_VERSION failed (journalctl -u pebble-webhook-update)"' ERR
+        status "running restore $REQ_VERSION"
+    else
     [[ "$REQ_REPO" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || { status "error: invalid repository"; exit 1; }
     [[ "$REQ_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-(beta|nightly)\.[0-9]+)?$ ]] || { status "error: invalid version"; exit 1; }
     REPO="$REQ_REPO"; VERSION="$REQ_VERSION"; MODE="release"
     trap 'status "error: update to $VERSION failed (journalctl -u pebble-webhook-update)"' ERR
     status "running $VERSION"
+    fi
 fi
 
 case "$(uname -m)" in
@@ -89,6 +100,12 @@ case "$MODE" in
     binary)
         install -m 0755 "$BINARY" "$TMP/pebble-webhook"
         ;;
+    restore)
+        # Copy first: the backup of the current state below may rotate the old one away.
+        install -m 0755 "$RESTORE/pebble-webhook" "$TMP/pebble-webhook"
+        install -d "$TMP/restore-db"
+        cp -p "$RESTORE"/pebble.db* "$TMP/restore-db/"
+        ;;
 esac
 "$TMP/pebble-webhook" version >/dev/null
 
@@ -115,8 +132,19 @@ if [ -f "$DATA_DIR/pebble.db" ] && [ -x /usr/local/bin/pebble-webhook ]; then
     systemctl stop pebble-webhook 2>/dev/null || true
     install -d -o pebble -g pebble -m 0750 "$DATA_DIR/backup" "$BACKUP"
     cp -p "$DATA_DIR"/pebble.db* "$BACKUP/"
+    # The program too, so the web app can go back to exactly this state (program + database).
+    cp -p /usr/local/bin/pebble-webhook "$BACKUP/pebble-webhook"
+    chown -R pebble:pebble "$BACKUP"
     ls -1dt "$DATA_DIR"/backup/pebble-* | tail -n +6 | xargs -r rm -rf
     echo "Database backed up to $BACKUP"
+fi
+if [ "$MODE" = restore ]; then
+    systemctl stop pebble-webhook 2>/dev/null || true
+    rm -f "$DATA_DIR"/pebble.db "$DATA_DIR"/pebble.db-wal "$DATA_DIR"/pebble.db-shm
+    cp -p "$TMP"/restore-db/pebble.db* "$DATA_DIR/"
+    chown pebble:pebble "$DATA_DIR"/pebble.db*
+    echo "Database restored from $RESTORE"
+    VERSION="$REQ_VERSION"
 fi
 
 # --- 4. program, CLI wrapper, updater, systemd units ---
