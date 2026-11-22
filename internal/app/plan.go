@@ -440,6 +440,9 @@ func (a *App) research(ctx context.Context, j *store.Job, p *store.Planning) err
 			questions = append(questions, q)
 		}
 	}
+	if j.Source == "import" {
+		questions = []Question{} // nachträglich importiert: eine Runde ohne Rückfragen
+	}
 	plan.OffeneFragen = questions
 	data, _ := json.Marshal(plan)
 	j.Result = string(data)
@@ -457,8 +460,11 @@ func when(ms int64) string {
 }
 
 func sourceLabel(j *store.Job) string {
-	if j.Source == "web" {
+	switch j.Source {
+	case "web":
 		return i18n.T("Web-App")
+	case "import":
+		return i18n.T("Import")
 	}
 	return "Pebble"
 }

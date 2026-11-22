@@ -2221,8 +2221,8 @@ async function zeigeStatus() {
     seite.innerHTML = T`${statusReiter('status')}<h1>Status</h1>${updateKarte}
       ${s.fehlgeschlagen ? T`<div class="hinweis schlecht">${s.fehlgeschlagen} Auftrag/Aufträge dauerhaft fehlgeschlagen.</div>` : T('<div class="hinweis gut">Keine fehlgeschlagenen Aufträge.</div>')}
       ${(s.audio_unbekannt || []).length ? T`<h2>Aufnahmen ohne Eintrag <span class="zaehler fehler">${s.audio_unbekannt.length}</span></h2>
-        <div class="hinweis schlecht">Im Audio-Ordner liegen Aufnahmen, die die Datenbank nicht kennt – z. B. nach dem Wiederherstellen eines älteren Backups. Importieren legt je Aufnahme einen neuen Eintrag an (Eingang = Zeitpunkt der Datei); er wird neu transkribiert und von der KI ausgewertet.</div>
-        ${s.audio_unbekannt.map((f) => T`<div class="karte"><div class="zeile"><span><span class="badge fehler">ohne Eintrag</span> ${zeit(f.zeit)}</span><button class="btn klein" data-import="${esc(f.datei)}">Importieren</button></div>
+        <div class="hinweis schlecht">Im Audio-Ordner liegen Aufnahmen, die die Datenbank nicht kennt – z. B. nach dem Wiederherstellen eines älteren Backups. Importieren legt je Aufnahme einen neuen Eintrag an (Eingang = Zeitpunkt der Datei); er wird neu transkribiert und von der KI ausgewertet. Planungen kommen danach dran: eine Runde ohne Rückfragen, die KI ordnet sie einer Planung zu.</div>
+        ${s.audio_unbekannt.map((f) => T`<div class="karte"><div class="zeile"><span><span class="badge fehler">ohne Eintrag</span> <span class="badge ${esc(f.modus)}">${esc(MODUS[f.modus] || f.modus)}</span> ${zeit(f.zeit)}</span><button class="btn klein" data-import="${esc(f.datei)}">Importieren</button></div>
           <div class="leise">${esc(f.datei)} · ${groesse(f.groesse)}</div></div>`).join('')}
         ${s.audio_unbekannt.length > 1 ? T('<div class="leiste"><button class="btn haupt" data-import-alle="1">Alle importieren</button></div>') : ''}` : ''}
       <dl><dt>Aufträge</dt><dd>${s.auftraege} gesamt, ${s.warteschlange} in Arbeit</dd>
@@ -2663,6 +2663,8 @@ function aenderungenHtml(text) {
 
 // Updates: installierte Version, Versionen des gewählten Kanals (die letzten 3), frühere Stände.
 // Änderungslisten nur auf Knopfdruck in einem Blatt; die vollständige Liste liegt auf GitHub.
+const SYM_LADEN = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11m-5-5 5 5 5-5M5 20h14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+const SYM_ZURUECK = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12a8 8 0 1 0 2.4-5.7M4 4v4.5h4.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 // Dateigröße lesbar (KB/MB/GB).
 const groesse = (n) => (n < 1024 * 1024 ? `${Math.max(1, Math.round(n / 1024))} KB` : n < 1024 ** 3 ? `${(n / 1024 / 1024).toFixed(1)} MB` : `${(n / 1024 ** 3).toFixed(1)} GB`);
 
@@ -2742,9 +2744,13 @@ async function zeigeUpdate(teil) {
       <div class="leiste"><button class="btn haupt" data-sichern="1">Jetzt sichern</button></div>
       <h2>Backups</h2>
       <p class="leise">Jedes Backup enthält Datenbank mit allen Einstellungen, Version und Kanal. Wiederherstellen spielt die Daten ein und installiert die Version aus dem Backup; was seitdem dazukam, fehlt danach. Der jetzige Stand wird vorher gesichert.</p>
-      ${(u.backups || []).length ? u.backups.map((st) => T`<div class="karte versionzeile"><div class="versionkopf"><span class="versionzeile1">${st.kanal ? T`<span class="badge neutral">${esc(tx(st.kanal))}</span>` : ''}<strong>${esc(st.version)}</strong></span>
-          <span class="leise">${zeit(st.zeit)} · ${esc(ART[st.art] || st.art)}${st.audio ? T` · mit Aufnahmen` : ''}${st.groesse ? ` · ${groesse(st.groesse)}` : ''}</span></div>
-          <div class="versionknoepfe">${st.alt ? '' : T`<a class="btn klein" href="/api/backups/${encodeURIComponent(st.name)}" download>Herunterladen</a>`}${st.wiederherstellbar ? (u.installierbar ? T`<button class="btn klein" data-zurueck="${esc(st.name)}" data-version="${esc(st.version)}"${laeuft ? ' disabled' : ''}>Wiederherstellen</button>` : '')
+      ${(u.backups || []).length ? u.backups.map((st) => T`<div class="karte backupzeile"><div class="backupinfo">
+          <span class="versionzeile1">${st.kanal ? T`<span class="badge neutral">${esc(tx(st.kanal))}</span>` : ''}<strong>${esc(st.version)}</strong></span>
+          <span class="leise">${zeit(st.zeit)}</span>
+          <span class="leise">${esc(ART[st.art] || st.art)}${st.audio ? T` · mit Aufnahmen` : ''}</span></div>
+        <div class="backupknoepfe">${st.groesse ? T`<span class="leise backupgroesse">${groesse(st.groesse)}</span>` : ''}
+          ${st.alt ? '<span class="symbolplatz"></span>' : T`<a class="btn klein rund symbol" href="/api/backups/${encodeURIComponent(st.name)}" download aria-label="${esc(tx('Herunterladen'))}" title="${esc(tx('Herunterladen'))}">${SYM_LADEN}</a>`}
+          ${st.wiederherstellbar ? (u.installierbar ? T`<button class="btn klein rund symbol" data-restore="${esc(st.name)}" data-version="${esc(st.version)}" aria-label="${esc(tx('Wiederherstellen'))}" title="${esc(tx('Wiederherstellen'))}"${laeuft ? ' disabled' : ''}>${SYM_ZURUECK}</button>` : '')
     : T('<span class="leise">unvollständig</span>')}</div></div>`).join('') : T('<p class="leise">Noch keine Backups.</p>')}`;
     seite.innerHTML = kopf + (reiter === 'backups' ? backups : updates);
   };
@@ -2792,9 +2798,9 @@ async function zeigeUpdate(teil) {
         melde(tx('Backup angelegt'));
         return laden(false);
       }
-      if (b.dataset.zurueck) {
+      if (b.dataset.restore) {
         if (!confirm(tx('Backup von Version {0} wiederherstellen? Daten und Einstellungen werden ersetzt, die Version aus dem Backup wird installiert; was seitdem dazukam, fehlt danach. Der jetzige Stand wird vorher gesichert.', b.dataset.version))) { b.disabled = false; return; }
-        await api('/api/update/zurueck', { method: 'POST', body: { name: b.dataset.zurueck } });
+        await api('/api/update/zurueck', { method: 'POST', body: { name: b.dataset.restore } });
         melde(tx('Wiederherstellen angestoßen'));
         return warte((s) => (s.status || '').startsWith('done'));
       }

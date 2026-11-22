@@ -21,6 +21,7 @@ func (a *App) Run(ctx context.Context) {
 	go a.CheckUpdates(ctx)
 	go a.AutoUpdate(ctx)
 	go a.BackupSchedule(ctx)
+	a.sortAudio()
 	a.Cleanup()
 	lastCleanup := time.Now()
 	for {

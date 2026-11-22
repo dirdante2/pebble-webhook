@@ -138,7 +138,7 @@ func (a *App) handleHook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if len(audio) > 0 {
-		path, err := a.saveAudio(j.ID, audio, audioMime)
+		path, err := a.saveAudio(j.ID, j.Mode, audio, audioMime)
 		if err != nil {
 			logf("hook: Audio speichern: %v", err)
 			hookReply(w, http.StatusInsufficientStorage, "Speicher nicht verfügbar")
@@ -212,8 +212,8 @@ func audioExt(mimeType string) string {
 	return ".m4a"
 }
 
-// saveAudio schreibt die Aufnahme dauerhaft (fsync) unter AUDIO_DIR/JJJJ/MM/<id>.<ext>.
-func (a *App) saveAudio(id string, data []byte, mimeType string) (string, error) {
+// saveAudio schreibt die Aufnahme dauerhaft (fsync) unter AUDIO_DIR/<diktat|planung>/JJJJ/MM/<id>.<ext>.
+func (a *App) saveAudio(id, mode string, data []byte, mimeType string) (string, error) {
 	free, err := freeBytes(a.Cfg.AudioDir)
 	if err != nil {
 		return "", err
@@ -221,7 +221,7 @@ func (a *App) saveAudio(id string, data []byte, mimeType string) (string, error)
 	if free < a.Cfg.MinFreeBytes+uint64(len(data)) {
 		return "", fmt.Errorf("nur noch %d MB frei", free>>20)
 	}
-	dir := filepath.Join(a.Cfg.AudioDir, time.Now().Format("2006/01"))
+	dir := filepath.Join(a.Cfg.AudioDir, audioSub(mode), time.Now().Format("2006/01"))
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return "", err
 	}

@@ -593,4 +593,12 @@ dialog.formblatt h2 { margin-top: 0; }
 dialog.logblatt h2 { margin-top: 0; }
 .kanalneu .updatesymbol { width: 1em; height: 1em; vertical-align: -.12em; color: var(--gut); }
 .btn.aktiv .kanalneu .updatesymbol { color: var(--akzent-text); }
+.backupzeile { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: .75rem; }
+.backupinfo { display: flex; flex-direction: column; gap: .15rem; min-width: 0; }
+.backupinfo strong { overflow-wrap: anywhere; }
+.backupknoepfe { display: flex; align-items: center; gap: .4rem; }
+.backupgroesse { text-align: right; white-space: nowrap; margin-right: .2rem; }
+.btn.symbol { display: inline-flex; align-items: center; justify-content: center; width: 2.4rem; height: 2.4rem; padding: 0; }
+.symbolplatz { width: 2.4rem; flex: none; }
+.btn.symbol svg { width: 1.15rem; height: 1.15rem; }
 .versionzeile1 { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }

@@ -7,6 +7,20 @@ Version numbers X.Y.Z:
 - **Y** – a new feature (e.g. appointments, multiple languages, theme choice with day/night mode).
 - **Z** – all other UI changes and small bug fixes; safe to install or roll back at any time.
 
+## [1.31.1] - 2026-11-22
+
+### Changed
+- Backups list: download and restore as icon buttons, size right-aligned next to them; channel and version, date and reason each on their own line.
+
+### Fixed
+- The restore button also triggered the app's back navigation (shared `data-zurueck` attribute).
+
+## [1.31.0] - 2026-11-22
+
+### New
+- Recordings are stored by kind: `AUDIO_DIR/diktat/…` for notes, `AUDIO_DIR/planung/…` for planning rounds. On start existing recordings are moved there and the paths in the database follow the files (also after restoring an older backup).
+- Importing recordings without entry keeps their kind: notes are evaluated first; planning rounds wait until all imported notes are through, then run one round without questions, and the AI assigns them to a planning.
+
 ## [1.30.0] - 2026-11-22
 
 ### New

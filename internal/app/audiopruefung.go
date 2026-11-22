@@ -22,6 +22,7 @@ import (
 
 type orphanAudio struct {
 	Path  string `json:"datei"` // relativ zu AUDIO_DIR
+	Mode  string `json:"modus"` // diktat | planung (aus dem Unterordner; ältere Dateien ohne Unterordner: diktat)
 	Size  int64  `json:"groesse"`
 	MTime int64  `json:"zeit"`
 }
@@ -31,6 +32,80 @@ var (
 	orphanList []orphanAudio
 	jobIDRe    = regexp.MustCompile(`^[0-9a-f]{32}$`)
 )
+
+// audioSub: Unterordner einer Aufnahme je Art – Planungsrunden getrennt von Notizen, damit sich eine Datei
+// ohne Eintrag später wieder richtig zuordnen lässt.
+func audioSub(mode string) string {
+	if mode == "planung" {
+		return "planung"
+	}
+	return "diktat"
+}
+
+// modeOfPath: Art aus dem Unterordner (relativer Pfad); ohne Unterordner (vor 1.31) diktat.
+func modeOfPath(rel string) string {
+	if strings.HasPrefix(filepath.ToSlash(rel), "planung/") {
+		return "planung"
+	}
+	return "diktat"
+}
+
+// sortAudio legt jede bekannte Aufnahme in den Unterordner ihrer Art (AUDIO_DIR/<diktat|planung>/JJJJ/MM) und
+// richtet den Pfad in der Datenbank nach dem Ort der Datei: verschiebt Aufnahmen aus der Zeit vor den
+// Unterordnern, folgt einem geänderten Modus und repariert Pfade einer wiederhergestellten älteren Datenbank.
+// Gefunden wird eine Datei über ihre Id im Dateinamen. Läuft beim Start.
+func (a *App) sortAudio() {
+	byID := map[string]string{}
+	filepath.WalkDir(a.Cfg.AudioDir, func(p string, d fs.DirEntry, err error) error {
+		if err == nil && d.Type().IsRegular() && audioMimeOf(p) != "" {
+			byID[strings.TrimSuffix(d.Name(), filepath.Ext(d.Name()))] = p
+		}
+		return nil
+	})
+	jobs, err := a.DB.AudioJobs()
+	if err != nil {
+		logf("Audio einsortieren: %v", err)
+		return
+	}
+	moved, fixed := 0, 0
+	for _, j := range jobs {
+		cur, ok := byID[j.ID]
+		if !ok {
+			continue // Datei fehlt: bleibt erkennbar (Abspielen meldet es)
+		}
+		rel, err := filepath.Rel(a.Cfg.AudioDir, cur)
+		if err != nil || strings.HasPrefix(rel, "..") {
+			continue
+		}
+		rest := filepath.ToSlash(rel)
+		for _, sub := range []string{"diktat/", "planung/"} {
+			rest = strings.TrimPrefix(rest, sub)
+		}
+		want := filepath.Join(a.Cfg.AudioDir, audioSub(j.Mode), filepath.FromSlash(rest))
+		if cur != want {
+			if err := os.MkdirAll(filepath.Dir(want), 0o750); err != nil {
+				logf("Audio einsortieren: %v", err)
+				continue
+			}
+			if err := os.Rename(cur, want); err != nil {
+				logf("Audio einsortieren: %s: %v", rel, err)
+				continue
+			}
+			cur = want
+			moved++
+		}
+		if j.AudioPath != cur {
+			if err := a.DB.SetAudioPath(j.ID, cur); err != nil {
+				logf("Audio einsortieren: %v", err)
+				continue
+			}
+			fixed++
+		}
+	}
+	if moved > 0 || fixed > 0 {
+		logf("Audio einsortieren: %d verschoben, %d Pfade angepasst", moved, fixed)
+	}
+}
 
 // audioMimeOf: MIME-Typ zur Dateiendung (Gegenstück zu audioExt).
 func audioMimeOf(name string) string {
@@ -74,7 +149,7 @@ func (a *App) scanAudio() []orphanAudio {
 		if err != nil {
 			return nil
 		}
-		found = append(found, orphanAudio{Path: filepath.ToSlash(rel), Size: fi.Size(), MTime: fi.ModTime().UnixMilli()})
+		found = append(found, orphanAudio{Path: filepath.ToSlash(rel), Mode: modeOfPath(rel), Size: fi.Size(), MTime: fi.ModTime().UnixMilli()})
 		return nil
 	})
 	sort.Slice(found, func(i, k int) bool { return found[i].MTime < found[k].MTime })
@@ -111,7 +186,7 @@ func (a *App) importAudio(o orphanAudio) error {
 		id = base // ursprüngliche Id aus dem Dateinamen
 	}
 	at := fi.ModTime().UnixMilli()
-	j := &store.Job{ID: id, DeliveryID: "import-" + id, Source: "import", Trigger: "import", Mode: "diktat",
+	j := &store.Job{ID: id, DeliveryID: "import-" + id, Source: "import", Trigger: "import", Mode: modeOfPath(o.Path),
 		ReceivedAt: at, RecordedAt: at, AudioPath: path, AudioMime: audioMimeOf(path), State: store.StateNew}
 	if _, err := a.DB.InsertJob(j); err != nil {
 		return err

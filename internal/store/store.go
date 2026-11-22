@@ -775,20 +775,25 @@ func (s *Store) markRead(where, id string) (bool, error) {
 // NextDue liefert den ältesten Auftrag, der jetzt bearbeitet werden kann.
 func (s *Store) NextDue(now int64) (*Job, error) {
 	j, err := scanJob(s.DB.QueryRow(`SELECT `+jobCols+` FROM jobs
-		WHERE deleted_at = 0 AND state != ? AND failed = 0 AND next_try_at <= ? ORDER BY received_at LIMIT 1`, StateDone, now))
+		WHERE deleted_at = 0 AND state != ? AND failed = 0 AND next_try_at <= ? AND `+importHold+` ORDER BY received_at LIMIT 1`, StateDone, now, StateDone))
 	if errors.Is(err, ErrNotFound) {
 		return nil, nil
 	}
 	return j, err
 }
 
+// importHold: importierte Planungsrunden warten, bis alle importierten Notizen durch sind (fertig oder
+// endgültig fehlgeschlagen) – dann kennt die Zuordnung deren Ergebnisse. Ein Platzhalter (?) = StateDone.
+const importHold = `NOT (source = 'import' AND mode = 'planung' AND EXISTS (SELECT 1 FROM jobs d WHERE d.deleted_at = 0
+	AND d.source = 'import' AND d.mode = 'diktat' AND d.state != ? AND d.failed = 0))`
+
 // NextWake liefert den frühesten Wiederholungszeitpunkt offener Aufträge oder die nächste fällige
 // Termin-Erinnerung (0 = keiner).
 func (s *Store) NextWake() (int64, error) {
 	var t sql.NullInt64
 	err := s.DB.QueryRow(`SELECT MIN(t) FROM (
-		SELECT MIN(next_try_at) AS t FROM jobs WHERE deleted_at = 0 AND state != ? AND failed = 0
-		UNION ALL SELECT MIN(erinnerung_at) FROM jobs WHERE deleted_at = 0 AND erinnerung_at > 0 AND erinnert_at = 0 AND erledigt_at = 0)`, StateDone).Scan(&t)
+		SELECT MIN(next_try_at) AS t FROM jobs WHERE deleted_at = 0 AND state != ? AND failed = 0 AND `+importHold+`
+		UNION ALL SELECT MIN(erinnerung_at) FROM jobs WHERE deleted_at = 0 AND erinnerung_at > 0 AND erinnert_at = 0 AND erledigt_at = 0)`, StateDone, StateDone).Scan(&t)
 	return t.Int64, err
 }
 
@@ -1998,4 +2003,28 @@ func (s *Store) AudioRefs() (paths, ids map[string]bool, err error) {
 		}
 	}
 	return paths, ids, rows.Err()
+}
+
+// AudioJobs: Aufträge mit vorhandener Aufnahme (Id, Modus, Pfad) – zum Einsortieren in die Unterordner.
+func (s *Store) AudioJobs() ([]*Job, error) {
+	rows, err := s.DB.Query(`SELECT id, mode, audio_path FROM jobs WHERE audio_path != '' AND audio_deleted_at = 0`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*Job
+	for rows.Next() {
+		j := &Job{}
+		if err := rows.Scan(&j.ID, &j.Mode, &j.AudioPath); err != nil {
+			return nil, err
+		}
+		out = append(out, j)
+	}
+	return out, rows.Err()
+}
+
+// SetAudioPath ändert nur den Pfad der Aufnahme.
+func (s *Store) SetAudioPath(id, path string) error {
+	_, err := s.DB.Exec(`UPDATE jobs SET audio_path = ? WHERE id = ?`, path, id)
+	return err
 }

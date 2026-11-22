@@ -783,7 +783,7 @@ func (a *App) handleAnswer(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, 400, "ungueltig", "Die Datei ist keine Aufnahme")
 			return
 		}
-		path, err := a.saveAudio(j.ID, data, mimeType)
+		path, err := a.saveAudio(j.ID, j.Mode, data, mimeType)
 		if err != nil {
 			logf("Antwort: Audio speichern: %v", err)
 			writeErr(w, http.StatusInsufficientStorage, "speicher", "Speicher nicht verfügbar")
