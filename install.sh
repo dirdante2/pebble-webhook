@@ -1,7 +1,7 @@
 #!/bin/bash
 # pebble-webhook installer and updater for Debian/Ubuntu with systemd.
 #
-#   curl -fsSL https://raw.githubusercontent.com/dirdante2/pebble-webhook/main/install.sh | sudo bash
+#   curl -fsSL https://raw.githubusercontent.com/dirdante2/pebble-webhook/main/install.sh | sudo bash -s -- --channel stable
 #
 # Options:
 #   --version X.Y.Z     install this release instead of the latest stable one (also X.Y.Z-beta.N,

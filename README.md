@@ -30,7 +30,7 @@ Demo data, English UI, mobile, dark mode.
 On a Debian/Ubuntu server with systemd:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/dirdante2/pebble-webhook/main/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/dirdante2/pebble-webhook/main/install.sh | sudo bash -s -- --channel stable
 ```
 
 The installer prints a link to the setup wizard. Put the service behind an HTTPS reverse proxy (passkeys need HTTPS), enter your OpenAI key and the public address, then create your first passkey.

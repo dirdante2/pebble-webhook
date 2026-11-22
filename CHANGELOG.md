@@ -10,7 +10,7 @@ Version numbers X.Y.Z:
 ## [1.33.4] - 2026-11-22
 
 ### Changed
-- Installation always starts with the newest stable release; beta or nightly is chosen afterwards in the web app. The docs no longer offer per-channel install commands; `--channel` stays for the local installer.
+- Install command in the docs: `curl -fsSL https://raw.githubusercontent.com/dirdante2/pebble-webhook/main/install.sh | sudo bash -s -- --channel stable`; beta or nightly afterwards in the web app (or `--channel beta|nightly`).
 
 ## [1.33.3] - 2026-11-22
 
