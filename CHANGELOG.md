@@ -7,6 +7,11 @@ Version numbers X.Y.Z:
 - **Y** – a new feature (e.g. appointments, multiple languages, theme choice with day/night mode).
 - **Z** – all other UI changes and small bug fixes; safe to install or roll back at any time.
 
+## [1.33.5] - 2026-11-22
+
+### Changed
+- Stable tags carry their channel: `vX.Y.Z-stable` (beta `vX.Y.Z-beta.N`, nightly `vX.Y.Z-nightly.…`). Older stable tags without suffix are still recognised.
+
 ## [1.33.4] - 2026-11-22
 
 ### Changed

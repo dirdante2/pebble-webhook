@@ -3325,8 +3325,8 @@ const vorschlagZahl = () => (offeneVorschlaege ? ` (${offeneVorschlaege})` : '')
 let neueVersion = '', papierkorbZahl = 0, audioFehler = 0, appVersion = lokal('app-version'), appKanal = lokal('app-kanal');
 const updateSymbol = T('<svg class="updatesymbol" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="11" fill="currentColor"/><path d="M12 17V7m-4.5 4.5L12 7l4.5 4.5" fill="none" stroke="var(--flaeche)" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>');
 // Versionsnummer ohne Kanal-Endung: der Kanal steht als Badge daneben, Builds unterscheidet das Datum.
-const versionNr = (v) => String(v || '').replace(/-(beta|nightly)\.\d+$/, '');
-const versionKanal = (v) => (String(v || '').match(/-(beta|nightly)\.\d+$/) || [])[1] || '';
+const versionNr = (v) => String(v || '').replace(/-(stable|(beta|nightly)\.\d+)$/, '');
+const versionKanal = (v) => (String(v || '').match(/-(stable|beta|nightly)(\.\d+)?$/) || [])[1] || '';
 // Build-Zeit einer Nightly (Endung JJJJMMTTHHMM) als Text, sonst ''.
 const versionZeit = (v) => {
   const m = String(v || '').match(/-nightly\.(\d{4})(\d\d)(\d\d)(\d\d)(\d\d)$/);

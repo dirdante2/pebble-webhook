@@ -4,7 +4,7 @@
 # releases/download/<channel>/… always points at the newest version of that channel.
 #   nightly – every push to main: X.Y.Z-nightly.YYYYMMDDHHMM (VERSION file + build time), pre-release, newest 10 kept
 #   beta    – tag vX.Y.Z-beta.N: pre-release, notes from the RELEASES.md section X.Y.Z-beta.N (required)
-#   stable  – tag vX.Y.Z: release, notes from the RELEASES.md section X.Y.Z (required)
+#   stable  – tag vX.Y.Z-stable (before 1.33.5: vX.Y.Z): release, notes from the RELEASES.md section X.Y.Z (required)
 name: release
 
 on:
@@ -39,11 +39,11 @@ jobs:
           section() { awk -v h="## [$1]" 'index($0, h) == 1 {f=1; next} /^## \[/ {f=0} f' "$2" | sed '/./,$!d'; }
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
             VERSION="${GITHUB_REF_NAME#v}"
-            [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-beta\.[0-9]+)?$ ]] || { echo "tag must be vX.Y.Z or vX.Y.Z-beta.N"; exit 1; }
-            # beta and stable: the summarised section from RELEASES.md (required)
-            section "$VERSION" RELEASES.md > notes.md
-            [ -s notes.md ] || { echo "RELEASES.md has no section ## [$VERSION]"; exit 1; }
-            PRE=$([[ "$VERSION" == *-* ]] && echo true || echo false)
+            [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-stable|-beta\.[0-9]+)?$ ]] || { echo "tag must be vX.Y.Z-stable or vX.Y.Z-beta.N"; exit 1; }
+            # beta and stable: the summarised section from RELEASES.md (required; stable as ## [X.Y.Z])
+            section "${VERSION%-stable}" RELEASES.md > notes.md
+            [ -s notes.md ] || { echo "RELEASES.md has no section ## [${VERSION%-stable}]"; exit 1; }
+            PRE=$([[ "$VERSION" == *-beta.* ]] && echo true || echo false)
           else
             VERSION="$(cat VERSION)-nightly.$(date -u +%Y%m%d%H%M)"
             # nightly: the CHANGELOG.md section of this version, else the commit messages since the last nightly

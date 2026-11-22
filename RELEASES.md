@@ -2,7 +2,12 @@
 
 Summarised notes for **beta** and **stable** releases. Each section lists only what lasts since the previous beta or stable release – intermediate steps, reverted attempts and small fixes of things that were new in the same span are left out. Every single version with all its steps is in [CHANGELOG.md](CHANGELOG.md) (that is what the nightly channel shows).
 
-A tag `vX.Y.Z` (stable) or `vX.Y.Z-beta.N` (beta) needs a section `## [X.Y.Z]` or `## [X.Y.Z-beta.N]` here; the release workflow uses it as the release notes.
+A tag `vX.Y.Z-stable` (stable; before 1.33.5 `vX.Y.Z`) or `vX.Y.Z-beta.N` (beta) needs a section `## [X.Y.Z]` or `## [X.Y.Z-beta.N]` here; the release workflow uses it as the release notes.
+
+## [1.33.5] - 2026-11-22
+
+### Updates
+- Stable tags now name their channel: `v1.33.5-stable` instead of `v1.33.5`; beta and nightly tags already did. Older stable tags are still recognised by the app and the installer.
 
 ## [1.33.4] - 2026-11-22
 

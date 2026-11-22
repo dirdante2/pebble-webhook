@@ -4,7 +4,7 @@
 #   curl -fsSL https://raw.githubusercontent.com/dirdante2/pebble-webhook/main/install.sh | sudo bash -s -- --channel stable
 #
 # Options:
-#   --version X.Y.Z     install this release instead of the latest stable one (also X.Y.Z-beta.N,
+#   --version X.Y.Z     install this release instead of the latest stable one (also X.Y.Z-stable, X.Y.Z-beta.N,
 #                       X.Y.Z-nightly.N, or an older version to roll back; the database is backed up first)
 #   --channel NAME      on an installed server: the newest release of stable, beta or nightly (moving
 #                       release of that name). A new installation always starts with stable; the channel is
@@ -49,7 +49,7 @@ envval() { local v; v="$(grep -oP "^$1=\K.*" /etc/pebble-webhook/env 2>/dev/null
 AUDIO_DIR="$(envval AUDIO_DIR "$DATA_DIR/audio")"
 BACKUP_DIR="$(envval BACKUP_DIR /srv/pebble-backup)"
 ARCHIVE_RE='^pebble-[0-9A-Za-z.+-]+-(stable|beta|nightly|lokal)-[0-9]{8}-[0-9]{6}-(update|plan|manuell)(-audio)?\.tar\.gz$'
-RELEASE_RE='^[0-9]+\.[0-9]+\.[0-9]+(-(beta|nightly)\.[0-9]+)?$'
+RELEASE_RE='^[0-9]+\.[0-9]+\.[0-9]+(-stable|-(beta|nightly)\.[0-9]+)?$'
 
 status() {
     if [ -n "${FROM_REQUEST:-}" ]; then echo "$*" > "$STATUS"; chown pebble:pebble "$STATUS"; fi

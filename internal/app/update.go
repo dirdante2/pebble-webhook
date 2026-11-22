@@ -52,7 +52,8 @@ type updateCache struct {
 const updateInterval = 4 * time.Hour
 
 // Versionen: X.Y.Z (stable), X.Y.Z-beta.N, X.Y.Z-nightly.N (N = Zeitstempel des Builds).
-var semverRe = regexp.MustCompile(`^v?(\d+)\.(\d+)\.(\d+)(?:-(beta|nightly)\.(\d+))?$`)
+// Endung: -stable (ab 1.33.5, vorher ohne), -beta.N, -nightly.JJJJMMTTHHMM.
+var semverRe = regexp.MustCompile(`^v?(\d+)\.(\d+)\.(\d+)(?:-(stable)|-(beta|nightly)\.(\d+))?$`)
 
 // minRollback: ältere Versionen lesen die Einstellungen noch aus der env-Datei.
 var minRollback = version{1, 14, 0, 2, 0}
@@ -60,7 +61,7 @@ var minRollback = version{1, 14, 0, 2, 0}
 // version ist sortierbar: Basis, dann Rang (nightly < beta < stable), dann Nummer der Vorabversion.
 type version [5]int
 
-var channelRank = map[string]int{"nightly": 0, "beta": 1, "": 2}
+var channelRank = map[string]int{"nightly": 0, "beta": 1, "stable": 2}
 
 // parseVersion zerlegt „1.15.0-beta.2“ (auch „1.13.1 (Build …)“); ok=false bei „dev“ u. ä.
 func parseVersion(v string) (out version, channel string, ok bool) {
@@ -75,12 +76,12 @@ func parseVersion(v string) (out version, channel string, ok bool) {
 	for i := range 3 {
 		out[i], _ = strconv.Atoi(m[i+1])
 	}
-	out[3] = channelRank[m[4]]
-	out[4], _ = strconv.Atoi(m[5])
-	channel = m[4]
+	channel = m[5]
 	if channel == "" {
 		channel = "stable"
 	}
+	out[3] = channelRank[channel]
+	out[4], _ = strconv.Atoi(m[6])
 	return out, channel, true
 }
 
@@ -133,8 +134,8 @@ func (a *App) installedTime(releases []release) time.Time {
 			return t
 		}
 	}
-	if m := semverRe.FindStringSubmatch(current); m != nil && m[4] == "nightly" && len(m[5]) == 12 {
-		if t, err := time.Parse("200601021504", m[5]); err == nil {
+	if m := semverRe.FindStringSubmatch(current); m != nil && m[5] == "nightly" && len(m[6]) == 12 {
+		if t, err := time.Parse("200601021504", m[6]); err == nil {
 			return t
 		}
 	}
