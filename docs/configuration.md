@@ -33,7 +33,7 @@ Every save is validated first: number ranges (e.g. max recording 1–2048 MB, re
 | OpenAI | API key and base URL, transcription (OpenAI or Pebble transcript), models for transcription, titles, research and notes, reasoning effort, cost limit per research, max output tokens |
 | Prices (Preise) | prices for the cost overview and the research cost limit; research stays disabled while a research price is missing |
 | Joplin | switch *aktiv/inaktiv*; when active, server, account, password and top notebook are set up and tested under *Status → Joplin* |
-| Retention (Fristen) | empty trash after N days (recordings are only deleted together with their entry from the trash), move empty or failed recordings to the trash, auto-close plannings, retries, minimum free disk space |
+| Retention (Fristen) | empty trash after N days (recordings are only deleted together with their entry from the trash), delete empty recordings (no speech) after N hours – failed entries are never deleted automatically, auto-close plannings, retries, minimum free disk space |
 | Display and memory | how long done items stay active, visit gap for "new" (shared by all devices), minimum history entries, memory training size |
 | Access and updates | API token for machine access, web push contact, update channel (stable / beta / nightly), automatic update (on by default, daily at `AUTO_UPDATE_TIME`, default 04:00), update source (`owner/repo`, `aus` = off) |
 | Backup | schedule (`täglich` / `wöchentlich` / `monatlich` / `aus`, default daily), time (default 03:00), days to keep (default 30), with or without recordings |

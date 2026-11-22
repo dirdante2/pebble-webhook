@@ -7,6 +7,12 @@ Version numbers X.Y.Z:
 - **Y** – a new feature (e.g. appointments, multiple languages, theme choice with day/night mode).
 - **Z** – all other UI changes and small bug fixes; safe to install or roll back at any time.
 
+## [1.31.6] - 2026-11-22
+
+### Changed
+- Empty recordings (no speech recognised) are deleted for good after `EMPTY_RETENTION_HOURS` (default 1 h) again.
+- Entries that failed for good are never deleted automatically (setting `FAILED_RETENTION_HOURS` removed): fix the cause, then restart them; delete only by hand.
+
 ## [1.31.5] - 2026-11-22
 
 ### Changed

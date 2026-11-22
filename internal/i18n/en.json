@@ -147,6 +147,7 @@
 "Aufnahmen": "Recordings",
 "Aufnahmen löschen nach (Tagen)": "Delete recordings after (days)",
 "Aufnahmen ohne Eintrag": "Recordings without entry",
+"Aufnahmen ohne erkannte Sprache werden danach endgültig gelöscht. Fehlgeschlagene Einträge bleiben immer, bis du sie löschst. 0 = nie.": "Recordings without recognised speech are deleted for good after this. Failed entries always stay until you delete them. 0 = never.",
 "Aufnahmen ohne erkannte Sprache; die Aufnahme bleibt bis zum Ende der Papierkorb-Frist. 0 = nie.": "Recordings without recognised speech; the recording stays until the trash period ends. 0 = never.",
 "Aufnahmen sichern": "Back up recordings",
 "Aufnahmen sichern ändern": "Change backing up recordings",

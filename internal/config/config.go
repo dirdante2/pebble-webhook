@@ -56,16 +56,15 @@ type Config struct {
 	ResearchLimitUSD     float64
 	ResearchMaxOutTokens int
 
-	TrashRetentionDays   int // Papierkorb: so viele Tage nach dem Löschen endgültig entfernen
-	AutoCloseDays        int // offene Planungen ohne neue Runde schließen; 0 = nie
-	MemoryTrainEntries   int // Lernlauf: so viele der jüngsten Notizen und Planungen auswerten
-	MemoryRejected       int // so viele zuletzt gelöschte Gedächtnis-Einträge gehen als „nicht erwünscht“ an die KI
-	MaxAttempts          int
-	EmptyRetentionHours  int // leere Aufnahmen löschen; 0 = nie
-	FailedRetentionHours int // fehlgeschlagene Aufträge löschen; 0 = nie
-	DoneActiveMinutes    int // erledigte Punkte und Listen so lange noch im aktiven Bereich zeigen
-	VisitGapMinutes      int // Pause, nach der das Öffnen der App als neuer Besuch zählt (Grenze für „Neu“ im Verlauf)
-	HistoryMinEntries    int // Standardansicht des Verlaufs: mindestens so viele Einträge, auch wenn älter als 24 Stunden
+	TrashRetentionDays  int // Papierkorb: so viele Tage nach dem Löschen endgültig entfernen
+	AutoCloseDays       int // offene Planungen ohne neue Runde schließen; 0 = nie
+	MemoryTrainEntries  int // Lernlauf: so viele der jüngsten Notizen und Planungen auswerten
+	MemoryRejected      int // so viele zuletzt gelöschte Gedächtnis-Einträge gehen als „nicht erwünscht“ an die KI
+	MaxAttempts         int
+	EmptyRetentionHours int // leere Aufnahmen löschen; 0 = nie
+	DoneActiveMinutes   int // erledigte Punkte und Listen so lange noch im aktiven Bereich zeigen
+	VisitGapMinutes     int // Pause, nach der das Öffnen der App als neuer Besuch zählt (Grenze für „Neu“ im Verlauf)
+	HistoryMinEntries   int // Standardansicht des Verlaufs: mindestens so viele Einträge, auch wenn älter als 24 Stunden
 
 	JoplinEnabled  bool   // Schalter JOPLIN_ENABLED (Reiter „Joplin“ in der Web-App)
 	JoplinURL      string // leer = Joplin aus (inaktiv oder noch nicht eingerichtet)
@@ -268,11 +267,10 @@ func FromValues(boot Bootstrap, lookup func(string) string) (*Config, error) {
 		MemoryRejected:     num("MEMORY_REJECTED", 30),
 		MaxAttempts:        num("MAX_ATTEMPTS", 6),
 
-		EmptyRetentionHours:  num("EMPTY_RETENTION_HOURS", 1),
-		FailedRetentionHours: num("FAILED_RETENTION_HOURS", 24),
-		DoneActiveMinutes:    num("LIST_DONE_ACTIVE_MINUTES", 60),
-		VisitGapMinutes:      num("VISIT_GAP_MINUTES", 30),
-		HistoryMinEntries:    num("HISTORY_MIN_ENTRIES", 10),
+		EmptyRetentionHours: num("EMPTY_RETENTION_HOURS", 1),
+		DoneActiveMinutes:   num("LIST_DONE_ACTIVE_MINUTES", 60),
+		VisitGapMinutes:     num("VISIT_GAP_MINUTES", 30),
+		HistoryMinEntries:   num("HISTORY_MIN_ENTRIES", 10),
 
 		JoplinEnabled:  joplinSet == "aktiv",
 		JoplinURL:      strings.TrimRight(str("JOPLIN_URL", ""), "/"),
@@ -368,7 +366,6 @@ var intLimits = map[string][2]int{
 	"TRASH_RETENTION_DAYS":       {1, 36_500},
 	"BACKUP_RETENTION_DAYS":      {1, 36_500},
 	"EMPTY_RETENTION_HOURS":      {0, 87_600},
-	"FAILED_RETENTION_HOURS":     {0, 87_600},
 	"PLANNING_AUTOCLOSE_DAYS":    {0, 3650},
 	"MAX_ATTEMPTS":               {1, 50},
 	"MIN_FREE_MB":                {0, 10_000_000},

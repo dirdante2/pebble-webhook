@@ -580,48 +580,49 @@ func (a *App) removeJob(j *store.Job) error {
 	return a.DB.DeleteJob(j.ID)
 }
 
-// Purge legt leere Aufnahmen und fehlgeschlagene Aufträge nach Ablauf ihrer Frist in den Papierkorb; die
-// Aufnahme bleibt, bis der Papierkorb sie endgültig löscht.
+// Purge löscht leere Aufnahmen (keine Sprache erkannt) nach EMPTY_RETENTION_HOURS endgültig, samt Datei.
+// Fehlgeschlagene Aufträge bleiben: ein Fehler (z. B. der KI-API) wird behoben und der Eintrag neu
+// ausgewertet; löschen nur von Hand.
 func (a *App) Purge() {
 	jobs, err := a.DB.FailedJobs()
 	if err != nil {
 		logf("Aufräumen: %v", err)
 		return
 	}
-	now := store.Now()
 	for _, j := range jobs {
-		hours := a.Cfg.FailedRetentionHours
-		if j.Empty {
-			hours = a.Cfg.EmptyRetentionHours
-		}
-		if hours <= 0 || now-j.FailedAt < int64(hours)*3600_000 {
+		at := a.purgeAt(j)
+		if at == 0 || store.Now() < at {
 			continue
 		}
-		if err := a.deleteJob(j); err != nil {
+		if err := a.destroyJob(j); err != nil {
 			logf("Aufräumen: Auftrag %s: %v", j.ID, err)
 			continue
 		}
-		what := "fehlgeschlagen"
-		if j.Empty {
-			what = "ohne Sprache"
-		}
-		logf("Auftrag %s (%s, %s) nach %d h in den Papierkorb", j.ID, j.Mode, what, hours)
+		logf("Auftrag %s (%s, ohne Sprache) nach %d h gelöscht", j.ID, j.Mode, a.Cfg.EmptyRetentionHours)
 	}
 }
 
-// purgeAt liefert den Zeitpunkt, zu dem ein fehlgeschlagener Auftrag in den Papierkorb kommt (0 = nie).
+// destroyJob löscht einen leeren Auftrag endgültig, ohne Papierkorb.
+func (a *App) destroyJob(j *store.Job) error {
+	if err := a.removeJob(j); err != nil {
+		return err
+	}
+	if j.PlanningID != "" {
+		if err := a.detach(j.PlanningID, 0); err != nil {
+			logf("Löschen: Planung %s: %v", j.PlanningID, err)
+		}
+		a.hub.send("planung:" + j.PlanningID)
+	}
+	a.changed(j.ID)
+	return nil
+}
+
+// purgeAt liefert den Zeitpunkt, zu dem eine leere Aufnahme gelöscht wird (0 = nie, auch für alle anderen).
 func (a *App) purgeAt(j *store.Job) int64 {
-	if !j.Failed || j.FailedAt == 0 {
+	if !j.Failed || !j.Empty || j.FailedAt == 0 || a.Cfg.EmptyRetentionHours <= 0 {
 		return 0
 	}
-	hours := a.Cfg.FailedRetentionHours
-	if j.Empty {
-		hours = a.Cfg.EmptyRetentionHours
-	}
-	if hours <= 0 {
-		return 0
-	}
-	return j.FailedAt + int64(hours)*3600_000
+	return j.FailedAt + int64(a.Cfg.EmptyRetentionHours)*3600_000
 }
 
 // handleDeleteJob löscht einen Eintrag in jedem Stand; läuft er gerade, wird die Verarbeitung abgebrochen.
