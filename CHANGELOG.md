@@ -7,6 +7,11 @@ Version numbers X.Y.Z:
 - **Y** – a new feature (e.g. appointments, multiple languages, theme choice with day/night mode).
 - **Z** – all other UI changes and small bug fixes; safe to install or roll back at any time.
 
+## [1.33.9] - 2026-11-22
+
+### Changed
+- The "App updated" card is confirmed once for all devices: the server keeps the confirmed version (`POST /api/version/bestaetigt`), other open devices hide the card at once.
+
 ## [1.33.8] - 2026-11-22
 
 ### Changed

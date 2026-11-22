@@ -100,6 +100,7 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("GET /api/kosten", s(a.handleCosts))
 	mux.HandleFunc("GET /api/gedaechtnis", s(a.handleMemory))
 	mux.HandleFunc("GET /api/zaehler", s(a.handleCounters))
+	mux.HandleFunc("POST /api/version/bestaetigt", s(a.handleVersionConfirm))
 	mux.HandleFunc("PUT /api/eintraege/{id}/wortlaut", s(a.handleTranscriptEdit))
 	mux.HandleFunc("POST /api/gedaechtnis", s(a.handleMemoryAdd))
 	mux.HandleFunc("PUT /api/gedaechtnis/{id}", s(a.handleMemoryEdit))

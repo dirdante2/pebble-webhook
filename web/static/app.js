@@ -3339,21 +3339,26 @@ const versionHtml = (v, kanal) => {
   const k = kanal || versionKanal(v), z = versionZeit(v);
   return T`${k ? T`<span class="badge neutral">${esc(tx(k))}</span> ` : ''}<span class="versionnr">${esc(versionNr(v))}</span>${z ? T` <span class="leise">${esc(z)}</span>` : ''}`;
 };
-// Neue Version seit dem letzten Öffnen (z. B. automatisches Update): Karte über jeder Seite, bis sie bestätigt ist.
-// Je Gerät; beim allerersten Öffnen gilt die laufende Version als bestätigt.
+// Neue Version seit der letzten Bestätigung (z. B. automatisches Update): Karte über jeder Seite, bis sie bestätigt ist.
+// Gilt für alle Geräte gemeinsam (ein Nutzer): der Server merkt sich die bestätigte Version.
+let versionBestaetigt = lokal('version-bestaetigt');
 function zeigeVersionskarte() {
   const karte = document.getElementById('versionskarte');
-  if (!appVersion) return;
   const jetzt = `${appVersion}|${appKanal}`;
-  const merke = () => { try { localStorage.setItem('version-bestaetigt', jetzt); } catch { /* nur Anzeige */ } };
-  const alt = lokal('version-bestaetigt');
-  if (!alt) return merke();
-  karte.hidden = alt === jetzt;
+  karte.hidden = !appVersion || !versionBestaetigt || versionBestaetigt === jetzt;
   if (karte.hidden) return;
-  const [altV, altK] = alt.split('|');
+  const [altV, altK] = versionBestaetigt.split('|');
   karte.innerHTML = T`<div class="versionszeile">${updateSymbol}<div><strong>${tx('App aktualisiert')}</strong><div class="versionswechsel"><div>${versionHtml(altV, altK)}</div><div>→ ${versionHtml(appVersion, appKanal)}</div></div><a href="/status/update">${tx('Änderungen ansehen')}</a></div></div>
     <button type="button" class="btn haupt gross" data-version-ok>${tx('Bestätigen')}</button>`;
-  karte.querySelector('[data-version-ok]').onclick = () => { merke(); karte.hidden = true; };
+  karte.querySelector('[data-version-ok]').onclick = async (ev) => {
+    ev.currentTarget.disabled = true;
+    try {
+      const r = await api('/api/version/bestaetigt', { method: 'POST' });
+      versionBestaetigt = r.version_bestaetigt;
+      try { localStorage.setItem('version-bestaetigt', versionBestaetigt); } catch { /* nur Anzeige */ }
+      karte.hidden = true;
+    } catch (f) { ev.currentTarget.disabled = false; melde(f.message); }
+  };
 }
 
 async function ladeZaehler() {
@@ -3366,6 +3371,7 @@ async function ladeZaehler() {
     joplinAktiv = !!z.joplin;
     try { localStorage.setItem('joplin-aktiv', joplinAktiv ? '1' : '0'); } catch { /* nur Anzeige */ }
     if (z.version) { appVersion = z.version; appKanal = z.kanal || ''; try { localStorage.setItem('app-version', appVersion); localStorage.setItem('app-kanal', appKanal); } catch { /* nur Anzeige */ } }
+    if (z.version_bestaetigt) { versionBestaetigt = z.version_bestaetigt; try { localStorage.setItem('version-bestaetigt', versionBestaetigt); } catch { /* nur Anzeige */ } }
     zeigeVersionskarte();
   } catch (f) {
     return; // offline: alte Zahl bleibt
@@ -3381,7 +3387,7 @@ function starteLive() {
   quelle = new EventSource('/api/ereignisse');
   quelle.onopen = () => { sendeAusgang(); };
   quelle.onmessage = (ev) => {
-    if (String(ev.data).startsWith('gedaechtnis')) ladeZaehler();
+    if (String(ev.data).startsWith('gedaechtnis') || ev.data === 'version') ladeZaehler();
     clearTimeout(ladeTimer);
     ladeTimer = setTimeout(() => aktuell?.neuLaden?.(), 300);
   };

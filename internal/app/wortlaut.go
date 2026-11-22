@@ -186,5 +186,34 @@ func (a *App) handleCounters(w http.ResponseWriter, r *http.Request) {
 	tj, _ := a.DB.TrashedJobs(0)
 	tp, _ := a.DB.TrashedPlannings(0)
 	writeJSON(w, 200, map[string]any{"vorschlaege": n, "update": a.AvailableUpdate(), "papierkorb": len(tj) + len(tp),
-		"version": strings.Fields(a.Version + " ")[0], "kanal": a.installedChannel(), "joplin": a.Cfg.JoplinEnabled, "audio_unbekannt": len(a.orphans())})
+		"version": strings.Fields(a.Version + " ")[0], "kanal": a.installedChannel(), "joplin": a.Cfg.JoplinEnabled, "audio_unbekannt": len(a.orphans()),
+		"version_bestaetigt": a.confirmedVersion()})
+}
+
+// versionConfirmedKey: zuletzt bestätigte Version „<version>|<kanal>“ – für alle Geräte gemeinsam (ein Nutzer).
+const versionConfirmedKey = "version-bestaetigt"
+
+// runningVersion: laufende Version mit Kanal, so wie sie bestätigt wird.
+func (a *App) runningVersion() string {
+	return strings.Fields(a.Version + " ")[0] + "|" + a.installedChannel()
+}
+
+// confirmedVersion: bestätigte Version; beim ersten Mal gilt die laufende als bestätigt (keine Karte nach der Einrichtung).
+func (a *App) confirmedVersion() string {
+	v, _ := a.DB.Get(versionConfirmedKey)
+	if v == "" {
+		v = a.runningVersion()
+		a.DB.Set(versionConfirmedKey, v)
+	}
+	return v
+}
+
+// handleVersionConfirm: „Bestätigen“ auf der Karte nach einem Update – gilt für alle Geräte.
+func (a *App) handleVersionConfirm(w http.ResponseWriter, r *http.Request) {
+	if err := a.DB.Set(versionConfirmedKey, a.runningVersion()); err != nil {
+		writeErr(w, 500, "speicher", "Datenbankfehler")
+		return
+	}
+	a.hub.send("version")
+	writeJSON(w, 200, map[string]any{"version_bestaetigt": a.runningVersion()})
 }
