@@ -7,6 +7,12 @@ Version numbers X.Y.Z:
 - **Y** – a new feature (e.g. appointments, multiple languages, theme choice with day/night mode).
 - **Z** – all other UI changes and small bug fixes; safe to install or roll back at any time.
 
+## [1.33.1] - 2026-11-22
+
+### Changed
+- Versions are shown as plain X.Y.Z with a fixed channel badge (stable, beta, nightly) – on the update page, in backups, in the menu and in the update card; nightlies show their build time instead of the number suffix.
+- GitHub release titles read "X.Y.Z stable", "X.Y.Z beta" or "X.Y.Z nightly"; the tag keeps its suffix only to stay unique.
+
 ## [1.33.0] - 2026-11-22
 
 ### New

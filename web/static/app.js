@@ -2258,7 +2258,7 @@ async function zeigeStatus() {
         <div class="pfadzeile leise"><span class="pfad">${esc(p.pfad)}</span>${p.fehler ? '' : T`<span class="frei">frei ${groesse(p.frei)} von ${groesse(p.gesamt)}</span>`}</div>
         ${p.fehler ? T`<div class="hinweis schlecht">nicht lesbar: ${esc(p.fehler)}</div>` : ''}</div>`).join('')}</div></details>`;
     const joplin = !s.joplin.aktiv ? tx('ausgeschaltet') : s.joplin.fehler ? T`<strong>Fehler:</strong> ${esc(s.joplin.fehler)}` : T`erreichbar${s.joplin.offene_planungen ? T`, ${s.joplin.offene_planungen} Planung(en) noch nicht übertragen` : ''}`;
-    const updateKarte = neueVersion ? T`<a class="karte updatekarte" href="/status/update">${updateSymbol}<span><strong>Update ${esc(neueVersion)} verfügbar</strong><br><span class="leise">Änderungen ansehen und installieren</span></span></a>` : '';
+    const updateKarte = neueVersion ? T`<a class="karte updatekarte" href="/status/update">${updateSymbol}<span><strong>Update ${esc(versionNr(neueVersion))} verfügbar</strong><br><span class="leise">Änderungen ansehen und installieren</span></span></a>` : '';
     seite.innerHTML = T`${statusReiter('status')}<h1>Status</h1>${updateKarte}
       ${s.fehlgeschlagen ? T`<div class="hinweis schlecht">${s.fehlgeschlagen} Auftrag/Aufträge dauerhaft fehlgeschlagen.</div>` : T('<div class="hinweis gut">Keine fehlgeschlagenen Aufträge.</div>')}
       ${(s.audio_unbekannt || []).length ? T`<h2>Aufnahmen ohne Eintrag <span class="zaehler fehler">${s.audio_unbekannt.length}</span></h2>
@@ -2748,20 +2748,20 @@ async function zeigeUpdate(teil) {
       const neueste = r === liste[0];
       const knopf = u.installierbar && !r.installiert
         ? T`<button class="btn klein${neueste ? ' haupt' : ''}" data-installieren="${esc(r.version)}"${laeuft ? ' disabled' : ''}>Installieren</button>` : '';
-      return T`<div class="karte versionzeile"><div class="versionkopf"><strong>${esc(r.version)}</strong>
+      return T`<div class="karte versionzeile"><div class="versionkopf"><span class="versionzeile1"><span class="badge neutral">${esc(tx(r.kanal))}</span><strong>${esc(versionNr(r.version))}</strong></span>
           ${r.installiert ? T('<span class="badge fertig">installiert</span>') : ''}${neueste ? '<span class="badge neutral">latest</span>' : ''}${r.neu ? '<span class="badge in_arbeit">new</span>' : ''}${r.vorhanden && !r.installiert ? T('<span class="badge neutral" title="Liegt lokal vor, Wechsel ohne Download">lokal</span>') : ''}
-          <span class="leise">${esc(r.datum || '')}</span></div>
+          <span class="leise">${esc(versionZeit(r.version) || r.datum || '')}</span></div>
         <div class="versionknoepfe"><button class="btn klein" data-log="${esc(r.version)}">Änderungen</button>${knopf}</div></div>`;
     };
     const kopf = T`<h1>Updates</h1>
       <nav class="btn-group unter" aria-label="Updates">${[['updates', tx('Updates')], ['backups', tx('Backups')]].map(([k, n]) => T`<button class="btn${k === reiter ? ' aktiv' : ''}" data-reiter="${k}" aria-pressed="${k === reiter}">${n}${k === 'backups' ? ` <span class="zaehler still">${(u.backups || []).length}</span>` : ''}</button>`).join('')}</nav>
       ${status}${u.fehler ? T`<div class="hinweis warn">${esc(u.fehler)}</div>` : ''}`;
-    const updates = T`<div class="karte versionzeile aktuell"><div class="versionkopf"><span class="leise">Installiert</span><span class="versionzeile1"><span class="badge neutral">${esc(tx(u.aktuell_kanal || ''))}</span><strong class="versiongross">${esc(u.aktuell)}</strong></span></div>
+    const updates = T`<div class="karte versionzeile aktuell"><div class="versionkopf"><span class="leise">Installiert</span><span class="versionzeile1"><span class="badge neutral">${esc(tx(u.aktuell_kanal || ''))}</span><strong class="versiongross">${esc(versionNr(u.aktuell))}</strong></span>${versionZeit(u.aktuell) ? T`<span class="leise">${esc(versionZeit(u.aktuell))}</span>` : ''}</div>
         <div class="versionknoepfe"><button class="btn klein" data-log="">Änderungen</button></div></div>
       <h2>Kanal</h2>
       <nav class="btn-group unter" aria-label="Kanal">${(u.kanaele || []).map((k) => T`<button class="btn${k === u.kanal ? ' aktiv' : ''}" data-kanal="${k}" aria-pressed="${k === u.kanal}">${k}${u.kanal_neu?.[k] ? T` <span class="kanalneu" title="Neuere Version als die installierte">${updateSymbol}</span>` : ''}</button>`).join('')}</nav>
       <p class="leise">${esc(KANAL_TEXT[u.kanal] || '')}</p>
-      ${wechsel ? T`<div class="hinweis warn">${esc(tx('Installiert ist {0} aus {1}. Zum Wechsel auf {2} die neueste Version dort installieren.', u.aktuell, tx(u.aktuell_kanal), u.kanal))}</div>` : ''}
+      ${wechsel ? T`<div class="hinweis warn">${esc(tx('Installiert ist {0} aus {1}. Zum Wechsel auf {2} die neueste Version dort installieren.', versionNr(u.aktuell), tx(u.aktuell_kanal), u.kanal))}</div>` : ''}
       ${liste.length ? (alle ? liste : liste.slice(0, 3)).map(zeile).join('') : u.fehler ? '' : T('<p class="leise">In diesem Kanal gibt es noch keine Version.</p>')}
       ${!alle && liste.length > 3 ? T`<div class="leiste"><button class="btn" data-mehr-versionen="1">Mehr (${liste.length - 3})</button></div>` : ''}
       ${liste.length && !liste.some((r) => r.neu) ? T('<p class="leise">Keine neuere Version als die installierte in diesem Kanal.</p>') : ''}
@@ -2792,11 +2792,11 @@ async function zeigeUpdate(teil) {
       ${(u.backups || []).length ? T`<p class="backupsumme"><strong>${u.backups.length}</strong> Backups · <strong>${groesse(u.backups.reduce((n, st) => n + (st.groesse || 0), 0))}</strong> belegt</p>` : ''}
       <p class="leise">Jedes Backup enthält Datenbank mit allen Einstellungen, Version und Kanal. Wiederherstellen spielt die Daten ein und installiert die Version aus dem Backup; was seitdem dazukam, fehlt danach. Der jetzige Stand wird vorher gesichert.</p>
       ${(u.backups || []).length ? u.backups.map((st) => T`<div class="karte backupzeile"><div class="backupinfo">
-          <span class="versionzeile1">${st.kanal ? T`<span class="badge neutral">${esc(tx(st.kanal))}</span>` : ''}<strong>${esc(st.version)}</strong></span>
+          <span class="versionzeile1">${st.kanal ? T`<span class="badge neutral">${esc(tx(st.kanal))}</span>` : ''}<strong>${esc(versionNr(st.version))}</strong></span>
           <span class="leise backupzeit">${esc(new Date(st.zeit).toLocaleString(LOCALE, { day: '2-digit', month: '2-digit', year: new Date(st.zeit).getFullYear() === new Date().getFullYear() ? undefined : '2-digit', hour: '2-digit', minute: '2-digit' }))} · ${esc(ART[st.art] || st.art)}${st.audio ? T` · mit Aufnahmen` : ''}</span></div>
         <div class="backupknoepfe">${st.groesse ? T`<span class="leise backupgroesse">${groesse(st.groesse)}</span>` : ''}
           ${st.alt ? '<span class="symbolplatz"></span>' : T`<a class="btn klein rund symbol" href="/api/backups/${encodeURIComponent(st.name)}" download aria-label="${esc(tx('Herunterladen'))}" title="${esc(tx('Herunterladen'))}">${SYM_LADEN}</a>`}
-          ${st.wiederherstellbar ? (u.installierbar ? T`<button class="btn klein rund symbol" data-restore="${esc(st.name)}" data-version="${esc(st.version)}" aria-label="${esc(tx('Wiederherstellen'))}" title="${esc(tx('Wiederherstellen'))}"${laeuft ? ' disabled' : ''}>${SYM_ZURUECK}</button>` : '')
+          ${st.wiederherstellbar ? (u.installierbar ? T`<button class="btn klein rund symbol" data-restore="${esc(st.name)}" data-version="${esc(versionNr(st.version))}" aria-label="${esc(tx('Wiederherstellen'))}" title="${esc(tx('Wiederherstellen'))}"${laeuft ? ' disabled' : ''}>${SYM_ZURUECK}</button>` : '')
     : T('<span class="leise">unvollständig</span>')}</div></div>`).join('') : T('<p class="leise">Noch keine Backups.</p>')}`;
     seite.innerHTML = kopf + (reiter === 'backups' ? backups : updates);
   };
@@ -2817,7 +2817,7 @@ async function zeigeUpdate(teil) {
     if (!b || !u) return;
     if (b.dataset.log !== undefined) {
       const r = (u.versionen || []).find((x) => x.version === b.dataset.log);
-      return r ? zeigeLog(r.version, r.aenderungen) : zeigeLog(u.aktuell, u.aktuell_aenderungen);
+      return r ? zeigeLog(T`${versionNr(r.version)} · ${tx(r.kanal)}`, r.aenderungen) : zeigeLog(T`${versionNr(u.aktuell)} · ${tx(u.aktuell_kanal || '')}`, u.aktuell_aenderungen);
     }
     if (b.dataset.reiter) {
       reiter = b.dataset.reiter;
@@ -2851,7 +2851,7 @@ async function zeigeUpdate(teil) {
         return warte((s) => (s.status || '').startsWith('done'));
       }
       const ziel = b.dataset.installieren;
-      if (!ziel || !confirm(tx('Version {0} installieren? Die Datenbank wird vorher gesichert, der Dienst startet neu.', ziel))) { b.disabled = false; return; }
+      if (!ziel || !confirm(tx('Version {0} installieren? Die Datenbank wird vorher gesichert, der Dienst startet neu.', `${versionNr(ziel)} (${tx(u.kanal)})`))) { b.disabled = false; return; }
       await api('/api/update', { method: 'POST', body: { version: ziel } });
       melde(tx('Update angestoßen'));
       return warte((s) => s.aktuell === ziel);
@@ -3291,12 +3291,12 @@ function maleMenue() {
   nav.innerHTML = T`<div class="menuekopf"><span class="marke">Sprachnotizen</span><button type="button" class="btn klein rund" data-menue-zu aria-label="Menü schließen">×</button></div>
     ${teile.map((t) => T`<div class="menuegruppe">${link('menuehaupt', { ...t, an: bereich === t.id })}${t.unter.map((u) => link('menueunter', u)).join('')}</div>`).join('')}
     <div class="menuegruppe"><button type="button" class="menueunter abmelden" data-menue-abmelden><span>Abmelden</span></button></div>
-    <div class="menuefuss"><div class="menuefusszeile">${appVersion ? T`<a href="/status/update">Version ${esc(appVersion)}</a>` : '<span></span>'}<a class="themeknopf" href="/status/darstellung" title="Theme" aria-label="Theme"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 3a9 9 0 0 0 0 18z" fill="currentColor"/></svg></a></div></div>`;
+    <div class="menuefuss"><div class="menuefusszeile">${appVersion ? T`<a href="/status/update">Version ${esc(versionNr(appVersion))}${appKanal ? ` · ${esc(tx(appKanal))}` : ''}</a>` : '<span></span>'}<a class="themeknopf" href="/status/darstellung" title="Theme" aria-label="Theme"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 3a9 9 0 0 0 0 18z" fill="currentColor"/></svg></a></div></div>`;
   const punkt = menueKnopf.querySelector('.punkt');
   punkt.hidden = !neueVersion && !offeneVorschlaege && !audioFehler;
   punkt.classList.toggle('vorschlag', !neueVersion && !audioFehler);
   punkt.classList.toggle('fehler', !!audioFehler);
-  menueKnopf.title = audioFehler ? tx('{0} Aufnahmen ohne Eintrag', audioFehler) : neueVersion ? T`Update ${neueVersion} verfügbar` : offeneVorschlaege ? T`${offeneVorschlaege} Gedächtnis-Vorschläge` : '';
+  menueKnopf.title = audioFehler ? tx('{0} Aufnahmen ohne Eintrag', audioFehler) : neueVersion ? T`Update ${versionNr(neueVersion)} verfügbar` : offeneVorschlaege ? T`${offeneVorschlaege} Gedächtnis-Vorschläge` : '';
 }
 menueKnopf.onclick = () => { maleMenue(); menue.showModal(); };
 // Breite Bildschirme: Menü fest links sichtbar (nicht modal), ohne Menüknopf; schmal: Klappmenü.
@@ -3322,24 +3322,38 @@ menue.addEventListener('click', async (e) => {
 let offeneVorschlaege = 0;
 const vorschlagZahl = () => (offeneVorschlaege ? ` (${offeneVorschlaege})` : '');
 // Neue Version (Hintergrund-Prüfung alle 4 h): Punkt am Menüknopf, Pfeil an „Updates“, Hinweiskarte auf der Statusseite.
-let neueVersion = '', papierkorbZahl = 0, audioFehler = 0, appVersion = lokal('app-version');
+let neueVersion = '', papierkorbZahl = 0, audioFehler = 0, appVersion = lokal('app-version'), appKanal = lokal('app-kanal');
 const updateSymbol = T('<svg class="updatesymbol" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="11" fill="currentColor"/><path d="M12 17V7m-4.5 4.5L12 7l4.5 4.5" fill="none" stroke="var(--flaeche)" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>');
+// Versionsnummer ohne Kanal-Endung: der Kanal steht als Badge daneben, Builds unterscheidet das Datum.
+const versionNr = (v) => String(v || '').replace(/-(beta|nightly)\.\d+$/, '');
+const versionKanal = (v) => (String(v || '').match(/-(beta|nightly)\.\d+$/) || [])[1] || '';
+// Build-Zeit einer Nightly (Endung JJJJMMTTHHMM) als Text, sonst ''.
+const versionZeit = (v) => {
+  const m = String(v || '').match(/-nightly\.(\d{4})(\d\d)(\d\d)(\d\d)(\d\d)$/);
+  return m ? new Date(Date.UTC(+m[1], m[2] - 1, +m[3], +m[4], +m[5])).toLocaleString(LOCALE, { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
+};
+// Version mit festem Kanal-Badge (stable/beta/nightly) und bei Nightlies der Build-Zeit.
+const versionHtml = (v, kanal) => {
+  const k = kanal || versionKanal(v), z = versionZeit(v);
+  return T`${k ? T`<span class="badge neutral">${esc(tx(k))}</span> ` : ''}<span class="versionnr">${esc(versionNr(v))}</span>${z ? T` <span class="leise">${esc(z)}</span>` : ''}`;
+};
 // Neue Version seit dem letzten Öffnen (z. B. automatisches Update): Karte über jeder Seite, bis sie bestätigt ist.
 // Je Gerät; beim allerersten Öffnen gilt die laufende Version als bestätigt.
 function zeigeVersionskarte() {
   const karte = document.getElementById('versionskarte');
   if (!appVersion) return;
+  const jetzt = `${appVersion}|${appKanal}`;
+  const merke = () => { try { localStorage.setItem('version-bestaetigt', jetzt); } catch { /* nur Anzeige */ } };
   const alt = lokal('version-bestaetigt');
-  if (!alt) { try { localStorage.setItem('version-bestaetigt', appVersion); } catch { /* nur Anzeige */ } return; }
-  karte.hidden = alt === appVersion;
+  if (!alt) return merke();
+  karte.hidden = alt === jetzt;
   if (karte.hidden) return;
-  karte.innerHTML = T`<div class="versionszeile">${updateSymbol}<div><strong>${tx('App aktualisiert')}</strong><div class="versionswechsel">${esc(alt)} → ${esc(appVersion)}</div><a href="/status/update">${tx('Änderungen ansehen')}</a></div></div>
+  const [altV, altK] = alt.split('|');
+  karte.innerHTML = T`<div class="versionszeile">${updateSymbol}<div><strong>${tx('App aktualisiert')}</strong><div class="versionswechsel"><div>${versionHtml(altV, altK)}</div><div>→ ${versionHtml(appVersion, appKanal)}</div></div><a href="/status/update">${tx('Änderungen ansehen')}</a></div></div>
     <button type="button" class="btn haupt gross" data-version-ok>${tx('Bestätigen')}</button>`;
-  karte.querySelector('[data-version-ok]').onclick = () => {
-    try { localStorage.setItem('version-bestaetigt', appVersion); } catch { /* nur Anzeige */ }
-    karte.hidden = true;
-  };
+  karte.querySelector('[data-version-ok]').onclick = () => { merke(); karte.hidden = true; };
 }
+
 async function ladeZaehler() {
   try {
     const z = await api('/api/zaehler');
@@ -3349,7 +3363,7 @@ async function ladeZaehler() {
     audioFehler = z.audio_unbekannt || 0;
     joplinAktiv = !!z.joplin;
     try { localStorage.setItem('joplin-aktiv', joplinAktiv ? '1' : '0'); } catch { /* nur Anzeige */ }
-    if (z.version) { appVersion = z.version; try { localStorage.setItem('app-version', appVersion); } catch { /* nur Anzeige */ } }
+    if (z.version) { appVersion = z.version; appKanal = z.kanal || ''; try { localStorage.setItem('app-version', appVersion); localStorage.setItem('app-kanal', appKanal); } catch { /* nur Anzeige */ } }
     zeigeVersionskarte();
   } catch (f) {
     return; // offline: alte Zahl bleibt

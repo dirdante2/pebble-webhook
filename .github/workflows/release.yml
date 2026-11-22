@@ -1,4 +1,5 @@
 # Builds and publishes releases for the three update channels:
+# Release titles: "X.Y.Z stable|beta|nightly" – the tag keeps its suffix only to stay unique.
 #   nightly – every push to main: X.Y.Z-nightly.YYYYMMDDHHMM (VERSION file + build time), pre-release, newest 10 kept
 #   beta    – tag vX.Y.Z-beta.N: pre-release, notes from the RELEASES.md section X.Y.Z-beta.N (required)
 #   stable  – tag vX.Y.Z: release, notes from the RELEASES.md section X.Y.Z (required)
@@ -78,7 +79,9 @@ jobs:
           V="${{ steps.meta.outputs.version }}"
           FLAGS=()
           [ "${{ steps.meta.outputs.prerelease }}" = true ] && FLAGS+=(--prerelease --latest=false)
-          gh release create "v$V" out/* --title "$V" --notes-file notes.md --target "$GITHUB_SHA" "${FLAGS[@]}"
+          # Titel: Nummer ohne Kanal-Endung plus fester Kanal (stable/beta/nightly); Builds unterscheidet das Datum.
+          case "$V" in *-nightly.*) CH=nightly ;; *-beta.*) CH=beta ;; *) CH=stable ;; esac
+          gh release create "v$V" out/* --title "${V%%-*} $CH" --notes-file notes.md --target "$GITHUB_SHA" "${FLAGS[@]}"
 
       - name: Keep the newest 10 nightlies
         if: ${{ !startsWith(github.ref, 'refs/tags/') }}
