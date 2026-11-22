@@ -2743,6 +2743,7 @@ async function zeigeUpdate(teil) {
       ${letzt ? (letzt[2] === 'ok' ? T`<p class="leise">${esc(tx('Letzter Lauf: {0}', letzt[1]))}</p>` : T`<div class="hinweis schlecht">${esc(tx('Letztes geplantes Backup fehlgeschlagen ({0}): {1}', letzt[1], letzt[3]))}</div>`) : ''}
       <div class="leiste"><button class="btn haupt" data-sichern="1">Jetzt sichern</button></div>
       <h2>Backups</h2>
+      ${(u.backups || []).length ? T`<p class="backupsumme"><strong>${u.backups.length}</strong> Backups · <strong>${groesse(u.backups.reduce((n, st) => n + (st.groesse || 0), 0))}</strong> belegt</p>` : ''}
       <p class="leise">Jedes Backup enthält Datenbank mit allen Einstellungen, Version und Kanal. Wiederherstellen spielt die Daten ein und installiert die Version aus dem Backup; was seitdem dazukam, fehlt danach. Der jetzige Stand wird vorher gesichert.</p>
       ${(u.backups || []).length ? u.backups.map((st) => T`<div class="karte backupzeile"><div class="backupinfo">
           <span class="versionzeile1">${st.kanal ? T`<span class="badge neutral">${esc(tx(st.kanal))}</span>` : ''}<strong>${esc(st.version)}</strong></span>

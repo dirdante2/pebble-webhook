@@ -91,17 +91,22 @@ func (a *App) backups() []backupEntry {
 		}
 		dir := filepath.Join(a.Cfg.DataDir, "backup", e.Name())
 		_, errBin := os.Stat(filepath.Join(dir, "pebble-webhook"))
-		db, errDB := os.Stat(filepath.Join(dir, "pebble.db"))
+		_, errDB := os.Stat(filepath.Join(dir, "pebble.db"))
 		channel := ""
 		if b, err := os.ReadFile(filepath.Join(dir, "kanal")); err == nil {
 			channel = strings.TrimSpace(string(b))
 		} else if _, ch, ok := parseVersion(m[1]); ok && ch != "stable" {
 			channel = ch
 		}
-		var size int64
-		if errDB == nil {
-			size = db.Size()
-		}
+		var size int64 // ganzer Ordner (mit Programm)
+		filepath.WalkDir(dir, func(_ string, d fs.DirEntry, err error) error {
+			if err == nil && d.Type().IsRegular() {
+				if fi, err := d.Info(); err == nil {
+					size += fi.Size()
+				}
+			}
+			return nil
+		})
 		out = append(out, backupEntry{Name: e.Name(), Version: m[1], Channel: channel, Kind: "update", At: at.UnixMilli(),
 			Size: size, Restorable: errBin == nil && errDB == nil, Legacy: true})
 	}
