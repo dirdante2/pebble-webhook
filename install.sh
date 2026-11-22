@@ -6,6 +6,9 @@
 # Options:
 #   --version X.Y.Z     install this release instead of the latest stable one (also X.Y.Z-beta.N,
 #                       X.Y.Z-nightly.N, or an older version to roll back; the database is backed up first)
+#   --channel NAME      install the newest release of stable, beta or nightly (moving release of that name):
+#                         curl -fsSL https://github.com/dirdante2/pebble-webhook/releases/download/nightly/install.sh \
+#                           | sudo bash -s -- --channel nightly
 #   --repo OWNER/NAME   GitHub repository to download from (default below)
 #   --source            build from the source tree this script lives in (needs Go)
 #   --binary PATH       install a prebuilt binary (used by deploy/deploy.sh)
@@ -17,6 +20,7 @@ set -euo pipefail
 
 REPO="dirdante2/pebble-webhook"
 VERSION=""
+CHANNEL=""
 MODE="release"
 BINARY=""
 DATA_DIR="/var/lib/pebble-webhook"
@@ -27,6 +31,8 @@ STATUS="$DATA_DIR/update-status"
 while [ $# -gt 0 ]; do
     case "$1" in
         --version) VERSION="${2#v}"; shift 2 ;;
+        --channel) CHANNEL="$2"; shift 2
+            [[ "$CHANNEL" =~ ^(stable|beta|nightly)$ ]] || { echo "--channel must be stable, beta or nightly" >&2; exit 2; } ;;
         --repo) REPO="$2"; shift 2 ;;
         --source) MODE="source"; shift ;;
         --binary) MODE="binary"; BINARY="$2"; shift 2 ;;
@@ -128,8 +134,9 @@ case "$MODE" in
         else
             command -v curl >/dev/null || { apt-get update -q && apt-get install -yq curl ca-certificates; }
             if [ -n "$VERSION" ]; then BASE="https://github.com/$REPO/releases/download/v$VERSION"
+            elif [ -n "$CHANNEL" ]; then BASE="https://github.com/$REPO/releases/download/$CHANNEL"
             else BASE="https://github.com/$REPO/releases/latest/download"; fi
-            echo "Downloading pebble-webhook ${VERSION:-latest} ($ARCH) from github.com/$REPO …"
+            echo "Downloading pebble-webhook ${VERSION:-${CHANNEL:-latest}} ($ARCH) from github.com/$REPO …"
             curl -fsSL -o "$TMP/pebble-webhook-linux-$ARCH" "$BASE/pebble-webhook-linux-$ARCH"
             curl -fsSL -o "$TMP/install.sh" "$BASE/install.sh"
             curl -fsSL -o "$TMP/SHA256SUMS" "$BASE/SHA256SUMS"
@@ -357,7 +364,7 @@ fi
 
 # Remember where this version came from (shown with its backup later).
 case "$MODE" in
-    release) case "$VERSION" in *-beta.*) CH=beta ;; *-nightly.*) CH=nightly ;; "") CH=stable ;; *) CH=stable ;; esac ;;
+    release) case "$VERSION" in *-beta.*) CH=beta ;; *-nightly.*) CH=nightly ;; "") CH="${CHANNEL:-stable}" ;; *) CH=stable ;; esac ;;
     restore) CH="$(cat "$TMP/kanal" 2>/dev/null || echo lokal)" ;;
     keep) if [ -z "$DONE_NOTE" ]; then CH="$R_CHANNEL"; else CH="$(cat "$DATA_DIR/installed-channel" 2>/dev/null || echo lokal)"; fi ;;
     *) CH=lokal ;;

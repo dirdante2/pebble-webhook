@@ -13,6 +13,13 @@
 curl -fsSL https://raw.githubusercontent.com/dirdante2/pebble-webhook/main/install.sh | sudo bash
 ```
 
+Another channel instead of stable (always its newest build):
+
+```bash
+curl -fsSL https://github.com/dirdante2/pebble-webhook/releases/download/beta/install.sh | sudo bash -s -- --channel beta
+curl -fsSL https://github.com/dirdante2/pebble-webhook/releases/download/nightly/install.sh | sudo bash -s -- --channel nightly
+```
+
 The installer
 
 1. downloads the latest release for your architecture and checks it against `SHA256SUMS`,

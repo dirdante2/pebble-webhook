@@ -1,5 +1,7 @@
 # Builds and publishes releases for the three update channels:
 # Release titles: "X.Y.Z stable|beta|nightly" – the tag keeps its suffix only to stay unique.
+# Each build also replaces the moving release "stable", "beta" or "nightly" (same files), so
+# releases/download/<channel>/… always points at the newest version of that channel.
 #   nightly – every push to main: X.Y.Z-nightly.YYYYMMDDHHMM (VERSION file + build time), pre-release, newest 10 kept
 #   beta    – tag vX.Y.Z-beta.N: pre-release, notes from the RELEASES.md section X.Y.Z-beta.N (required)
 #   stable  – tag vX.Y.Z: release, notes from the RELEASES.md section X.Y.Z (required)
@@ -82,6 +84,20 @@ jobs:
           # Titel: Nummer ohne Kanal-Endung plus fester Kanal (stable/beta/nightly); Builds unterscheidet das Datum.
           case "$V" in *-nightly.*) CH=nightly ;; *-beta.*) CH=beta ;; *) CH=stable ;; esac
           gh release create "v$V" out/* --title "${V%%-*} $CH" --notes-file notes.md --target "$GITHUB_SHA" "${FLAGS[@]}"
+
+      - name: Move the channel release (stable / beta / nightly)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          V="${{ steps.meta.outputs.version }}"
+          case "$V" in *-nightly.*) CH=nightly ;; *-beta.*) CH=beta ;; *) CH=stable ;; esac
+          # Fester Tag je Kanal: .../releases/download/<kanal>/… ist immer die neueste Version des Kanals.
+          gh release delete "$CH" --yes --cleanup-tag 2>/dev/null || true
+          gh release create "$CH" out/* --title "$CH – always the newest ($V)" --target "$GITHUB_SHA" --prerelease --latest=false \
+            --notes "Moving release: always the newest $CH build, currently v$V. Install or update with
+          \`curl -fsSL https://github.com/${{ github.repository }}/releases/download/$CH/install.sh | sudo bash -s -- --channel $CH\`"
 
       - name: Keep the newest 10 nightlies
         if: ${{ !startsWith(github.ref, 'refs/tags/') }}

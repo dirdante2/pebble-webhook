@@ -7,6 +7,12 @@ Version numbers X.Y.Z:
 - **Y** – a new feature (e.g. appointments, multiple languages, theme choice with day/night mode).
 - **Z** – all other UI changes and small bug fixes; safe to install or roll back at any time.
 
+## [1.33.3] - 2026-11-22
+
+### New
+- Moving releases `stable`, `beta` and `nightly` on GitHub: each build replaces the one of its channel, so `releases/download/<channel>/…` always holds the newest version of that channel.
+- Installer option `--channel stable|beta|nightly` installs the newest release of that channel, e.g. `curl -fsSL https://github.com/dirdante2/pebble-webhook/releases/download/nightly/install.sh | sudo bash -s -- --channel nightly`.
+
 ## [1.33.2] - 2026-11-22
 
 ### Fixed
