@@ -101,6 +101,12 @@ textarea { min-height: 9rem; resize: vertical; }
 .btn.aktiv .updatesymbol { color: var(--akzent-text); }
 .btn.aktiv .updatesymbol path { stroke: var(--akzent); }
 .updatekarte { display: flex; align-items: center; gap: .7rem; color: inherit; text-decoration: none; border-left: 4px solid var(--gut); }
+.versionskarte { border-left: 4px solid var(--gut); margin: 1rem auto 0; width: calc(100% - 2rem); max-width: 44rem; box-sizing: border-box; display: grid; gap: .8rem; }
+.versionskarte[hidden] { display: none; }
+.versionszeile { display: flex; gap: .7rem; align-items: flex-start; }
+.versionszeile .updatesymbol { width: 1.8rem; height: 1.8rem; flex: none; color: var(--gut); }
+.versionswechsel { font-variant-numeric: tabular-nums; overflow-wrap: anywhere; margin: .15rem 0 .3rem; }
+.versionskarte .btn.gross { width: 100%; padding: .85rem 1rem; font-size: 1.05rem; }
 .updatekarte .updatesymbol { width: 1.8rem; height: 1.8rem; flex: none; }
 .aufnahme { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; margin: .5rem 0; }
 .punkt { width: .7rem; height: .7rem; border-radius: 50%; background: var(--schlecht); animation: puls 1s infinite; }

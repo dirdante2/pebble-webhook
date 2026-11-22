@@ -3324,6 +3324,22 @@ const vorschlagZahl = () => (offeneVorschlaege ? ` (${offeneVorschlaege})` : '')
 // Neue Version (Hintergrund-Prüfung alle 4 h): Punkt am Menüknopf, Pfeil an „Updates“, Hinweiskarte auf der Statusseite.
 let neueVersion = '', papierkorbZahl = 0, audioFehler = 0, appVersion = lokal('app-version');
 const updateSymbol = T('<svg class="updatesymbol" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="11" fill="currentColor"/><path d="M12 17V7m-4.5 4.5L12 7l4.5 4.5" fill="none" stroke="var(--flaeche)" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>');
+// Neue Version seit dem letzten Öffnen (z. B. automatisches Update): Karte über jeder Seite, bis sie bestätigt ist.
+// Je Gerät; beim allerersten Öffnen gilt die laufende Version als bestätigt.
+function zeigeVersionskarte() {
+  const karte = document.getElementById('versionskarte');
+  if (!appVersion) return;
+  const alt = lokal('version-bestaetigt');
+  if (!alt) { try { localStorage.setItem('version-bestaetigt', appVersion); } catch { /* nur Anzeige */ } return; }
+  karte.hidden = alt === appVersion;
+  if (karte.hidden) return;
+  karte.innerHTML = T`<div class="versionszeile">${updateSymbol}<div><strong>${tx('App aktualisiert')}</strong><div class="versionswechsel">${esc(alt)} → ${esc(appVersion)}</div><a href="/status/update">${tx('Änderungen ansehen')}</a></div></div>
+    <button type="button" class="btn haupt gross" data-version-ok>${tx('Bestätigen')}</button>`;
+  karte.querySelector('[data-version-ok]').onclick = () => {
+    try { localStorage.setItem('version-bestaetigt', appVersion); } catch { /* nur Anzeige */ }
+    karte.hidden = true;
+  };
+}
 async function ladeZaehler() {
   try {
     const z = await api('/api/zaehler');
@@ -3334,6 +3350,7 @@ async function ladeZaehler() {
     joplinAktiv = !!z.joplin;
     try { localStorage.setItem('joplin-aktiv', joplinAktiv ? '1' : '0'); } catch { /* nur Anzeige */ }
     if (z.version) { appVersion = z.version; try { localStorage.setItem('app-version', appVersion); } catch { /* nur Anzeige */ } }
+    zeigeVersionskarte();
   } catch (f) {
     return; // offline: alte Zahl bleibt
   }

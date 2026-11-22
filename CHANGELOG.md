@@ -7,6 +7,14 @@ Version numbers X.Y.Z:
 - **Y** – a new feature (e.g. appointments, multiple languages, theme choice with day/night mode).
 - **Z** – all other UI changes and small bug fixes; safe to install or roll back at any time.
 
+## [1.33.0] - 2026-11-22
+
+### New
+- After the app was updated (e.g. automatic update), a card on top of every page shows "old → new version" with a link to the changes and a large confirm button; it stays until confirmed (per device).
+
+### Changed
+- Menu and status page show the update icon only when the channel of the running version has a newer release; another chosen channel or an own build shows none.
+
 ## [1.32.0] - 2026-11-22
 
 ### New
