@@ -820,7 +820,7 @@ func (a *App) handleStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out := map[string]any{
-		"version": a.Version, "audio_unbekannt": a.scanAudio(), "auftraege": counts.Total, "audio_dateien": a.audioStats(), "auftraege_teile": map[string]int{"audio": counts.Audio, "web": counts.Web, "nur_text": counts.TextOnly, "notizen": counts.Notes, "runden": counts.Rounds}, "warteschlange": counts.Open, "fehlgeschlagen": counts.Failed,
+		"version": a.Version, "audio_unbekannt": a.scanAudio(), "auftraege": counts.Total, "audio_dateien": a.audioStats(), "auftraege_teile": map[string]int{"audio": counts.Audio, "web": counts.Web, "nur_text": counts.TextOnly, "notizen": counts.Notes, "runden": counts.Rounds, "termine": counts.Appointments, "planungen": counts.Plannings}, "warteschlange": counts.Open, "fehlgeschlagen": counts.Failed,
 		"einstellungen": map[string]any{
 			"halten": a.Cfg.TriggerSingle, "doppelklick_halten": a.Cfg.TriggerDouble, "transkription": a.Cfg.Transcription,
 			"transkriptions_modell": a.Cfg.TranscribeModel, "recherche_modell": a.Cfg.PlanModel,

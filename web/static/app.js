@@ -2215,18 +2215,34 @@ async function zeigeStatus() {
     if (aktuell?.name !== 'status') return;
     const abo = await pushAbo().catch(() => null);
     const pushDa = 'PushManager' in window;
+    // Eingänge: zugeklappt Zahl, Aufnahmen und nur Auffälliges (in Arbeit, Fehler); aufgeklappt Kreis nach Art.
     const eingaenge = (s) => {
       const t = s.auftraege_teile || {}, d = s.audio_dateien || {};
-      const kachel = (n, name, art = '') => T`<div class="zahlkachel${art}"><strong>${n}</strong><span>${esc(name)}</span></div>`;
-      return T`<div class="karte eingangskarte"><div class="zeile"><strong>Eingänge</strong><span class="eingangszahl">${s.auftraege}</span></div>
-        ${d.anzahl ? T`<div class="leise">${d.anzahl} Aufnahmen${d.schnitt_groesse ? T` · Ø ${groesse(d.schnitt_groesse)}` : ''}${d.schnitt_sekunden ? T` · Ø ${dauer(d.schnitt_sekunden)} · zusammen ${dauer(d.gesamt_sekunden)}` : ''}</div>` : ''}
-        <div class="zahlkacheln">${kachel(t.notizen ?? 0, tx('Notizen'))}${kachel(t.runden ?? 0, tx('Planungsrunden'))}${kachel(t.web ?? 0, tx('Web-Antworten'))}${kachel(t.nur_text ?? 0, tx('nur Pebble-Text'))}
-          ${kachel(s.warteschlange, tx('in Arbeit'), s.warteschlange ? ' warn' : '')}${kachel(s.fehlgeschlagen, tx('fehlgeschlagen'), s.fehlgeschlagen ? ' schlecht' : '')}</div></div>`;
+      const kachel = (n, name, art) => T`<div class="zahlkachel ${art}"><strong>${n}</strong><span>${esc(name)}</span></div>`;
+      const auffaellig = [s.warteschlange ? kachel(s.warteschlange, tx('in Arbeit'), 'warn') : '', s.fehlgeschlagen ? kachel(s.fehlgeschlagen, tx('fehlgeschlagen'), 'schlecht') : ''].join('');
+      const teile = [[t.notizen - t.termine, tx('Notizen'), 'diktat'], [t.termine, tx('Termine'), 'termin'], [t.runden, tx('Planungsrunden'), 'planung']].filter(([n]) => n > 0);
+      const summe = teile.reduce((a, [n]) => a + n, 0);
+      // Ring aus Kreisbögen (SVG-Attribute statt Inline-Styles: die CSP erlaubt keine style-Attribute).
+      let start = 0;
+      const ring = summe ? teile.map(([n, , art]) => {
+        const anteil = (n / summe) * 100, bogen = T`<circle class="ring ${art}" r="15.9155" cx="18" cy="18" stroke-dasharray="${anteil} ${100 - anteil}" stroke-dashoffset="${25 - start}"/>`;
+        start += anteil;
+        return bogen;
+      }).join('') : '';
+      return T`<details class="karte eingangskarte"><summary><span class="zeile"><strong>Eingänge</strong><span class="eingangszahl">${s.auftraege}</span></span>
+          ${d.anzahl ? T`<span class="leise">${d.anzahl} Aufnahmen${d.schnitt_groesse ? T` · Ø ${groesse(d.schnitt_groesse)}` : ''}${d.schnitt_sekunden ? T` · Ø ${dauer(d.schnitt_sekunden)} · zusammen ${dauer(d.gesamt_sekunden)}` : ''}</span>` : ''}
+          ${auffaellig ? T`<span class="zahlkacheln">${auffaellig}</span>` : ''}</summary>
+        <div class="eingangsdetail">${summe ? T`<svg class="ringdiagramm" viewBox="-2 -2 40 40" role="img" aria-label="${esc(teile.map(([n, name]) => `${n} ${name}`).join(', '))}">${ring}</svg>` : ''}
+          <ul class="legende">${teile.map(([n, name, art]) => T`<li><span class="punkt-farbe ${art}"></span>${esc(name)}<strong>${n}</strong></li>`).join('')}</ul></div>
+        <p class="leise">Planungen: ${t.planungen} (${t.runden} Runden) · ${t.audio} mit Aufnahme · ${t.web} Web-Antworten${t.nur_text ? T` · ${t.nur_text} nur Pebble-Text` : ''}</p></details>`;
     };
-    const speicher = (p) => T`<div class="karte speicherkarte"><div class="zeile"><strong>${esc(tx(p.name))}</strong>${p.fehler ? '' : T`<span>${groesse(p.belegt)}</span>`}</div>
-      <div class="pfadzeile leise"><span class="pfad">${esc(p.pfad)}</span>${p.fehler ? '' : T`<span class="frei">frei ${groesse(p.frei)} von ${groesse(p.gesamt)}</span>`}</div>
-      ${p.fehler ? T`<div class="hinweis schlecht">nicht lesbar: ${esc(p.fehler)}</div>` : T`<meter class="balken${p.knapp ? ' knapp' : ''}" min="0" max="${p.gesamt}" value="${p.gesamt - p.frei}" aria-label="${esc(tx('{0} von {1} belegt', groesse(p.gesamt - p.frei), groesse(p.gesamt)))}"></meter>
-        ${p.knapp ? T('<div class="hinweis schlecht">Knapp – neue Aufnahmen werden abgewiesen.</div>') : ''}`}</div>`;
+    // Speicher: zugeklappt je Ablage Name, belegt und Balken; aufgeklappt Pfad und frei/gesamt.
+    const balken = (p) => T`<meter class="balken${p.knapp ? ' knapp' : ''}" min="0" max="${p.gesamt}" value="${p.gesamt - p.frei}" aria-label="${esc(tx('{0} von {1} belegt', groesse(p.gesamt - p.frei), groesse(p.gesamt)))}"></meter>`;
+    const speicher = (liste) => T`<details class="karte speicherkarte"><summary>${liste.map((p) => T`<span class="speicherzeile"><span class="zeile"><strong>${esc(tx(p.name))}</strong>${p.fehler ? T`<span class="schlecht">nicht lesbar</span>` : T`<span>${groesse(p.belegt)}</span>`}</span>
+        ${p.fehler ? '' : balken(p)}${p.knapp ? T('<span class="hinweis schlecht">Knapp – neue Aufnahmen werden abgewiesen.</span>') : ''}</span>`).join('')}</summary>
+      <div class="speicherdetails">${liste.map((p) => T`<div><strong>${esc(tx(p.name))}</strong>
+        <div class="pfadzeile leise"><span class="pfad">${esc(p.pfad)}</span>${p.fehler ? '' : T`<span class="frei">frei ${groesse(p.frei)} von ${groesse(p.gesamt)}</span>`}</div>
+        ${p.fehler ? T`<div class="hinweis schlecht">nicht lesbar: ${esc(p.fehler)}</div>` : ''}</div>`).join('')}</div></details>`;
     const joplin = !s.joplin.aktiv ? tx('ausgeschaltet') : s.joplin.fehler ? T`<strong>Fehler:</strong> ${esc(s.joplin.fehler)}` : T`erreichbar${s.joplin.offene_planungen ? T`, ${s.joplin.offene_planungen} Planung(en) noch nicht übertragen` : ''}`;
     const updateKarte = neueVersion ? T`<a class="karte updatekarte" href="/status/update">${updateSymbol}<span><strong>Update ${esc(neueVersion)} verfügbar</strong><br><span class="leise">Änderungen ansehen und installieren</span></span></a>` : '';
     seite.innerHTML = T`${statusReiter('status')}<h1>Status</h1>${updateKarte}
@@ -2239,8 +2255,7 @@ async function zeigeStatus() {
       ${s.joplin.aktiv ? T`<dl><dt>Joplin</dt><dd>${joplin}</dd></dl>` : ''}
       ${s.joplin.aktiv ? T('<div class="leiste"><button class="btn klein" data-a="pruefen">Joplin jetzt prüfen</button></div>') : ''}
       ${eingaenge(s)}
-      <h2>Speicher</h2>
-      ${(s.speicher || []).map(speicher).join('')}
+      ${(s.speicher || []).length ? speicher(s.speicher) : ''}
       ${s.probleme.length ? T`<h2>Aufträge mit Fehlern</h2>${s.fehlgeschlagen ? T('<div class="leiste"><button class="btn gefahr" data-a="fehler-weg">Alle fehlerhaften löschen</button></div>') : ''}${s.probleme.map(karte).join('')}` : ''}
       <h2>Benachrichtigungen</h2>
       ${!pushDa ? T('<p class="leise">Dieser Browser unterstützt keine Benachrichtigungen. Auf dem iPhone die App erst zum Home-Bildschirm hinzufügen.</p>')

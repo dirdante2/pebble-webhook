@@ -7,6 +7,16 @@ Version numbers X.Y.Z:
 - **Y** – a new feature (e.g. appointments, multiple languages, theme choice with day/night mode).
 - **Z** – all other UI changes and small bug fixes; safe to install or roll back at any time.
 
+## [1.31.11] - 2026-11-22
+
+### Changed
+- Status page: storage as one collapsed card – data, recordings and backups each with size used and a bar; tapping it shows path and free/total per location. Heading "Storage" removed.
+
+## [1.31.10] - 2026-11-22
+
+### Changed
+- Status page: the entries card is collapsed by default – total, recordings and only what needs attention (in progress, failed; hidden when zero). Tapping it opens a ring chart of notes, appointments and planning rounds with a legend, plus plannings, recordings and web answers.
+
 ## [1.31.9] - 2026-11-22
 
 ### Changed

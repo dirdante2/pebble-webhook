@@ -893,14 +893,17 @@ type Counts struct {
 	Total, Open, Failed  int
 	Audio, Web, TextOnly int // mit Aufnahme; Text-Antworten aus der Web-App; nur Text der Pebble-App
 	Notes, Rounds        int // Notizen; Planungsrunden
+	Appointments         int // Notizen mit Termin (in Notes enthalten)
+	Plannings            int // Planungen (je mit einer oder mehreren Runden)
 }
 
 func (s *Store) Counts() (c Counts, err error) {
 	err = s.DB.QueryRow(`SELECT COUNT(*), COALESCE(SUM(state != ? AND failed = 0),0), COALESCE(SUM(failed),0),
 		COALESCE(SUM(audio_path != ''),0), COALESCE(SUM(audio_path = '' AND source = 'web'),0), COALESCE(SUM(audio_path = '' AND source != 'web' AND is_test = 0),0),
-		COALESCE(SUM(mode = 'diktat'),0), COALESCE(SUM(mode = 'planung'),0)
+		COALESCE(SUM(mode = 'diktat'),0), COALESCE(SUM(mode = 'planung'),0), COALESCE(SUM(mode = 'diktat' AND termin_at > 0),0),
+		(SELECT COUNT(*) FROM plannings WHERE deleted_at = 0)
 		FROM jobs WHERE deleted_at = 0`, StateDone).
-		Scan(&c.Total, &c.Open, &c.Failed, &c.Audio, &c.Web, &c.TextOnly, &c.Notes, &c.Rounds)
+		Scan(&c.Total, &c.Open, &c.Failed, &c.Audio, &c.Web, &c.TextOnly, &c.Notes, &c.Rounds, &c.Appointments, &c.Plannings)
 	return
 }
 
