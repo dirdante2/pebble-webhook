@@ -7,6 +7,11 @@ Version numbers X.Y.Z:
 - **Y** – a new feature (e.g. appointments, multiple languages, theme choice with day/night mode).
 - **Z** – all other UI changes and small bug fixes; safe to install or roll back at any time.
 
+## [1.31.2] - 2026-11-22
+
+### Changed
+- Backups list: date (without year in the current year) and reason on one line; "before update" shortened to "Update".
+
 ## [1.31.1] - 2026-11-22
 
 ### Changed

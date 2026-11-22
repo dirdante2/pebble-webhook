@@ -2728,7 +2728,7 @@ async function zeigeUpdate(teil) {
       <p class="leise">${esc(u.quelle || 'aus')}${u.geprueft ? T` · geprüft ${zeit(u.geprueft)}` : ''}</p>
       <div class="leiste"><button class="btn" data-pruefen="1">Jetzt prüfen</button></div>`;
     const b = u.backup || {};
-    const ART = { update: tx('vor Update'), plan: tx('geplant'), manuell: tx('manuell') };
+    const ART = { update: tx('Update'), plan: tx('geplant'), manuell: tx('manuell') };
     const PLAN_NAME = { 'täglich': tx('täglich'), 'wöchentlich': tx('wöchentlich (montags)'), monatlich: tx('monatlich (am 1.)'), aus: tx('aus') };
     const letzt = (b.letzt || '').match(/^(\S+ \S+) (ok|fehler) ?(.*)$/);
     const konf = (name, wert, key) => T`<div class="konfzeile ohnehilfe"><span class="konfname">${esc(name)}</span>
@@ -2746,8 +2746,7 @@ async function zeigeUpdate(teil) {
       <p class="leise">Jedes Backup enthält Datenbank mit allen Einstellungen, Version und Kanal. Wiederherstellen spielt die Daten ein und installiert die Version aus dem Backup; was seitdem dazukam, fehlt danach. Der jetzige Stand wird vorher gesichert.</p>
       ${(u.backups || []).length ? u.backups.map((st) => T`<div class="karte backupzeile"><div class="backupinfo">
           <span class="versionzeile1">${st.kanal ? T`<span class="badge neutral">${esc(tx(st.kanal))}</span>` : ''}<strong>${esc(st.version)}</strong></span>
-          <span class="leise">${zeit(st.zeit)}</span>
-          <span class="leise">${esc(ART[st.art] || st.art)}${st.audio ? T` · mit Aufnahmen` : ''}</span></div>
+          <span class="leise backupzeit">${esc(new Date(st.zeit).toLocaleString(LOCALE, { day: '2-digit', month: '2-digit', year: new Date(st.zeit).getFullYear() === new Date().getFullYear() ? undefined : '2-digit', hour: '2-digit', minute: '2-digit' }))} · ${esc(ART[st.art] || st.art)}${st.audio ? T` · mit Aufnahmen` : ''}</span></div>
         <div class="backupknoepfe">${st.groesse ? T`<span class="leise backupgroesse">${groesse(st.groesse)}</span>` : ''}
           ${st.alt ? '<span class="symbolplatz"></span>' : T`<a class="btn klein rund symbol" href="/api/backups/${encodeURIComponent(st.name)}" download aria-label="${esc(tx('Herunterladen'))}" title="${esc(tx('Herunterladen'))}">${SYM_LADEN}</a>`}
           ${st.wiederherstellbar ? (u.installierbar ? T`<button class="btn klein rund symbol" data-restore="${esc(st.name)}" data-version="${esc(st.version)}" aria-label="${esc(tx('Wiederherstellen'))}" title="${esc(tx('Wiederherstellen'))}"${laeuft ? ' disabled' : ''}>${SYM_ZURUECK}</button>` : '')

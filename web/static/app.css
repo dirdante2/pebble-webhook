@@ -595,6 +595,7 @@ dialog.logblatt h2 { margin-top: 0; }
 .btn.aktiv .kanalneu .updatesymbol { color: var(--akzent-text); }
 .backupzeile { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: .75rem; }
 .backupinfo { display: flex; flex-direction: column; gap: .15rem; min-width: 0; }
+.backupzeit { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .backupinfo strong { overflow-wrap: anywhere; }
 .backupknoepfe { display: flex; align-items: center; gap: .4rem; }
 .backupgroesse { text-align: right; white-space: nowrap; margin-right: .2rem; }
