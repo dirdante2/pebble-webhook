@@ -948,7 +948,7 @@ func (a *App) handlePebbleSetup(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{
 		"url": a.Cfg.PublicURL + "/hook", "header": a.Cfg.HookTokenHeader, "token": a.Cfg.HookToken, "secret": a.Cfg.HookSecret,
 		"halten": a.Cfg.TriggerSingle, "doppelklick_halten": a.Cfg.TriggerDouble, "transkription": a.Cfg.Transcription,
-		"max_mb": a.Cfg.HookMaxBytes >> 20,
+		"max_mb": a.Cfg.HookMaxBytes >> 20, "ring_header": a.Cfg.RingIDHeader, "ring_id": a.activeRingID(),
 	})
 }
 

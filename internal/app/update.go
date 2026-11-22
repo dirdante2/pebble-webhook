@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime/debug"
 	"sort"
 	"strconv"
 	"strings"
@@ -36,6 +37,32 @@ type release struct {
 	URL     string `json:"url"`
 
 	Published string `json:"veroeffentlicht,omitempty"` // Zeitpunkt (RFC 3339), zum Sortieren
+	Commit    string `json:"commit,omitempty"`          // Git-Commit des Builds (target_commitish), sonst leer
+}
+
+// shaRe: voller Commit-Hash (GitHub setzt target_commitish auf den Commit, aus dem gebaut wurde).
+var shaRe = regexp.MustCompile(`^[0-9a-f]{40}$`)
+
+// buildCommit: Commit, aus dem die laufende Version gebaut wurde (Go stempelt ihn beim Bauen im Git-Repo ein);
+// leer, wenn unbekannt oder mit nicht eingecheckten Änderungen gebaut – dann ist der Stand mit keinem Release gleich.
+func buildCommit() string {
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return ""
+	}
+	rev, modified := "", false
+	for _, st := range info.Settings {
+		switch st.Key {
+		case "vcs.revision":
+			rev = st.Value
+		case "vcs.modified":
+			modified = st.Value == "true"
+		}
+	}
+	if modified || !shaRe.MatchString(rev) {
+		return ""
+	}
+	return rev
 }
 
 type updateCache struct {
@@ -51,19 +78,21 @@ type updateCache struct {
 // updateInterval: so oft prüft der Dienst im Hintergrund auf neue Versionen.
 const updateInterval = 4 * time.Hour
 
-// Versionen: X.Y.Z (stable), X.Y.Z-beta.N, X.Y.Z-nightly.N (N = Zeitstempel des Builds).
-// Endung: -stable (ab 1.33.5, vorher ohne), -beta.N, -nightly.JJJJMMTTHHMM.
-var semverRe = regexp.MustCompile(`^v?(\d+)\.(\d+)\.(\d+)(?:-(stable)|-(beta|nightly)\.(\d+))?$`)
+// Versionen: X.Y.Z-stable, X.Y.Z-beta, X.Y.Z-nightly – jede Nummer gibt es je Kanal nur einmal.
+// Ältere Formen werden weiter erkannt: X.Y.Z (stable), X.Y.Z-beta.N, X.Y.Z-nightly.JJJJMMTTHHMM.
+// Eigene Builds tragen X.Y.Z.A: A ist ein lokaler Build-Zähler (deploy.sh, nie in Git oder Releases).
+var semverRe = regexp.MustCompile(`^v?(\d+)\.(\d+)\.(\d+)(?:\.(\d+))?(?:-(stable|beta|nightly)(?:\.(\d+))?)?$`)
 
 // minRollback: ältere Versionen lesen die Einstellungen noch aus der env-Datei.
-var minRollback = version{1, 14, 0, 2, 0}
+var minRollback = version{1, 14, 0, 2, 0, 0}
 
-// version ist sortierbar: Basis, dann Rang (nightly < beta < stable), dann Nummer der Vorabversion.
-type version [5]int
+// version ist sortierbar: Basis, dann Rang (nightly < beta < stable), dann Nummer der Vorabversion, dann der
+// lokale Build-Zähler A.
+type version [6]int
 
 var channelRank = map[string]int{"nightly": 0, "beta": 1, "stable": 2}
 
-// parseVersion zerlegt „1.15.0-beta.2“ (auch „1.13.1 (Build …)“); ok=false bei „dev“ u. ä.
+// parseVersion zerlegt „1.15.0-beta.2“ (auch „1.13.1 (Build …)“, eigener Build „1.33.11.3“ → Kanal lokal); ok=false bei „dev“ u. ä.
 func parseVersion(v string) (out version, channel string, ok bool) {
 	f := strings.Fields(v)
 	if len(f) == 0 {
@@ -77,11 +106,15 @@ func parseVersion(v string) (out version, channel string, ok bool) {
 		out[i], _ = strconv.Atoi(m[i+1])
 	}
 	channel = m[5]
-	if channel == "" {
+	switch {
+	case channel == "" && m[4] != "":
+		channel = "lokal" // X.Y.Z.A: eigener Build
+	case channel == "":
 		channel = "stable"
 	}
 	out[3] = channelRank[channel]
 	out[4], _ = strconv.Atoi(m[6])
+	out[5], _ = strconv.Atoi(m[4])
 	return out, channel, true
 }
 
@@ -151,6 +184,7 @@ func (a *App) channelList(releases []release, channel string) []channelRelease {
 	current := strings.Fields(a.Version + " ")[0]
 	curChannel := a.installedChannel()
 	since := a.installedTime(releases)
+	commit := buildCommit()
 	list := []channelRelease{}
 	for _, rel := range releases {
 		if rel.Channel != channel {
@@ -160,11 +194,14 @@ func (a *App) channelList(releases []release, channel string) []channelRelease {
 		if v.less(minRollback) {
 			continue
 		}
-		// Installiert ist sie nur, wenn Nummer und Kanal stimmen (jeder Kanal kann dieselbe Nummer tragen).
+		// Installiert ist sie, wenn Nummer und Kanal stimmen (jeder Kanal kann dieselbe Nummer tragen).
 		installed := rel.Version == current && rel.Channel == curChannel
+		// Derselbe Commit (z. B. stable und nightly aus demselben Stand, oder ein eigener Build davon) ist
+		// inhaltlich gleich: nie „neuer“, egal wann er veröffentlicht wurde.
+		same := commit != "" && rel.Commit == commit
 		newer := false
 		if t, err := time.Parse(time.RFC3339, rel.Published); err == nil && !since.IsZero() {
-			newer = !installed && t.After(since.Add(time.Minute)) // eine Minute Spielraum für Build und Veröffentlichung
+			newer = !installed && !same && t.After(since.Add(time.Minute)) // eine Minute Spielraum für Build und Veröffentlichung
 		}
 		_, errCached := os.Stat(filepath.Join(a.Cfg.DataDir, "releases", rel.Version, "SHA256SUMS"))
 		list = append(list, channelRelease{release: rel, Installed: installed, Newer: newer, Cached: errCached == nil})
@@ -297,6 +334,7 @@ func (a *App) fetchReleases(ctx context.Context, force bool) ([]release, string)
 		URL        string `json:"html_url"`
 		Published  string `json:"published_at"`
 		Draft      bool   `json:"draft"`
+		Target     string `json:"target_commitish"`
 		Prerelease bool   `json:"prerelease"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
@@ -315,7 +353,11 @@ func (a *App) fetchReleases(ctx context.Context, force bool) ([]release, string)
 		if len(date) >= 10 {
 			date = date[:10]
 		}
-		fresh = append(fresh, release{Version: strings.TrimPrefix(r.Tag, "v"), Channel: channel, Date: date, Notes: r.Body, URL: r.URL, Published: r.Published})
+		commit := ""
+		if shaRe.MatchString(r.Target) {
+			commit = r.Target
+		}
+		fresh = append(fresh, release{Version: strings.TrimPrefix(r.Tag, "v"), Channel: channel, Date: date, Notes: r.Body, URL: r.URL, Published: r.Published, Commit: commit})
 	}
 	sort.SliceStable(fresh, func(i, k int) bool { return fresh[i].Published > fresh[k].Published })
 	// Gespeichert werden je Kanal nur die letzten keepPerChannel Releases; ältere sind nicht relevant.
@@ -518,7 +560,7 @@ func (a *App) handleUpdateInstall(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Version string `json:"version"`
 	}
-	if readJSON(r, &in) != nil || !semverRe.MatchString(in.Version) {
+	if readJSON(r, &in) != nil || !semverRe.MatchString(in.Version) || semverRe.FindStringSubmatch(in.Version)[4] != "" {
 		writeErr(w, 400, "ungueltig", "Version fehlt")
 		return
 	}

@@ -1,0 +1,277 @@
+package store
+
+import (
+	"database/sql"
+	"errors"
+)
+
+// Ringe und ihre Aufnahmen: der Pebble Index 01 hat einen fest verbauten Akku für rund 12–15 Stunden Aufnahme.
+// Jede Aufnahme wird beim Eingang mit Länge, Art und Geste protokolliert; die Zeile bleibt, wenn Eintrag oder
+// Audiodatei gelöscht werden. Ein Ringwechsel beendet den aktiven Ring und startet einen neuen; alte Ringe
+// bleiben zum Vergleich.
+const ringSchema = `
+CREATE TABLE IF NOT EXISTS rings (
+  nr INTEGER PRIMARY KEY AUTOINCREMENT,
+  hardware_id TEXT NOT NULL DEFAULT '',
+  started_at INTEGER NOT NULL,
+  ended_at INTEGER NOT NULL DEFAULT 0,
+  capacity_seconds INTEGER NOT NULL,
+  warned_level INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS ring_recordings (
+  job_id TEXT PRIMARY KEY,
+  ring_nr INTEGER NOT NULL,
+  hardware_id TEXT NOT NULL DEFAULT '',
+  received_at INTEGER NOT NULL,
+  seconds REAL NOT NULL DEFAULT -1,
+  seconds_source TEXT NOT NULL DEFAULT '',
+  mode TEXT NOT NULL DEFAULT '',
+  trigger TEXT NOT NULL DEFAULT '',
+  origin TEXT NOT NULL DEFAULT 'eingang'
+);
+CREATE INDEX IF NOT EXISTS ring_recordings_ring ON ring_recordings(ring_nr, received_at);
+`
+
+// Herkunft der Sekunden einer Aufnahme.
+const (
+	SecondsFile     = "datei"      // aus dem Kopf der Audiodatei (mvhd)
+	SecondsOpenAI   = "openai"     // von der Transkription gemeldete Länge
+	SecondsCost     = "kosten"     // aus den Transkriptionskosten zurückgerechnet
+	SecondsEstimate = "schaetzung" // geschätzt (z. B. früher gelöschte leere Aufnahmen)
+)
+
+type Ring struct {
+	Nr              int64  `json:"nr"`
+	HardwareID      string `json:"hardware_id"`
+	StartedAt       int64  `json:"start"`
+	EndedAt         int64  `json:"ende"`
+	CapacitySeconds int64  `json:"kapazitaet_sekunden"`
+	WarnedLevel     int    `json:"gewarnt"`
+}
+
+type RingRecording struct {
+	JobID         string
+	RingNr        int64
+	HardwareID    string
+	ReceivedAt    int64
+	Seconds       float64 // -1 = unbekannt
+	SecondsSource string
+	Mode          string
+	Trigger       string
+	Origin        string // eingang | nachtrag | schaetzung
+}
+
+const ringCols = `nr, hardware_id, started_at, ended_at, capacity_seconds, warned_level`
+
+func scanRing(r scanner) (*Ring, error) {
+	var g Ring
+	err := r.Scan(&g.Nr, &g.HardwareID, &g.StartedAt, &g.EndedAt, &g.CapacitySeconds, &g.WarnedLevel)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	return &g, err
+}
+
+// ActiveRing: der laufende Ring (ended_at = 0); ErrNotFound, wenn es noch keinen gibt.
+func (s *Store) ActiveRing() (*Ring, error) {
+	return scanRing(s.DB.QueryRow(`SELECT ` + ringCols + ` FROM rings WHERE ended_at = 0 ORDER BY nr DESC LIMIT 1`))
+}
+
+func (s *Store) RingByNr(nr int64) (*Ring, error) {
+	return scanRing(s.DB.QueryRow(`SELECT `+ringCols+` FROM rings WHERE nr = ?`, nr))
+}
+
+// Rings: alle Ringe, neuester zuerst.
+func (s *Store) Rings() ([]*Ring, error) {
+	rows, err := s.DB.Query(`SELECT ` + ringCols + ` FROM rings ORDER BY nr DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*Ring
+	for rows.Next() {
+		g, err := scanRing(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, g)
+	}
+	return out, rows.Err()
+}
+
+// StartRing beendet den aktiven Ring zum Zeitpunkt at und legt einen neuen an, der dort beginnt. Aufnahmen ab at
+// mit der neuen Hardware-ID (moveHW, leer = keine) wandern zum neuen Ring.
+func (s *Store) StartRing(hardwareID string, at, capacitySeconds int64, moveHW string) (*Ring, error) {
+	tx, err := s.DB.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	var old sql.NullInt64
+	if err := tx.QueryRow(`SELECT nr FROM rings WHERE ended_at = 0 ORDER BY nr DESC LIMIT 1`).Scan(&old); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return nil, err
+	}
+	if _, err := tx.Exec(`UPDATE rings SET ended_at = ? WHERE ended_at = 0`, at); err != nil {
+		return nil, err
+	}
+	res, err := tx.Exec(`INSERT INTO rings (hardware_id, started_at, capacity_seconds, created_at) VALUES (?, ?, ?, ?)`,
+		hardwareID, at, capacitySeconds, Now())
+	if err != nil {
+		return nil, err
+	}
+	nr, err := res.LastInsertId()
+	if err != nil {
+		return nil, err
+	}
+	if old.Valid && moveHW != "" {
+		if _, err := tx.Exec(`UPDATE ring_recordings SET ring_nr = ? WHERE ring_nr = ? AND hardware_id = ? AND received_at >= ?`,
+			nr, old.Int64, moveHW, at); err != nil {
+			return nil, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return s.RingByNr(nr)
+}
+
+// UpdateRing ändert Hardware-ID und Kapazität eines Rings; die Warnstufe wird neu bewertet.
+func (s *Store) UpdateRing(nr int64, hardwareID string, capacitySeconds int64) error {
+	res, err := s.DB.Exec(`UPDATE rings SET hardware_id = ?, capacity_seconds = ?, warned_level = 0 WHERE nr = ?`, hardwareID, capacitySeconds, nr)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// UpdateRingID setzt nur die Hardware-ID (erste ID aus dem Header).
+func (s *Store) UpdateRingID(nr int64, hardwareID string) error {
+	_, err := s.DB.Exec(`UPDATE rings SET hardware_id = ? WHERE nr = ?`, hardwareID, nr)
+	return err
+}
+
+func (s *Store) SetRingWarned(nr int64, level int) error {
+	_, err := s.DB.Exec(`UPDATE rings SET warned_level = ? WHERE nr = ?`, level, nr)
+	return err
+}
+
+// AddRecording protokolliert eine Aufnahme; je Eintrag nur einmal (false = gab es schon).
+func (s *Store) AddRecording(r RingRecording) (bool, error) {
+	if r.Origin == "" {
+		r.Origin = "eingang"
+	}
+	res, err := s.DB.Exec(`INSERT OR IGNORE INTO ring_recordings (job_id, ring_nr, hardware_id, received_at, seconds, seconds_source, mode, trigger, origin)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, r.JobID, r.RingNr, r.HardwareID, r.ReceivedAt, r.Seconds, r.SecondsSource, r.Mode, r.Trigger, r.Origin)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
+}
+
+// SetRecordingSeconds trägt eine Länge nach, wenn keine bekannt ist oder nur eine ungenauere (Kosten, Schätzung).
+func (s *Store) SetRecordingSeconds(jobID string, seconds float64, source string) error {
+	_, err := s.DB.Exec(`UPDATE ring_recordings SET seconds = ?, seconds_source = ? WHERE job_id = ? AND (seconds < 0 OR seconds_source IN (?, ?))`,
+		seconds, source, jobID, SecondsCost, SecondsEstimate)
+	return err
+}
+
+func (s *Store) RecordingCount() (n int, err error) {
+	err = s.DB.QueryRow(`SELECT COUNT(*) FROM ring_recordings`).Scan(&n)
+	return
+}
+
+// RingTotals: Summen eines Rings.
+type RingTotals struct {
+	Count         int                `json:"anzahl"`
+	Seconds       float64            `json:"sekunden"`     // Summe der bekannten Längen
+	Unknown       int                `json:"ohne_dauer"`   // Aufnahmen ohne Länge
+	Estimated     int                `json:"geschaetzt"`   // Aufnahmen mit geschätzter Länge
+	SecondsByMode map[string]float64 `json:"sekunden_art"` // diktat | planung | …
+	CountByMode   map[string]int     `json:"anzahl_art"`
+	ByTrigger     map[string]int     `json:"gesten"`
+	First, Last   int64              `json:"-"`
+}
+
+func (s *Store) RingTotals(nr int64) (*RingTotals, error) {
+	t := &RingTotals{SecondsByMode: map[string]float64{}, CountByMode: map[string]int{}, ByTrigger: map[string]int{}}
+	rows, err := s.DB.Query(`SELECT mode, trigger, COUNT(*), COALESCE(SUM(CASE WHEN seconds >= 0 THEN seconds END), 0),
+		SUM(seconds < 0), SUM(seconds_source = ?), MIN(received_at), MAX(received_at)
+		FROM ring_recordings WHERE ring_nr = ? GROUP BY mode, trigger`, SecondsEstimate, nr)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var mode, trig string
+		var n, unknown, est int
+		var secs float64
+		var first, last int64
+		if err := rows.Scan(&mode, &trig, &n, &secs, &unknown, &est, &first, &last); err != nil {
+			return nil, err
+		}
+		t.Count += n
+		t.Seconds += secs
+		t.Unknown += unknown
+		t.Estimated += est
+		t.SecondsByMode[mode] += secs
+		t.CountByMode[mode] += n
+		t.ByTrigger[trig] += n
+		if t.First == 0 || first < t.First {
+			t.First = first
+		}
+		if last > t.Last {
+			t.Last = last
+		}
+	}
+	return t, rows.Err()
+}
+
+// RingSecondsSince: bekannte Sekunden eines Rings ab since (für die Vorhersage).
+func (s *Store) RingSecondsSince(nr, since int64) (secs float64, err error) {
+	err = s.DB.QueryRow(`SELECT COALESCE(SUM(seconds), 0) FROM ring_recordings WHERE ring_nr = ? AND seconds >= 0 AND received_at >= ?`, nr, since).Scan(&secs)
+	return
+}
+
+// RecordingRow: eine Aufnahme mit Zeitpunkt, für die Monatsauswertung (Monate rechnet die App in Ortszeit).
+type RecordingRow struct {
+	ReceivedAt int64
+	Seconds    float64
+	Mode       string
+}
+
+func (s *Store) RingRecordings(nr int64) ([]RecordingRow, error) {
+	rows, err := s.DB.Query(`SELECT received_at, seconds, mode FROM ring_recordings WHERE ring_nr = ? ORDER BY received_at`, nr)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []RecordingRow
+	for rows.Next() {
+		var r RecordingRow
+		if err := rows.Scan(&r.ReceivedAt, &r.Seconds, &r.Mode); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// LastRecordingHW: Hardware-ID der letzten Aufnahme, die eine mitbrachte, mit Zeitpunkt ("" = keine).
+func (s *Store) LastRecordingHW() (hw string, at int64, err error) {
+	err = s.DB.QueryRow(`SELECT hardware_id, received_at FROM ring_recordings WHERE hardware_id != '' ORDER BY received_at DESC LIMIT 1`).Scan(&hw, &at)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", 0, nil
+	}
+	return
+}
+
+// FirstRecordingWithHW: erste Aufnahme mit dieser Hardware-ID ab since (0 = keine).
+func (s *Store) FirstRecordingWithHW(hw string, since int64) (at int64, err error) {
+	err = s.DB.QueryRow(`SELECT COALESCE(MIN(received_at), 0) FROM ring_recordings WHERE hardware_id = ? AND received_at >= ?`, hw, since).Scan(&at)
+	return
+}

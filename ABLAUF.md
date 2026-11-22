@@ -269,3 +269,13 @@ Token-Routen (alles andere bleibt bei der Passkey-Sitzung, kein Löschen): `GET 
 4. Ansicht öffnen → gespeicherte Antwort aus IndexedDB (`antworten`) sofort zeigen → `GET /api/…` mit If-None-Match → 304 ohne Inhalt oder neuer Stand (gzip) → zeigen und speichern.
 5. Live: SSE `/api/ereignisse` meldet Änderungen → nur die offene Ansicht fragt nach (ETag).
 6. Audio → erst beim Abspielen (`preload="none"`), danach 30 Tage im Browser-Cache.
+
+## Ring-Lebensdauer (seit 1.34.0)
+
+1. Webhook nimmt Aufnahme an → Eintrag gespeichert → Zeile in `ring_recordings` (je Eintrag einmal): aktiver Ring, Ring-ID aus Header `RING_ID_HEADER` (optional), Länge aus dem Dateikopf (sonst aus den Transkriptionskosten), Art, Geste. Test-Events zählen nicht.
+2. Transkription meldet Sekunden → Länge nachgetragen, wenn die Datei keine lieferte.
+3. Löschen von Eintrag oder Audio → Zeile bleibt.
+4. Erste Ring-ID für einen Ring ohne ID → übernommen. Andere ID als der aktive Ring → Hinweis auf allen Seiten, „Ring tauschen anwenden“ (`POST /api/ring/tauschen` mit `uebernehmen`) → neuer Ring ab der ersten Aufnahme mit der neuen ID.
+5. Verbrauch erreicht 60/80/95/100 % der Kapazität → Push, Hinweis auf allen Seiten bis „Bestätigen“ (`POST /api/ring/bestaetigt`); bei 100 % „+30 min“ (`plus`) erhöht die Kapazität dauerhaft.
+6. Von Hand: `/status/ring/tauschen` (Anleitung, ID, Kapazität) → bisheriger Ring endet jetzt. Ring bearbeiten: `PUT /api/ring/{nr}`.
+7. Auswertung `GET /api/ring[?ring=N]`: Summen, Notizen/Planungen, Tastendrücke, Monate, Vorhersage 80/100 % (Mittel der letzten 30 Tage), Vergleich aller Ringe. Erster Start: Ring 1 aus dem Bestand (Einträge samt Papierkorb, Audiodateien ohne Eintrag).

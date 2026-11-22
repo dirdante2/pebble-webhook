@@ -2,8 +2,8 @@
 # Release titles: "X.Y.Z stable|beta|nightly" – the tag keeps its suffix only to stay unique.
 # Each build also replaces the moving release "stable", "beta" or "nightly" (same files), so
 # releases/download/<channel>/… always points at the newest version of that channel.
-#   nightly – every push to main: X.Y.Z-nightly.YYYYMMDDHHMM (VERSION file + build time), pre-release, newest 10 kept
-#   beta    – tag vX.Y.Z-beta.N: pre-release, notes from the RELEASES.md section X.Y.Z-beta.N (required)
+#   nightly – every push to main: vX.Y.Z-nightly (VERSION file; every commit bumps it, an existing number fails the build), pre-release, newest 10 kept
+#   beta    – tag vX.Y.Z-beta: pre-release, notes from the RELEASES.md section X.Y.Z-beta (required)
 #   stable  – tag vX.Y.Z-stable (before 1.33.5: vX.Y.Z): release, notes from the RELEASES.md section X.Y.Z (required)
 name: release
 
@@ -39,17 +39,19 @@ jobs:
           section() { awk -v h="## [$1]" 'index($0, h) == 1 {f=1; next} /^## \[/ {f=0} f' "$2" | sed '/./,$!d'; }
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
             VERSION="${GITHUB_REF_NAME#v}"
-            [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-stable|-beta\.[0-9]+)?$ ]] || { echo "tag must be vX.Y.Z-stable or vX.Y.Z-beta.N"; exit 1; }
+            [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-stable|-beta)?$ ]] || { echo "tag must be vX.Y.Z-stable or vX.Y.Z-beta"; exit 1; }
             # beta and stable: the summarised section from RELEASES.md (required; stable as ## [X.Y.Z])
             section "${VERSION%-stable}" RELEASES.md > notes.md
             [ -s notes.md ] || { echo "RELEASES.md has no section ## [${VERSION%-stable}]"; exit 1; }
-            PRE=$([[ "$VERSION" == *-beta.* ]] && echo true || echo false)
+            PRE=$([[ "$VERSION" == *-beta ]] && echo true || echo false)
           else
-            VERSION="$(cat VERSION)-nightly.$(date -u +%Y%m%d%H%M)"
+            # VERSION is exactly X.Y.Z; the local build counter A (X.Y.Z.A) never belongs in Git
+            grep -qxE '[0-9]+\.[0-9]+\.[0-9]+' VERSION || { echo "VERSION must be X.Y.Z"; exit 1; }
+            VERSION="$(cat VERSION)-nightly"
             # nightly: the CHANGELOG.md section of this version, else the commit messages since the last nightly
             section "$(cat VERSION)" CHANGELOG.md > notes.md
             if [ ! -s notes.md ]; then
-              LAST="$(git tag -l 'v*-nightly.*' --sort=-creatordate | head -1)"
+              LAST="$(git tag -l 'v*-nightly*' --sort=-creatordate | head -1)"
               { echo "Nightly build of ${GITHUB_SHA::7} – untested."; echo
                 git log --no-merges --format='- %s' ${LAST:+$LAST..}HEAD | head -40; } > notes.md
             fi
@@ -82,7 +84,9 @@ jobs:
           FLAGS=()
           [ "${{ steps.meta.outputs.prerelease }}" = true ] && FLAGS+=(--prerelease --latest=false)
           # Titel: Nummer ohne Kanal-Endung plus fester Kanal (stable/beta/nightly); Builds unterscheidet das Datum.
-          case "$V" in *-nightly.*) CH=nightly ;; *-beta.*) CH=beta ;; *) CH=stable ;; esac
+          case "$V" in *-nightly*) CH=nightly ;; *-beta*) CH=beta ;; *) CH=stable ;; esac
+          # Jede Nummer gibt es je Kanal genau einmal; jeder Commit hebt VERSION an. Gibt es sie schon, ist das ein Fehler.
+          if gh release view "v$V" >/dev/null 2>&1; then echo "release v$V exists – VERSION was not bumped" >&2; exit 1; fi
           gh release create "v$V" out/* --title "${V%%-*} $CH" --notes-file notes.md --target "$GITHUB_SHA" "${FLAGS[@]}"
 
       - name: Move the channel release (stable / beta / nightly)
@@ -92,7 +96,7 @@ jobs:
         run: |
           set -euo pipefail
           V="${{ steps.meta.outputs.version }}"
-          case "$V" in *-nightly.*) CH=nightly ;; *-beta.*) CH=beta ;; *) CH=stable ;; esac
+          case "$V" in *-nightly*) CH=nightly ;; *-beta*) CH=beta ;; *) CH=stable ;; esac
           # Fester Tag je Kanal: .../releases/download/<kanal>/… ist immer die neueste Version des Kanals.
           gh release delete "$CH" --yes --cleanup-tag 2>/dev/null || true
           gh release create "$CH" out/* --title "$CH – always the newest ($V)" --target "$GITHUB_SHA" --prerelease --latest=false \
@@ -104,5 +108,5 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
-          gh release list --limit 200 --json tagName,createdAt --jq '.[] | select(.tagName | contains("-nightly.")) | .tagName' \
+          gh release list --limit 200 --json tagName,createdAt --jq '.[] | select(.tagName | contains("-nightly")) | .tagName' \
             | tail -n +11 | xargs -r -n1 gh release delete --yes --cleanup-tag

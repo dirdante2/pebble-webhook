@@ -246,7 +246,7 @@ func Open(path string) (*Store, error) {
 		}
 		return nil, fmt.Errorf("Datenbank beschädigt (quick_check): %w", err)
 	}
-	if _, err := db.Exec(schema); err != nil {
+	if _, err := db.Exec(schema + ringSchema); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("Schema: %w", err)
 	}
@@ -882,6 +882,11 @@ func (s *Store) JobsAsking() ([]*Job, error) {
 // FailedJobs liefert alle dauerhaft fehlgeschlagenen Aufträge (auch leere Aufnahmen).
 func (s *Store) FailedJobs() ([]*Job, error) {
 	return s.queryJobs(`SELECT ` + jobCols + ` FROM jobs WHERE deleted_at = 0 AND failed = 1 ORDER BY received_at`)
+}
+
+// RingJobs: alle Eingänge vom Ring (Webhook und importierte Aufnahmen) samt Papierkorb, ohne Test-Events.
+func (s *Store) RingJobs() ([]*Job, error) {
+	return s.queryJobs(`SELECT ` + jobCols + ` FROM jobs WHERE source IN ('pebble', 'import') AND is_test = 0 ORDER BY received_at`)
 }
 
 func (s *Store) DeleteJob(id string) error {

@@ -133,6 +133,11 @@ func (a *App) handleHook(w http.ResponseWriter, r *http.Request) {
 		j.FailedAt = now
 		j.Mode, j.Failed, j.Error = "unbekannt", true, i18n.Tf("Unbekannte Geste „%s“ – keine Aktion zugeordnet", store.Preview(trigger, 60))
 	}
+	// Ring-ID ist Pflicht: das Test-Event beim Einrichten scheitert ohne gültige ID, damit der Header gesetzt wird.
+	if j.IsTest && !ringIDRe.MatchString(strings.TrimSpace(r.Header.Get(a.Cfg.RingIDHeader))) {
+		hookReply(w, http.StatusBadRequest, "Ring-ID fehlt oder ungültig: Header "+a.Cfg.RingIDHeader+" mit Wert #12345 eintragen")
+		return
+	}
 	if !j.IsTest && len(audio) == 0 && j.PebbleText == "" {
 		hookReply(w, http.StatusBadRequest, "weder Audio noch Transkript")
 		return
@@ -159,8 +164,13 @@ func (a *App) handleHook(w http.ResponseWriter, r *http.Request) {
 		hookReply(w, http.StatusOK, "bereits angenommen")
 		return
 	}
+	ringOK := a.recordRecording(j, strings.TrimSpace(r.Header.Get(a.Cfg.RingIDHeader)))
 	a.changed(j.ID)
 	a.Wake()
+	if !ringOK {
+		hookReply(w, http.StatusOK, "angenommen, aber Ring-ID fehlt oder ungültig (Header "+a.Cfg.RingIDHeader+": #12345)")
+		return
+	}
 	hookReply(w, http.StatusOK, "angenommen")
 }
 

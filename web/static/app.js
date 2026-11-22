@@ -309,6 +309,9 @@ const routen = [
   [/^\/liste\/([0-9a-f]+)\/punkt\/([0-9a-f]+)\/verschieben$/, 'verschieben', zeigeVerschieben],
   [/^\/status$/, 'status', zeigeStatus],
   [/^\/status\/kosten$/, 'kosten', zeigeKosten],
+  [/^\/status\/ring$/, 'ring', zeigeRing],
+  [/^\/status\/ring\/tauschen$/, 'ringTauschen', zeigeRingTauschen],
+  [/^\/status\/ring\/(\d+)\/bearbeiten$/, 'ringBearbeiten', zeigeRingBearbeiten],
   [/^\/status\/papierkorb$/, 'papierkorb', zeigePapierkorb],
   [/^\/status\/gedaechtnis$/, 'gedaechtnis', zeigeGedaechtnis],
   [/^\/status\/gedaechtnis\/neu$/, 'gedaechtnisBearbeiten', () => zeigeGedaechtnisBearbeiten('')],
@@ -1936,6 +1939,11 @@ async function zeigeListen(filter) {
       const sichtbar = ausgeklappt ? (l.punkte || []).filter((p) => !p.erledigt || p.erledigt > d.vergangen_vor) : [];
       return zeile(l) + (sichtbar.length ? T`<div class="lpgruppe">${sichtbar.map(punktHtml).join('')}</div>` : '');
     };
+    // Vergangene Listen sehen aus wie die aktiven: ausgeklappt mit allen (erledigten) Punkten.
+    const mitAllenPunkten = (l) => {
+      const sichtbar = ausgeklappt ? (l.punkte || []) : [];
+      return zeile(l) + (sichtbar.length ? T`<div class="lpgruppe">${sichtbar.map(punktHtml).join('')}</div>` : '');
+    };
     // Je Gruppe ihre Listen; Listen ohne Gruppe unter „Ohne Gruppe“. Gruppen und Listen nach dem jüngsten Punkt, neueste oben.
     // Der Gruppenname öffnet die Gruppe als Unterseite; dort steht kein Gruppenkopf.
     const gruppiert = (listen, fn) => {
@@ -1950,8 +1958,9 @@ async function zeigeListen(filter) {
         return T`<div class="tag gruppenkopf">${projekt ? T`<a class="titelknopf" href="/gruppe/${encodeURIComponent(projekt)}/bearbeiten" aria-label="${esc(tx('Gruppe {0} bearbeiten', projekt))}" title="Gruppe bearbeiten">${STIFT}</a>` : T('<span class="titelknopf platz" aria-hidden="true"></span>')}<a class="gruppenname" href="${gruppenPfad(wert)}" title="Gruppe öffnen">${esc(gruppenTitel(projekt))}</a></div>${ls.map(fn).join('')}`;
       }).join('');
     };
-    // Aktiv: nur Listen mit offenen Punkten; ganz erledigte und leere stehen eingeklappt unter „Vergangen“ (Nutzervorgabe 20.11.2026).
-    const istAktiv = (l) => l.offen > 0;
+    // Aktiv: Listen mit offenen oder kürzlich abgehakten Punkten (LIST_DONE_ACTIVE_MINUTES) – eine eben ganz erledigte
+    // Liste bleibt so lange stehen wie ihre Punkte; ältere ganz erledigte und leere stehen unter „Vergangen“.
+    const istAktiv = (l) => l.offen > 0 || (l.punkte || []).some((p) => p.erledigt && p.erledigt > d.vergangen_vor);
     // Filter nach Gruppe (je Gerät gemerkt): '' = alle, '-' = ohne Gruppe, sonst der Gruppenname.
     const namen = [...new Set(d.listen.map((l) => l.projekt).filter(Boolean))];
     const gruppe = filter && filter !== '-' ? namen.find((n) => n.toLowerCase() === filter.toLowerCase()) : '';
@@ -1959,7 +1968,7 @@ async function zeigeListen(filter) {
     const sichtbar = d.listen.filter(passt);
     const aktiv = sichtbar.filter(istAktiv), vergangen = sichtbar.filter((l) => !istAktiv(l));
     // Titelzeile: links Stift (Gruppe bearbeiten), rechts großes Symbol zum Aus-/Einklappen der offenen Punkte.
-    const klapp = aktiv.length ? T`<button class="titelknopf gross" data-ausklappen="1" aria-pressed="${ausgeklappt}" aria-label="${ausgeklappt ? tx('Offene Punkte einklappen') : tx('Alle offenen Punkte ausklappen')}" title="${ausgeklappt ? tx('Offene Punkte einklappen') : tx('Alle offenen Punkte ausklappen')}">${ausgeklappt ? EINKLAPPEN : AUSKLAPPEN}</button>` : '';
+    const klapp = aktiv.length || (vergangeneZeigen && vergangen.length) ? T`<button class="titelknopf gross" data-ausklappen="1" aria-pressed="${ausgeklappt}" aria-label="${ausgeklappt ? tx('Offene Punkte einklappen') : tx('Alle offenen Punkte ausklappen')}" title="${ausgeklappt ? tx('Offene Punkte einklappen') : tx('Alle offenen Punkte ausklappen')}">${ausgeklappt ? EINKLAPPEN : AUSKLAPPEN}</button>` : '';
     const titel = gruppenTitel(gruppe || filter);
     const kopf = filter
       ? T`${krumen([[tx('Listen'), '/listen'], [titel]])}<div class="titelzeile">${gruppe ? T`<a class="titelknopf" href="/gruppe/${encodeURIComponent(gruppe)}/bearbeiten" aria-label="${esc(tx('Gruppe {0} bearbeiten', gruppe))}" title="Gruppe bearbeiten">${STIFT}</a>` : ''}<h1>${esc(titel)}</h1>${klapp}</div>`
@@ -1967,7 +1976,7 @@ async function zeigeListen(filter) {
     seite.innerHTML = `${kopf}
       ${filter && !sichtbar.length ? T('<p class="leer">Keine Einträge vorhanden.</p>') : !d.listen.length ? T('<p class="leer">Noch keine Liste. Einfach einen Filmtitel oder eine Idee diktieren.</p>') : aktiv.length ? gruppiert(aktiv, mitPunkten) : T('<p class="leer">Alles erledigt.</p>')}
       ${vergangen.length ? T`<div class="leiste"><button class="btn klein" data-vergangen="1">${vergangeneZeigen ? tx('Vergangene ausblenden') : T`Vergangene Listen anzeigen (${vergangen.length})`}</button></div>
-        ${vergangeneZeigen ? T`<h2>Vergangen</h2>${gruppiert(vergangen, zeile)}` : ''}` : ''}`;
+        ${vergangeneZeigen ? T`<h2>Vergangen</h2>${gruppiert(vergangen, mitAllenPunkten)}` : ''}` : ''}`;
   };
   const laden = async (vorab) => {
     try { d = await apiAbgelegt('/api/listen?punkte=1', vorab); } catch (f) {
@@ -2454,11 +2463,13 @@ function achse(max) {
 }
 
 // Gestapelte Säulen je Tag: Diktate unten, Planungen oben, 2 px Abstand, runde Kappe am Ende.
-function saeulen(tage, id, wochentag) {
+// opt (Ring-Auswertung): wert = Format eines Werts, achse = Achse zum Maximum, name = Beschriftung je Säule, titel.
+function saeulen(tage, id, wochentag, opt = {}) {
   const B = 340, H = 170, links = 46, unten = 22, oben = 8;
   const plotB = B - links - 4, plotH = H - unten - oben;
-  const { oben: max, schritte } = achse(Math.max(...tage.map((t) => t.diktat + t.planung)));
+  const { oben: max, schritte } = (opt.achse || achse)(Math.max(...tage.map((t) => t.diktat + t.planung)));
   const stellen = max < 0.1 ? 3 : 2;
+  const wertText = opt.wert || usd, achsText = opt.wert || ((s) => `${s.toLocaleString(LOCALE, { minimumFractionDigits: stellen, maximumFractionDigits: stellen })} $`);
   const band = plotB / tage.length, breite = Math.max(3, Math.min(24, band - 2));
   const y = (v) => oben + plotH - (v / max) * plotH;
   const kappe = (x, yo, h, r) => (h <= 0 ? '' : `M${x},${yo + h}V${yo + Math.min(r, h)}Q${x},${yo} ${x + Math.min(r, breite / 2)},${yo}H${x + breite - Math.min(r, breite / 2)}Q${x + breite},${yo} ${x + breite},${yo + Math.min(r, h)}V${yo + h}Z`);
@@ -2472,13 +2483,186 @@ function saeulen(tage, id, wochentag) {
       marken += T`<path class="s2" d="${kappe(x, y(t.diktat + t.planung), Math.max(hP - luecke, 1), 4)}"/>`;
       if (hD > 0) marken += T`<rect class="s1" x="${x}" y="${y(t.diktat)}" width="${breite}" height="${hD}"/>`;
     } else if (hD > 0) marken += T`<path class="s1" d="${kappe(x, y(t.diktat), hD, 4)}"/>`;
-    treffer += T`<rect class="treffer" data-i="${i}" x="${links + i * band}" y="${oben}" width="${band}" height="${plotH + unten}" tabindex="0" role="img" aria-label="${esc(tx('{0}: Notizen {1}, Planungen {2}', kurzTag(t.tag, true), usd(t.diktat), usd(t.planung)))}"/>`;
+    treffer += T`<rect class="treffer" data-i="${i}" x="${links + i * band}" y="${oben}" width="${band}" height="${plotH + unten}" tabindex="0" role="img" aria-label="${esc(tx('{0}: Notizen {1}, Planungen {2}', opt.name ? opt.name(t) : kurzTag(t.tag, true), wertText(t.diktat), wertText(t.planung)))}"/>`;
     const letzter = i === tage.length - 1 && !wochentag;
-    const name = wochentag ? new Date(`${t.tag}T12:00:00`).toLocaleDateString(LOCALE, { weekday: 'short' }).replace('.', '') : kurzTag(t.tag, false);
+    const name = opt.name ? opt.name(t) : wochentag ? new Date(`${t.tag}T12:00:00`).toLocaleDateString(LOCALE, { weekday: 'short' }).replace('.', '') : kurzTag(t.tag, false);
     if ((tage.length - 1 - i) % jede === 0) achseX += T`<text class="achse" x="${letzter ? B - 4 : links + i * band + band / 2}" y="${H - 6}" text-anchor="${letzter ? 'end' : 'middle'}">${esc(name)}</text>`;
   });
-  const gitter = schritte.map((s) => T`<line class="gitter" x1="${links}" x2="${B - 4}" y1="${y(s)}" y2="${y(s)}"/><text class="achse" x="${links - 6}" y="${y(s) + 4}" text-anchor="end">${s.toLocaleString(LOCALE, { minimumFractionDigits: stellen, maximumFractionDigits: stellen })} $</text>`).join('');
-  return T`<svg class="diagramm" id="${id}" viewBox="0 0 ${B} ${H}" role="group" aria-label="Kosten je Tag in Dollar">${gitter}${marken}${achseX}${treffer}</svg>`;
+  const gitter = schritte.map((s) => T`<line class="gitter" x1="${links}" x2="${B - 4}" y1="${y(s)}" y2="${y(s)}"/><text class="achse" x="${links - 6}" y="${y(s) + 4}" text-anchor="end">${esc(achsText(s))}</text>`).join('');
+  return T`<svg class="diagramm" id="${id}" viewBox="0 0 ${B} ${H}" role="group" aria-label="${esc(opt.titel || tx('Kosten je Tag in Dollar'))}">${gitter}${marken}${achseX}${treffer}</svg>`;
+}
+
+// ---------- Ring: Lebensdauer des Akkus, Auswertung, Ringwechsel ----------
+
+// Stunden als „9:36 h“ (unter einer Stunde „12 min“, unter einer Minute „42 s“).
+const stunden = (s) => {
+  s = Math.max(0, Math.round(s || 0));
+  if (s < 60) return `${s} s`;
+  if (s < 3600) return `${Math.round(s / 60)} min`;
+  if (s % 3600 === 0) return `${s / 3600} h`;
+  return `${Math.floor(s / 3600)}:${String(Math.floor(s / 60) % 60).padStart(2, '0')} h`;
+};
+const datumKurz = (ms) => new Date(ms).toLocaleDateString(LOCALE, { day: '2-digit', month: '2-digit', year: 'numeric' });
+const monatName = (m) => new Date(`${m}-15T12:00:00`).toLocaleDateString(LOCALE, { month: 'short', year: '2-digit' });
+const ringName = (r) => (r.hardware_id ? tx('Ring {0} · {1}', r.nr, r.hardware_id) : tx('Ring {0}', r.nr));
+// Achse für Sekunden: runde Obergrenze in Minuten bzw. Stunden.
+function achseZeit(max) {
+  const stufen = [60, 120, 300, 600, 900, 1800, 3600, 7200, 10800, 18000, 36000, 72000];
+  const oben = stufen.find((v) => v >= max) || Math.ceil(max / 36000) * 36000;
+  return { oben, schritte: [0, oben / 2, oben] };
+}
+const stufeKlasse = (p) => (p >= 95 ? 'stufe95' : p >= 80 ? 'stufe80' : p >= 60 ? 'stufe60' : '');
+
+// Hinweis auf allen Seiten: erreichte Schwelle (bis bestätigt) oder geänderte Ring-ID aus dem Header.
+let ringInfo = null; // aus /api/zaehler; beim Start aus dem lokalen Speicher (siehe versionBestaetigt)
+function zeigeRingkarte() {
+  const karte = document.getElementById('ringkarte');
+  const r = ringInfo;
+  const ab = r?.abweichung, hinweis = !!(r?.hinweis && r.stufe > 0), idf = r?.id_fehler;
+  karte.hidden = !r || (!r.fehler && !ab && !hinweis && !idf) || aktuell?.name === 'ringTauschen';
+  if (karte.hidden) return;
+  if (r.fehler) {
+    karte.innerHTML = T`<div><strong>${esc(tx('Ring-Auswertung'))}</strong><p class="leise">${esc(tx('Fehler: {0}', r.fehler))}</p></div>`;
+    return;
+  }
+  const teile = [];
+  if (idf) {
+    teile.push(T`<div class="ringfehler"><strong>${esc(tx('Ring-ID ungültig'))}</strong>
+      <p>${esc(tx('Die Pebble-App hat am {0} die Ring-ID „{1}“ geschickt. Erwartet wird die Form #12345 (Raute und Ziffern). Die Aufnahme ist ohne ID gezählt.', datumKurz(idf.zeit), idf.wert || tx('(keine)')))}</p>
+      <p class="leise">${esc(tx('Header {0} in der Pebble-App prüfen.', ringInfo.header || 'X-Ring-ID'))}</p></div>
+      <div class="leiste"><button type="button" class="btn" data-ring-idok>${esc(tx('Bestätigen'))}</button></div>`);
+  }
+  if (ab) {
+    teile.push(T`<div><strong>${esc(tx('Ring-ID geändert'))}</strong>
+      <p>${esc(tx('Die Pebble-App schickt seit {0} die ID {1}, der aktive Ring hat {2}.', datumKurz(ab.seit), ab.neu, ab.alt))}</p>
+      <p class="leise">${esc(tx('„Ring tauschen anwenden“ beendet den bisherigen Ring und startet einen neuen ab der ersten Aufnahme mit der neuen ID. Die alten Daten bleiben.'))}</p></div>
+      <button type="button" class="btn haupt gross" data-ring-tauschen="${esc(ab.neu)}">${esc(tx('Ring tauschen anwenden'))}</button>`);
+  }
+  if (hinweis) {
+    const voll = r.stufe >= 100;
+    teile.push(T`<div><strong>${esc(tx('Ring-Nutzung: {0} % erreicht', r.stufe))}</strong>
+      <p>${esc(tx('{0} von {1} Aufnahmezeit verbraucht ({2} %).', stunden(r.sekunden), stunden(r.kapazitaet_sekunden), Math.floor(r.prozent)))}</p>
+      ${voll ? T`<p class="leise">${esc(tx('Der Akku kann länger halten als angegeben. „+30 min“ erhöht die Kapazität dieses Rings dauerhaft.'))}</p>` : ''}
+      <a href="/status/ring">${esc(tx('Auswertung ansehen'))}</a></div>
+      <div class="leiste">${voll ? T`<button type="button" class="btn" data-ring-plus>${esc(tx('+30 min'))}</button>` : ''}<button type="button" class="btn haupt" data-ring-ok>${esc(tx('Bestätigen'))}</button></div>`);
+  }
+  karte.innerHTML = teile.join('');
+  const knopf = (sel, fn) => karte.querySelectorAll(sel).forEach((b) => { b.onclick = async () => { b.disabled = true; try { await fn(b); await ladeZaehler(); if (aktuell?.neuLaden) aktuell.neuLaden(); } catch (f) { b.disabled = false; melde(f.message); } }; });
+  knopf('[data-ring-ok]', () => api('/api/ring/bestaetigt', { method: 'POST', body: {} }));
+  knopf('[data-ring-idok]', () => api('/api/ring/bestaetigt', { method: 'POST', body: { id_fehler: true } }));
+  knopf('[data-ring-plus]', () => api('/api/ring/bestaetigt', { method: 'POST', body: { plus: true } }));
+  knopf('[data-ring-tauschen]', (b) => api('/api/ring/tauschen', { method: 'POST', body: { hardware_id: b.dataset.ringTauschen, uebernehmen: true } }));
+}
+
+// Balken ganz unten im Menü: Verbrauch des aktiven Rings.
+function ringBalkenHtml() {
+  const r = ringInfo;
+  if (!r || r.fehler) return '';
+  return T`<a class="ringbalken ${stufeKlasse(r.prozent)}" href="/status/ring"><span class="ringtext"><span>${esc(tx('Nutzung'))}</span><span>${esc(stunden(r.sekunden))}</span></span><span class="balken"><i data-anteil="${Math.min(100, r.prozent)}"></i></span></a>`;
+}
+const setzeBalken = (wurzel) => wurzel.querySelectorAll('.balken i[data-anteil]').forEach((el) => { el.style.width = `${Math.max(0, Math.min(100, Number(el.dataset.anteil)))}%`; });
+
+async function zeigeRing() {
+  seite.innerHTML = T`<p class="leer">${esc(tx('Lädt …'))}</p>`;
+  const wahl = new URLSearchParams(location.search).get('ring') || '';
+  const laden = async () => {
+    const d = await api(`/api/ring${wahl ? `?ring=${encodeURIComponent(wahl)}` : ''}`);
+    if (aktuell?.name !== 'ring') return;
+    const g = d.ring, aktiv = !g.ende, p = g.prozent;
+    const kachel = (titel, sek, n) => T`<div class="kachel"><div class="leise">${esc(titel)}</div><div class="zahl">${esc(stunden(sek))}</div><div class="leise">${esc(tx('{0} Aufnahmen', n))}${n ? ` · Ø ${esc(stunden(sek / n))}` : ''}</div></div>`;
+    const prog = d.prognose;
+    const wann = (v) => (v === 0 ? tx('erreicht') : v == null ? tx('keine Nutzung') : datumKurz(v));
+    const monate = d.monate.map((m) => ({ tag: m.monat, diktat: m.diktat, planung: m.planung, anzahl: m.anzahl }));
+    const opt = { wert: stunden, achse: achseZeit, name: (t) => monatName(t.tag), titel: tx('Aufnahmezeit je Monat') };
+    // Vergleich als kompakte Zeilen (mobil ohne breite Tabelle): ID, Zeit, Anteil; darunter Zeitraum, Aufnahmen, Ø je Tag.
+    const vergleich = d.ringe.map((r) => T`<a class="karte ringzeile${r.nr === g.nr ? ' aktiv' : ''}" href="/status/ring?ring=${r.nr}">
+      <span class="zeile"><strong>${esc(r.hardware_id || tx('Ring {0}', r.nr))}</strong><span>${esc(stunden(r.sekunden))} · ${Math.floor(r.prozent)} %</span></span>
+      <span class="balken ${stufeKlasse(r.prozent)}"><i data-anteil="${Math.min(100, r.prozent)}"></i></span>
+      <span class="leise">${esc(datumKurz(r.start))} – ${r.ende ? esc(datumKurz(r.ende)) : esc(tx('heute'))} · ${esc(tx('{0} Aufnahmen', r.anzahl))} · ${esc(tx('Ø {0} je Tag', stunden(r.sekunden / r.tage)))}</span></a>`).join('');
+    seite.innerHTML = T`<h1>${esc(tx('Ring'))}</h1>
+      ${d.ringe.length > 1 ? T`<nav class="btn-group" aria-label="${esc(tx('Ring wählen'))}">${d.ringe.slice().reverse().map((r) => T`<a class="btn${r.nr === g.nr ? ' aktiv' : ''}" href="/status/ring?ring=${r.nr}"${r.nr === g.nr ? ' aria-current="page"' : ''}>${esc(r.hardware_id || tx('Ring {0}', r.nr))}</a>`).join('')}</nav>` : ''}
+      <div class="karte">
+        <div class="zeile kartentitel"><strong>${esc(ringName(g))}</strong><a class="konfedit" href="/status/ring/${g.nr}/bearbeiten" aria-label="${esc(tx('Ring bearbeiten'))}">${STIFT}</a></div>
+        <p class="leise">${esc(aktiv ? tx('Aktiv seit {0}', datumKurz(g.start)) : tx('{0} – {1}', datumKurz(g.start), datumKurz(g.ende)))}${g.hardware_id ? '' : ` · ${esc(tx('ohne ID'))}`}</p>
+        <span class="balken ringgross ${stufeKlasse(p)}"><i data-anteil="${Math.min(100, p)}"></i></span>
+        <p><strong>${esc(tx('{0} von {1}', stunden(g.sekunden), stunden(g.kapazitaet_sekunden)))}</strong> · ${Math.floor(p)} %</p>
+        ${aktiv && prog ? T`<p class="leise">${esc(tx('Bei gleichbleibender Nutzung (Ø {0} je Tag, letzte {1} Tage): 80 % {2} · 100 % {3}', stunden(prog.sekunden_je_tag), Math.round(prog.basis_tage), wann(prog.datum80), wann(prog.datum100)))}</p>` : ''}
+      </div>
+      <div class="kacheln">${kachel(tx('Gesamt'), g.sekunden, g.anzahl)}${kachel(tx('Notizen'), g.diktat.sekunden, g.diktat.anzahl)}${kachel(tx('Planungen'), g.planung.sekunden, g.planung.anzahl)}</div>
+      <p class="leise">${esc(tx('Tastendrücke: Halten {0} · Klick + Halten {1}', g.halten, g.klick_halten))}</p>
+      <h2>${esc(tx('Aufnahmezeit je Monat'))}</h2>
+      <div class="karte">${T('<div class="legende"><span><i class="s1"></i>Notizen</span><span><i class="s2"></i>Planungen</span></div>')}${monate.length ? saeulen(monate, 'rmon', false, opt) : T`<p class="leise">${esc(tx('Noch keine Aufnahmen.'))}</p>`}<div class="ablesen" id="rmon-wert">${esc(tx('Säule antippen für die Werte des Monats.'))}</div></div>
+      ${d.ringe.length > 1 ? T`<h2>${esc(tx('Ringe im Vergleich'))}</h2>${vergleich}` : ''}
+      ${aktiv ? T`<div class="leiste"><a class="btn" href="/status/ring/tauschen">${esc(tx('Ring tauschen'))}</a></div>` : ''}`;
+    setzeBalken(seite);
+    const svg = document.getElementById('rmon'), wert = document.getElementById('rmon-wert');
+    if (svg) {
+      const zeigeMonat = (ev) => {
+        const r = ev.target.closest('.treffer');
+        if (!r) return;
+        const t = monate[Number(r.dataset.i)];
+        svg.querySelectorAll('.treffer.an').forEach((e) => e.classList.remove('an'));
+        r.classList.add('an');
+        wert.textContent = tx('{0}: Notizen {1} · Planungen {2} · {3} Aufnahmen', monatName(t.tag), stunden(t.diktat), stunden(t.planung), t.anzahl);
+      };
+      svg.addEventListener('pointerover', zeigeMonat);
+      svg.addEventListener('click', zeigeMonat);
+      svg.addEventListener('focusin', zeigeMonat);
+    }
+  };
+  aktuell.neuLaden = laden;
+  await laden();
+}
+
+// Ring tauschen (von Hand): Anleitung, neue ID und Kapazität. Der bisherige Ring endet jetzt.
+async function zeigeRingTauschen() {
+  const d = await api('/api/ring');
+  const h = d.header;
+  seite.innerHTML = T`<p><a class="btn klein" href="/status/ring">← ${esc(tx('Ring'))}</a></p><h1>${esc(tx('Ring tauschen'))}</h1>
+    <ol class="anleitung">
+      <li>${esc(tx('Die ID des neuen Rings hat immer die Form #12345 (Raute und Ziffern).'))}</li>
+      <li>${esc(tx('In der Pebble-App beim Webhook den eigenen Header {0} anlegen bzw. ändern: Name {0}, Wert = diese ID mit Raute, z. B. #12345. Dann erkennt die App bei jeder Aufnahme, welcher Ring sie gemacht hat.', h))}</li>
+      <li>${esc(tx('Hier dieselbe ID eintragen und speichern. Der bisherige Ring ({0}) endet jetzt, seine Daten bleiben für Auswertung und Vergleich.', ringName(d.ring)))}</li>
+    </ol>
+    <label for="rid">${esc(tx('ID des neuen Rings'))}</label><div class="ringid"><span>#</span><input id="rid" inputmode="numeric" pattern="[0-9]*" maxlength="12" autocomplete="off" placeholder="12345"></div>
+    <label for="rkap">${esc(tx('Kapazität (Stunden Aufnahme)'))}</label><input id="rkap" type="number" min="1" max="1000" step="1" value="${d.vorgabe_stunden}">
+    <div class="leiste"><button class="btn haupt" id="rsichern">${esc(tx('Ring tauschen'))}</button><a class="btn" href="/status/ring">${esc(tx('Abbrechen'))}</a></div>`;
+  document.getElementById('rsichern').onclick = async (ev) => {
+    const ziffern = document.getElementById('rid').value.trim().replace(/^#/, ''), kap = Number(document.getElementById('rkap').value);
+    if (!/^[0-9]{1,12}$/.test(ziffern)) return melde(tx('Ring-ID: nur Ziffern, Form #12345'));
+    const id = `#${ziffern}`;
+    if (!(kap >= 1 && kap <= 1000)) return melde(tx('Kapazität 1–1000 Stunden'));
+    ev.target.disabled = true;
+    try {
+      await api('/api/ring/tauschen', { method: 'POST', body: { hardware_id: id, kapazitaet_stunden: Math.round(kap) } });
+      melde(tx('Neuer Ring gestartet'));
+      await ladeZaehler();
+      geheZu('/status/ring', true);
+    } catch (f) { ev.target.disabled = false; melde(f.message); }
+  };
+}
+
+// Ring bearbeiten: ID und Kapazität.
+async function zeigeRingBearbeiten(nr) {
+  const d = await api(`/api/ring?ring=${encodeURIComponent(nr)}`);
+  const g = d.ring;
+  seite.innerHTML = T`<p><a class="btn klein" href="/status/ring?ring=${g.nr}">← ${esc(tx('Ring'))}</a></p><h1>${esc(tx('Ring {0} bearbeiten', g.nr))}</h1>
+    <label for="rid">${esc(tx('Ring-ID'))}</label><div class="ringid"><span>#</span><input id="rid" inputmode="numeric" pattern="[0-9]*" maxlength="12" autocomplete="off" placeholder="12345" value="${esc(g.hardware_id.replace(/^#/, ''))}"></div>
+    <p class="leise hilfe">${esc(tx('Muss dem Wert des Headers {0} in der Pebble-App entsprechen.', d.header))}</p>
+    <label for="rkap">${esc(tx('Kapazität (Stunden Aufnahme)'))}</label><input id="rkap" type="number" min="1" max="1000" step="0.5" value="${Math.round((g.kapazitaet_sekunden / 3600) * 100) / 100}">
+    <div class="leiste"><button class="btn haupt" id="rsichern">${esc(tx('Speichern'))}</button><a class="btn" href="/status/ring?ring=${g.nr}">${esc(tx('Abbrechen'))}</a></div>`;
+  document.getElementById('rsichern').onclick = async (ev) => {
+    const kap = Number(document.getElementById('rkap').value), ziffern = document.getElementById('rid').value.trim().replace(/^#/, '');
+    if (!/^[0-9]{1,12}$/.test(ziffern)) return melde(tx('Ring-ID: nur Ziffern, Form #12345'));
+    if (!(kap >= 1 && kap <= 1000)) return melde(tx('Kapazität 1–1000 Stunden'));
+    ev.target.disabled = true;
+    try {
+      await api(`/api/ring/${g.nr}`, { method: 'PUT', body: { hardware_id: `#${ziffern}`, kapazitaet_stunden: kap } });
+      melde(tx('Gespeichert'));
+      await ladeZaehler();
+      geheZu(`/status/ring?ring=${g.nr}`, true);
+    } catch (f) { ev.target.disabled = false; melde(f.message); }
+  };
 }
 
 // ---------- Einstellungen: Ersteinrichtung, Ansicht, Bearbeiten ----------
@@ -2723,21 +2907,7 @@ async function zeigeUpdate(teil) {
   // Updates und Backups sind eigene Menüpunkte; beide nutzen dieselbe Antwort von /api/update.
   const reiter = teil === 'backups' ? 'backups' : 'updates', meinName = teil === 'backups' ? 'backups' : 'update';
   let alle = false; // „Mehr“: alle gespeicherten Versionen des Kanals statt der letzten 3
-  const zeigeLog = (titel, text) => {
-    document.querySelector('dialog.logblatt')?.remove();
-    const d = document.createElement('dialog');
-    d.className = 'mehrblatt logblatt';
-    d.tabIndex = -1;
-    d.innerHTML = T`<div class="griff" aria-hidden="true"></div><h2>${esc(titel)}</h2>
-      ${text ? aenderungenHtml(text) : T('<p class="leise">Keine Änderungsliste zu dieser Version.</p>')}
-      ${u.alle_aenderungen ? T`<p><a href="${esc(u.alle_aenderungen)}" target="_blank" rel="noopener">Alle Änderungen auf GitHub</a></p>` : ''}
-      <div class="leiste"><button class="btn" data-zu="1">Schließen</button></div>`;
-    d.onclick = (ev) => { if (ev.target === d || ev.target.closest('[data-zu]')) d.close(); };
-    d.onclose = () => d.remove();
-    document.body.append(d);
-    d.showModal();
-    d.focus();
-  };
+  const zeigeLog = (titel, text) => zeigeAenderungen(titel, text, u.alle_aenderungen);
   const laden = async (pruefen) => {
     u = await api(`/api/update${pruefen ? '?pruefen=1' : ''}`);
     if (aktuell?.name !== meinName) return;
@@ -2753,14 +2923,14 @@ async function zeigeUpdate(teil) {
         ? T`<button class="btn klein${neueste ? ' haupt' : ''}" data-installieren="${esc(r.version)}"${laeuft ? ' disabled' : ''}>Installieren</button>` : '';
       return T`<div class="karte versionzeile"><div class="versionkopf"><span class="versionzeile1"><span class="badge neutral">${esc(tx(r.kanal))}</span><strong>${esc(versionNr(r.version))}</strong></span>
           ${r.installiert ? T('<span class="badge fertig">installiert</span>') : ''}${neueste ? '<span class="badge neutral">latest</span>' : ''}${r.neu ? '<span class="badge in_arbeit">new</span>' : ''}${r.vorhanden && !r.installiert ? T('<span class="badge neutral" title="Liegt lokal vor, Wechsel ohne Download">lokal</span>') : ''}
-          <span class="leise">${esc(versionZeit(r.version) || r.datum || '')}</span></div>
+          <span class="leise">${esc(zeitText(r.veroeffentlicht) || r.datum || '')}</span></div>
         <div class="versionknoepfe"><button class="btn klein" data-log="${esc(r.version)}">Änderungen</button>${knopf}</div></div>`;
     };
     const kopf = T`<h1>${reiter === 'backups' ? tx('Backups') : tx('Updates')}</h1>
       ${status}${u.fehler ? T`<div class="hinweis warn">${esc(u.fehler)}</div>` : ''}`;
     // Neueste Version des gewählten Kanals, die später als die installierte erschienen ist: eigene Karte über „Installiert“.
     const neu = liste.find((r) => r.neu);
-    const neuKarte = neu ? T`<div class="karte versionzeile neuekarte"><div class="versionkopf"><span class="leise">${updateSymbol} ${tx('Neue Version verfügbar')}</span><span class="versionzeile1"><span class="badge neutral">${esc(tx(neu.kanal))}</span><strong class="versiongross">${esc(versionNr(neu.version))}</strong></span><span class="leise">${esc(versionZeit(neu.version) || neu.datum || '')}</span></div>
+    const neuKarte = neu ? T`<div class="karte versionzeile neuekarte"><div class="versionkopf"><span class="leise">${updateSymbol} ${tx('Neue Version verfügbar')}</span><span class="versionzeile1"><span class="badge neutral">${esc(tx(neu.kanal))}</span><strong class="versiongross">${esc(versionNr(neu.version))}</strong></span><span class="leise">${esc(zeitText(neu.veroeffentlicht) || neu.datum || '')}</span></div>
         <div class="versionknoepfe"><button class="btn klein" data-log="${esc(neu.version)}">Änderungen</button>${u.installierbar ? T`<button class="btn klein haupt" data-installieren="${esc(neu.version)}"${laeuft ? ' disabled' : ''}>Installieren</button>` : ''}</div></div>` : '';
     const updates = T`${neuKarte}<div class="karte versionzeile aktuell"><div class="versionkopf"><span class="leise">Installiert</span><span class="versionzeile1"><span class="badge neutral">${esc(tx(u.aktuell_kanal || ''))}</span><strong class="versiongross">${esc(versionNr(u.aktuell))}</strong></span>${versionZeit(u.aktuell) ? T`<span class="leise">${esc(versionZeit(u.aktuell))}</span>` : ''}</div>
         <div class="versionknoepfe"><button class="btn klein" data-log="">Änderungen</button></div></div>
@@ -2985,11 +3155,13 @@ function pebbleSeite(d) {
     <dl><dt>Payload-Modus</dt><dd><strong>Both</strong> (Aufnahme und Transkript)</dd><dt>Größe</dt><dd>bis ${d.max_mb} MB je Aufnahme</dd></dl>
     <p class="leise">Unter „Headers“ ein Paar aus Name und Wert anlegen:</p>
     ${wert(tx('Header-Name'), 'header')}${wert(tx('Header-Wert'), 'token', true)}
+    <p class="leise">${esc(tx('Pflicht: ein zweites Paar mit der ID des Rings (Form #12345). Ohne gültige ID schlägt das Test-Event fehl.'))}</p>
+    ${wert(tx('Header-Name'), 'ring_header')}${d.ring_id ? wert(tx('Header-Wert (Ring-ID)'), 'ring_id') : T`<div class="hinweis warn">${esc(tx('Noch keine Ring-ID hinterlegt – unter Ring → Bearbeiten eintragen.'))}</div>`}
     <p class="leise">„Signed requests“ einschalten und dieses Secret eintragen, ohne Leerzeichen:</p>
     ${wert(tx('Signatur-Secret'), 'secret', true)}
     <ol><li>„Send test event“ – im Verlauf erscheint „Test-Event“.</li>
       <li>Je Geste eine kurze Aufnahme.</li>
-      <li>Kommt nichts an: „Recent runs“ in der Pebble-App zeigt die Antwort (401 = Header oder Signatur falsch).</li></ol>
+      <li>Kommt nichts an: „Recent runs“ in der Pebble-App zeigt die Antwort (401 = Header oder Signatur falsch, 400 beim Test-Event = Ring-ID fehlt oder hat nicht die Form #12345).</li></ol>
     <p class="leise">Pebble wiederholt fehlgeschlagene Zustellungen jede Minute, bis zu zehnmal; doppelte erzeugen keinen zweiten Eintrag.</p>`;
 }
 async function pebbleKlick(b, d) {
@@ -3255,7 +3427,7 @@ async function zeigeEinrichten() {
 // ---------- Menü (Hamburger links): drei Hauptseiten, darunter ihre Unterseiten ----------
 
 // Seite → Bereich im Menü.
-const BEREICH = { joplin: 'status', einstellungBearbeiten: 'status', darstellung: 'status', geraetNeu: 'status', tagsVerwalten: 'status', kosten: 'status', papierkorb: 'status', update: 'status', backups: 'status', einstellungen: 'status', einstellungenBearbeiten: 'status', pebble: 'status', gedaechtnis: 'status', gedaechtnisBearbeiten: 'status', liste: 'listen', verschieben: 'listen', listeBearbeiten: 'listen', gruppeBearbeiten: 'listen', eintrag: 'verlauf', planung: 'verlauf', tags: 'verlauf', antwort: 'verlauf', umhaengen: 'verlauf', wortlaut: 'verlauf', einsortieren: 'verlauf', suche: 'verlauf' };
+const BEREICH = { ring: 'status', ringTauschen: 'status', ringBearbeiten: 'status', joplin: 'status', einstellungBearbeiten: 'status', darstellung: 'status', geraetNeu: 'status', tagsVerwalten: 'status', kosten: 'status', papierkorb: 'status', update: 'status', backups: 'status', einstellungen: 'status', einstellungenBearbeiten: 'status', pebble: 'status', gedaechtnis: 'status', gedaechtnisBearbeiten: 'status', liste: 'listen', verschieben: 'listen', listeBearbeiten: 'listen', gruppeBearbeiten: 'listen', eintrag: 'verlauf', planung: 'verlauf', tags: 'verlauf', antwort: 'verlauf', umhaengen: 'verlauf', wortlaut: 'verlauf', einsortieren: 'verlauf', suche: 'verlauf' };
 const lokal = (k, v = '') => { try { return localStorage.getItem(k) ?? v; } catch { return v; } };
 function maleMenue() {
   const name = aktuell?.name || '';
@@ -3293,7 +3465,8 @@ function maleMenue() {
   nav.innerHTML = T`<div class="menuekopf"><span class="marke">Sprachnotizen</span><button type="button" class="btn klein rund" data-menue-zu aria-label="Menü schließen">×</button></div>
     ${teile.map((t) => T`<div class="menuegruppe">${link('menuehaupt', { ...t, an: bereich === t.id })}${t.unter.map((u) => link('menueunter', u)).join('')}</div>`).join('')}
     <div class="menuegruppe"><button type="button" class="menueunter abmelden" data-menue-abmelden><span>Abmelden</span></button></div>
-    <div class="menuefuss"><div class="menuefusszeile">${appVersion ? T`<a href="/status/update">Version ${esc(versionNr(appVersion))}${appKanal ? ` · ${esc(tx(appKanal))}` : ''}</a>` : '<span></span>'}<a class="themeknopf" href="/status/darstellung" title="Theme" aria-label="Theme"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 3a9 9 0 0 0 0 18z" fill="currentColor"/></svg></a></div></div>`;
+    <div class="menuefuss">${ringBalkenHtml()}<div class="menuefusszeile">${appVersion ? T`<a href="/status/update">Version ${esc(versionNr(appVersion))}${appKanal ? ` · ${esc(tx(appKanal))}` : ''}</a>` : '<span></span>'}<a class="themeknopf" href="/status/darstellung" title="Theme" aria-label="Theme"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 3a9 9 0 0 0 0 18z" fill="currentColor"/></svg></a></div></div>`;
+  setzeBalken(nav);
   const punkt = menueKnopf.querySelector('.punkt');
   punkt.hidden = !neueVersion && !offeneVorschlaege && !audioFehler;
   punkt.classList.toggle('vorschlag', !neueVersion && !audioFehler);
@@ -3327,9 +3500,11 @@ const vorschlagZahl = () => (offeneVorschlaege ? ` (${offeneVorschlaege})` : '')
 let neueVersion = '', papierkorbZahl = 0, audioFehler = 0, appVersion = lokal('app-version'), appKanal = lokal('app-kanal');
 const updateSymbol = T('<svg class="updatesymbol" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="11" fill="currentColor"/><path d="M12 17V7m-4.5 4.5L12 7l4.5 4.5" fill="none" stroke="var(--flaeche)" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>');
 // Versionsnummer ohne Kanal-Endung: der Kanal steht als Badge daneben, Builds unterscheidet das Datum.
-const versionNr = (v) => String(v || '').replace(/-(stable|(beta|nightly)\.\d+)$/, '');
+const versionNr = (v) => String(v || '').replace(/-(stable|beta|nightly)(\.\d+)?$/, '');
 const versionKanal = (v) => (String(v || '').match(/-(stable|beta|nightly)(\.\d+)?$/) || [])[1] || '';
 // Build-Zeit einer Nightly (Endung JJJJMMTTHHMM) als Text, sonst ''.
+// Veröffentlichung (RFC 3339) als Text.
+const zeitText = (iso) => (iso ? new Date(iso).toLocaleString(LOCALE, { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '');
 const versionZeit = (v) => {
   const m = String(v || '').match(/-nightly\.(\d{4})(\d\d)(\d\d)(\d\d)(\d\d)$/);
   return m ? new Date(Date.UTC(+m[1], m[2] - 1, +m[3], +m[4], +m[5])).toLocaleString(LOCALE, { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
@@ -3339,17 +3514,43 @@ const versionHtml = (v, kanal) => {
   const k = kanal || versionKanal(v), z = versionZeit(v);
   return T`${k ? T`<span class="badge neutral">${esc(tx(k))}</span> ` : ''}<span class="versionnr">${esc(versionNr(v))}</span>${z ? T` <span class="leise">${esc(z)}</span>` : ''}`;
 };
+// Änderungen einer Version als Blatt (Update-Seite, Karte „App aktualisiert“).
+function zeigeAenderungen(titel, text, alleUrl) {
+  document.querySelector('dialog.logblatt')?.remove();
+  const d = document.createElement('dialog');
+  d.className = 'mehrblatt logblatt';
+  d.tabIndex = -1;
+  d.innerHTML = T`<div class="griff" aria-hidden="true"></div><h2>${esc(titel)}</h2>
+    ${text ? aenderungenHtml(text) : T('<p class="leise">Keine Änderungsliste zu dieser Version.</p>')}
+    ${alleUrl ? T`<p><a href="${esc(alleUrl)}" target="_blank" rel="noopener">Alle Änderungen auf GitHub</a></p>` : ''}
+    <div class="leiste"><button class="btn" data-zu="1">Schließen</button></div>`;
+  d.onclick = (ev) => { if (ev.target === d || ev.target.closest('[data-zu]')) d.close(); };
+  d.onclose = () => d.remove();
+  document.body.append(d);
+  d.showModal();
+  d.focus();
+}
+
 // Neue Version seit der letzten Bestätigung (z. B. automatisches Update): Karte über jeder Seite, bis sie bestätigt ist.
 // Gilt für alle Geräte gemeinsam (ein Nutzer): der Server merkt sich die bestätigte Version.
 let versionBestaetigt = lokal('version-bestaetigt');
+try { ringInfo = JSON.parse(lokal('ring-info', 'null')); } catch { /* noch nie geladen */ }
 function zeigeVersionskarte() {
   const karte = document.getElementById('versionskarte');
   const jetzt = `${appVersion}|${appKanal}`;
   karte.hidden = !appVersion || !versionBestaetigt || versionBestaetigt === jetzt;
   if (karte.hidden) return;
   const [altV, altK] = versionBestaetigt.split('|');
-  karte.innerHTML = T`<div class="versionszeile">${updateSymbol}<div><strong>${tx('App aktualisiert')}</strong><div class="versionswechsel"><div>${versionHtml(altV, altK)}</div><div>→ ${versionHtml(appVersion, appKanal)}</div></div><a href="/status/update">${tx('Änderungen ansehen')}</a></div></div>
+  karte.innerHTML = T`<div class="versionszeile">${updateSymbol}<div><strong>${tx('App aktualisiert')}</strong><div class="versionswechsel"><div>${versionHtml(altV, altK)}</div><div>→ ${versionHtml(appVersion, appKanal)}</div></div><button type="button" class="linkknopf" data-version-log>${tx('Änderungen ansehen')}</button></div></div>
     <button type="button" class="btn haupt gross" data-version-ok>${tx('Bestätigen')}</button>`;
+  karte.querySelector('[data-version-log]').onclick = async (ev) => {
+    ev.currentTarget.disabled = true;
+    try {
+      const u = await api('/api/update');
+      zeigeAenderungen(`${versionNr(appVersion)}${appKanal ? ` · ${tx(appKanal)}` : ''}`, u.aktuell_aenderungen, u.alle_aenderungen);
+    } catch (f) { melde(f.message); }
+    ev.currentTarget.disabled = false;
+  };
   karte.querySelector('[data-version-ok]').onclick = async (ev) => {
     ev.currentTarget.disabled = true;
     try {
@@ -3372,7 +3573,10 @@ async function ladeZaehler() {
     try { localStorage.setItem('joplin-aktiv', joplinAktiv ? '1' : '0'); } catch { /* nur Anzeige */ }
     if (z.version) { appVersion = z.version; appKanal = z.kanal || ''; try { localStorage.setItem('app-version', appVersion); localStorage.setItem('app-kanal', appKanal); } catch { /* nur Anzeige */ } }
     if (z.version_bestaetigt) { versionBestaetigt = z.version_bestaetigt; try { localStorage.setItem('version-bestaetigt', versionBestaetigt); } catch { /* nur Anzeige */ } }
+    ringInfo = z.ring || null;
+    try { localStorage.setItem('ring-info', JSON.stringify(ringInfo)); } catch { /* nur Anzeige */ }
     zeigeVersionskarte();
+    zeigeRingkarte();
   } catch (f) {
     return; // offline: alte Zahl bleibt
   }
@@ -3387,7 +3591,7 @@ function starteLive() {
   quelle = new EventSource('/api/ereignisse');
   quelle.onopen = () => { sendeAusgang(); };
   quelle.onmessage = (ev) => {
-    if (String(ev.data).startsWith('gedaechtnis') || ev.data === 'version') ladeZaehler();
+    if (String(ev.data).startsWith('gedaechtnis') || ev.data === 'version' || ev.data === 'ring') ladeZaehler();
     clearTimeout(ladeTimer);
     ladeTimer = setTimeout(() => aktuell?.neuLaden?.(), 300);
   };

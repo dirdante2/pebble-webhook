@@ -2,7 +2,23 @@
 
 Summarised notes for **beta** and **stable** releases. Each section lists only what lasts since the previous beta or stable release – intermediate steps, reverted attempts and small fixes of things that were new in the same span are left out. Every single version with all its steps is in [CHANGELOG.md](CHANGELOG.md) (that is what the nightly channel shows).
 
-A tag `vX.Y.Z-stable` (stable; before 1.33.5 `vX.Y.Z`) or `vX.Y.Z-beta.N` (beta) needs a section `## [X.Y.Z]` or `## [X.Y.Z-beta.N]` here; the release workflow uses it as the release notes.
+A tag `vX.Y.Z-stable` (stable; before 1.33.5 `vX.Y.Z`) or `vX.Y.Z-beta` (beta) needs a section `## [X.Y.Z]` or `## [X.Y.Z-beta]` here; the release workflow uses it as the release notes.
+
+## [1.34.0] - 2026-11-22
+
+### Ring usage
+- The Index 01 has a fixed battery (Pebble: 12–15 h of recording). Every recording is counted per ring – seconds, notes vs. plannings, button presses – and stays counted when entries or audio files are deleted. Existing entries and audio files are added on the first start.
+- Ring ID in the form `#12345`, sent by the Pebble app in the required header `X-Ring-ID`; the test event fails without a valid ID. A new ID offers "Apply ring swap" on every page; "Swap ring" with instructions; old rings stay for comparison.
+- Hints at 60, 80, 95 and 100 % of the capacity (default 12 h) until confirmed, plus a push; at 100 % "+30 min" raises the capacity permanently.
+- Ring page with recording time per month, forecast for 80 % and 100 % at constant use (last 30 days) and rings compared; usage bar at the bottom of the menu.
+
+### Updates
+- One version per channel: tags `vX.Y.Z-stable`, `vX.Y.Z-beta`, `vX.Y.Z-nightly`; a release built from the same commit as the running version never counts as newer. The update page shows when each release was published.
+- Own builds show `X.Y.Z.A` (local build counter, never in Git).
+- The "App updated" card shows the changes in a sheet right there.
+
+### Lists
+- A list whose last item was just ticked off stays among the active lists as long as its ticked items; past lists expand like the active ones.
 
 ## [1.33.9] - 2026-11-22
 

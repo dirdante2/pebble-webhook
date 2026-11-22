@@ -36,8 +36,10 @@ type Config struct {
 	HookRatePerMin  int
 	MinFreeBytes    uint64
 
-	TriggerSingle string // diktat | planung
-	TriggerDouble string
+	TriggerSingle     string // diktat | planung
+	TriggerDouble     string
+	RingIDHeader      string // eigener Header der Pebble-App mit der Ring-ID
+	RingCapacityHours int    // Akku eines neuen Rings in Stunden Aufnahme
 
 	Transcription        string // openai | pebble
 	OpenAIKey            string
@@ -242,8 +244,10 @@ func FromValues(boot Bootstrap, lookup func(string) string) (*Config, error) {
 		HookRatePerMin:  num("HOOK_RATE_PER_MIN", 30),
 		MinFreeBytes:    uint64(num("MIN_FREE_MB", 500)) << 20,
 
-		TriggerSingle: mode("TRIGGER_SINGLE", "diktat"),
-		TriggerDouble: mode("TRIGGER_DOUBLE", "planung"),
+		TriggerSingle:     mode("TRIGGER_SINGLE", "diktat"),
+		TriggerDouble:     mode("TRIGGER_DOUBLE", "planung"),
+		RingIDHeader:      str("RING_ID_HEADER", "X-Ring-ID"),
+		RingCapacityHours: num("RING_CAPACITY_HOURS", 12),
 
 		Transcription:        str("TRANSCRIPTION", "openai"),
 		Language:             i18n.Norm(str("LANGUAGE", "de")),
@@ -366,6 +370,7 @@ var intLimits = map[string][2]int{
 	"TRASH_RETENTION_DAYS":       {1, 36_500},
 	"BACKUP_RETENTION_DAYS":      {1, 36_500},
 	"EMPTY_RETENTION_HOURS":      {0, 87_600},
+	"RING_CAPACITY_HOURS":        {1, 1000},
 	"PLANNING_AUTOCLOSE_DAYS":    {0, 3650},
 	"MAX_ATTEMPTS":               {1, 50},
 	"MIN_FREE_MB":                {0, 10_000_000},

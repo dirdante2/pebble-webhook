@@ -20,6 +20,7 @@ func (a *App) Run(ctx context.Context) {
 	go a.CheckUpdates(ctx)
 	go a.AutoUpdate(ctx)
 	go a.BackupSchedule(ctx)
+	a.initRing() // vor sortAudio: die Pfade der Einträge stimmen noch
 	a.sortAudio()
 	a.Cleanup()
 	lastCleanup := time.Now()
@@ -211,6 +212,7 @@ func (a *App) transcribe(ctx context.Context, j *store.Job) error {
 		if err != nil {
 			return err
 		}
+		a.ringSeconds(j.ID, seconds)
 		if seconds >= 0 && a.Cfg.PriceTranscribeMin != nil {
 			c := seconds / 60 * *a.Cfg.PriceTranscribeMin
 			addCost(&j.CostTranscribe, &c)

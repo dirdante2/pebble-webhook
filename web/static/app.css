@@ -107,6 +107,29 @@ textarea { min-height: 9rem; resize: vertical; }
 .versionszeile .updatesymbol { width: 1.8rem; height: 1.8rem; flex: none; color: var(--gut); }
 .versionswechsel { font-variant-numeric: tabular-nums; overflow-wrap: anywhere; margin: .15rem 0 .3rem; }
 .versionskarte .btn.gross { width: 100%; padding: .85rem 1rem; font-size: 1.05rem; }
+.linkknopf { background: none; border: 0; padding: 0; font: inherit; color: var(--akzent); text-decoration: underline; cursor: pointer; text-align: left; }
+.ringkarte { border-left-color: var(--warn); }
+.ringkarte p { margin: .3rem 0; }
+.ringbalken { display: block; padding: .5rem .2rem .3rem; color: inherit; text-decoration: none; font-size: .85rem; }
+.ringtext { display: flex; justify-content: space-between; gap: .5rem; flex-wrap: wrap; }
+.ringbalken .balken, .balken.ringgross { margin: .3rem 0 0; }
+.balken.ringgross { height: .8rem; }
+.ringbalken .balken i, .balken.ringgross i { background: var(--gut); border-radius: .3rem; }
+.stufe60 .balken i, .balken.ringgross.stufe60 i { background: var(--warn); }
+.stufe80 .balken i, .balken.ringgross.stufe80 i { background: var(--warn); }
+.stufe95 .balken i, .balken.ringgross.stufe95 i { background: var(--schlecht); }
+.ringzeile { display: grid; gap: .3rem; color: inherit; text-decoration: none; }
+.ringzeile.aktiv { border-color: var(--akzent); }
+.ringzeile .zeile { display: flex; justify-content: space-between; gap: .5rem; }
+.ringzeile .balken i { background: var(--gut); border-radius: .3rem; }
+.ringzeile.stufe60 .balken i, .ringzeile .balken.stufe60 i, .ringzeile .balken.stufe80 i { background: var(--warn); }
+.ringzeile .balken.stufe95 i { background: var(--schlecht); }
+.anleitung { padding-left: 1.3rem; }
+.ringid { display: flex; align-items: center; gap: .4rem; }
+.ringid span { font-weight: 700; font-size: 1.1rem; }
+.ringid input { flex: 1; min-width: 0; }
+.ringfehler strong { color: var(--schlecht); }
+.anleitung li { margin: .4rem 0; }
 .updatekarte .updatesymbol { width: 1.8rem; height: 1.8rem; flex: none; }
 .aufnahme { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; margin: .5rem 0; }
 .punkt { width: .7rem; height: .7rem; border-radius: 50%; background: var(--schlecht); animation: puls 1s infinite; }

@@ -10,6 +10,7 @@ The menu (☰ top left; always visible on wide screens) lists the three main pag
 - **Plannings**: the AI researches the web and answers in rounds; continue by voice or text and answer its questions.
 - **Lists (Listen)**: the AI sorts notes into groups and lists; each group opens as its own page, tick items off one by one, move or delete them. The arrow icon in the title expands all open items.
 - **Search**: full text over notes and plannings.
+- **Ring usage (Nutzung)**: the bar at the bottom of the menu shows how much recording time the current ring has used. The ring page lists the total, notes vs. plannings, button presses (hold / click + hold), recording time per month and a forecast for 80 % and 100 % at constant use (average of the last 30 days). At 60, 80, 95 and 100 % a hint appears on every page until confirmed; at 100 % "+30 min" raises the capacity if the battery lasts longer. Every ring has an ID in the form `#12345`, sent by the Pebble app in the header `X-Ring-ID` (required). "Swap ring" starts a new ring; old rings stay for comparison. If the app sends a new ID, a hint offers to apply the swap.
 - **Settings (Einstellungen)**: status with tabs Overview (stats, notifications, devices/passkeys), Pebble app setup, Joplin (only when switched on: set up and test the connection), Configuration (? = explanation, pencil = change one value) and Theme (day/night mode, colour palette or custom colour, preview; per device, new devices take over the last choice); updates, memory, tags (tap = its entries, delete from all entries), AI costs, trash (restore deleted entries for 183 days).
 - **Another device**: Status → "Weiteres Gerät hinzufügen" shows a 4-digit code (valid up to 5 minutes, only while the page is open); on the new device open the app and choose "Mit Code hinzufügen".
 
@@ -22,3 +23,5 @@ Demo data, English UI, mobile, dark mode.
 <img src="screenshots/history.png" width="220" alt="History"> <img src="screenshots/menu.png" width="220" alt="Menu"> <img src="screenshots/lists.png" width="220" alt="Lists"> <img src="screenshots/list.png" width="220" alt="List">
 
 <img src="screenshots/note.png" width="220" alt="Note"> <img src="screenshots/planning.png" width="220" alt="Planning"> <img src="screenshots/reschedule.png" width="220" alt="Reschedule"> <img src="screenshots/theme.png" width="220" alt="Theme">
+
+<img src="screenshots/ring.png" width="220" alt="Ring usage"> <img src="screenshots/ring-compare.png" width="220" alt="Rings compared"> <img src="screenshots/ring-swap.png" width="220" alt="Swap ring">

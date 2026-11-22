@@ -7,6 +7,27 @@ Version numbers X.Y.Z:
 - **Y** – a new feature (e.g. appointments, multiple languages, theme choice with day/night mode).
 - **Z** – all other UI changes and small bug fixes; safe to install or roll back at any time.
 
+Own builds show X.Y.Z.A: **A** is a local build counter (one per deployed change, starting at 1 for every new X.Y.Z); it never appears in Git or releases, so one version can collect several changes.
+
+## [1.34.0] - 2026-11-22
+
+### New
+- Ring lifetime: the Index 01 has a fixed battery (Pebble: 12–15 h of recording). Every recording is logged on arrival with its length (from the audio file, else from its cost, else estimated from size or text until the transcription reports it), kind (note/planning) and gesture (only hold and click + hold; anything unclear counts as hold); the log stays when entries or audio files are deleted (new tables `rings`, `ring_recordings`). On the first start the existing entries and audio files are added as ring 1.
+- Hints on every page at 60, 80, 95 and 100 % of the ring's capacity (setting `RING_CAPACITY_HOURS`, default 12) until confirmed, plus a push; at 100 % "+30 min" raises the capacity permanently.
+- Ring ID: required custom header from the Pebble app (setting `RING_ID_HEADER`, default `X-Ring-ID`), always in the form `#12345`, stored with every recording. The test event fails (400) without a valid ID; a recording without or with an invalid ID still counts for the active ring, the webhook answers "accepted, but ring ID missing or invalid" and an error shows on every page. The setup page lists the header with the active ring's ID. In the app the ID is entered as digits after a fixed `#`. If it changes, a hint on every page offers "Apply ring swap". Manual "Swap ring" with instructions; old rings stay for comparison.
+- Ring page (`/status/ring`, bar at the bottom of the menu): usage, notes vs. plannings, button presses, recording time per month, forecast for 80 % and 100 % at constant use (last 30 days), rings compared, edit ID and capacity.
+- README: hardware note with links to the Pebble Index 01 and repebble.com right below the title; ring usage in the feature list and screenshots (English demo data).
+
+### Fixed
+- The "App updated" card shows the changes in a sheet right there instead of opening the update page.
+- Lists: a list whose last item was just ticked off stays among the active lists as long as its ticked items (setting `LIST_DONE_ACTIVE_MINUTES`) instead of vanishing at once. Past lists look like the active ones and show all their items when expanded.
+
+### Changed
+- One version per channel: tags `vX.Y.Z-stable`, `vX.Y.Z-beta`, `vX.Y.Z-nightly` without extra numbers; every commit bumps the version, a build with an existing number fails. Older tags (`-beta.N`, `-nightly.<time>`) are still recognised.
+- The update page shows the publication time of each release.
+- Version X.Y.Z changes once per pushed block of work, no longer with every local deploy; own builds count each deploy as X.Y.Z.A (A only local, shown in the app as e.g. 1.34.0.2, channel "lokal").
+- Releases built from the same Git commit as the running version (e.g. stable and nightly of the same state, or an own build without local changes) never count as newer; the commit comes from the release on GitHub and from the build info of the binary.
+
 ## [1.33.9] - 2026-11-22
 
 ### Changed

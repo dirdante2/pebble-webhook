@@ -1,5 +1,7 @@
 # pebble-webhook
 
+> **Hardware:** made for the [Pebble Index 01](https://repebble.com/index) voice ring by Pebble (Core Devices) – [buy it on repebble.com](https://repebble.com/index) · official website: [repebble.com](https://repebble.com/). This is an independent community project, not affiliated with Pebble.
+
 Self-hosted backend for the **Pebble Index 01** voice ring. It receives recordings via webhook, transcribes them with OpenAI and turns them into notes, appointments or research plannings. An AI sorts everything into groups and lists; a mobile web app (PWA, English or German) shows the history, sends web push notifications and lets you answer follow-up questions.
 
 One Go binary: webhook, worker, SQLite and web app. No queue, no second database.
@@ -12,6 +14,7 @@ One Go binary: webhook, worker, SQLite and web app. No queue, no second database
 - **Memory**: the AI learns names, terms and sorting rules you confirm
 - Optional one-way export to a **Joplin** server
 - Built-in **MCP server** with OAuth: connect Claude, ChatGPT & co., read lists and tick items off from AI chats
+- **Ring usage**: the Index 01 battery lasts about 12–15 hours of recording. Every recording is counted (seconds, notes vs. plannings, button presses) per ring ID (`#12345`); warnings at 60/80/95/100 %, forecast at constant use, ring swap with comparison
 - **English or German** – UI, messages, push and MCP answers, and the texts the AI writes; chosen in the setup wizard (preset from the browser), changeable under Status → Configuration
 - Passkey login (new devices with a 4-digit code), setup wizard, settings with explanations and validation, **themes** (day/night, colour palettes) and **updates** in the web app
 
@@ -24,6 +27,8 @@ Demo data, English UI, mobile, dark mode.
 | <img src="docs/screenshots/history.png" width="200" alt="History with filters and next appointment"> | <img src="docs/screenshots/menu.png" width="200" alt="Menu with counters"> | <img src="docs/screenshots/lists.png" width="200" alt="Lists by group"> | <img src="docs/screenshots/note.png" width="200" alt="Note detail"> |
 | **Planning** | **Reschedule** | **List** | **Theme** |
 | <img src="docs/screenshots/planning.png" width="200" alt="Planning with research"> | <img src="docs/screenshots/reschedule.png" width="200" alt="Reschedule an appointment"> | <img src="docs/screenshots/list.png" width="200" alt="A single list"> | <img src="docs/screenshots/theme.png" width="200" alt="Theme settings"> |
+| **Ring usage** | **Rings compared** | **Swap ring** | |
+| <img src="docs/screenshots/ring.png" width="200" alt="Ring usage with forecast"> | <img src="docs/screenshots/ring-compare.png" width="200" alt="Recording time per month and rings compared"> | <img src="docs/screenshots/ring-swap.png" width="200" alt="Swap ring with instructions"> | |
 
 ## Quick start
 

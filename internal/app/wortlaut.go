@@ -187,7 +187,7 @@ func (a *App) handleCounters(w http.ResponseWriter, r *http.Request) {
 	tp, _ := a.DB.TrashedPlannings(0)
 	writeJSON(w, 200, map[string]any{"vorschlaege": n, "update": a.AvailableUpdate(), "papierkorb": len(tj) + len(tp),
 		"version": strings.Fields(a.Version + " ")[0], "kanal": a.installedChannel(), "joplin": a.Cfg.JoplinEnabled, "audio_unbekannt": len(a.orphans()),
-		"version_bestaetigt": a.confirmedVersion()})
+		"version_bestaetigt": a.confirmedVersion(), "ring": a.ringSummary()})
 }
 
 // versionConfirmedKey: zuletzt bestätigte Version „<version>|<kanal>“ – für alle Geräte gemeinsam (ein Nutzer).
