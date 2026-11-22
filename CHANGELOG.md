@@ -7,6 +7,14 @@ Version numbers X.Y.Z:
 - **Y** – a new feature (e.g. appointments, multiple languages, theme choice with day/night mode).
 - **Z** – all other UI changes and small bug fixes; safe to install or roll back at any time.
 
+## [1.31.4] - 2026-11-22
+
+### New
+- Status page: storage per location (data, recordings, backups) with path, space used by the app, and free/total of the file system as a bar.
+
+### Changed
+- Daily cleanup also removes leftovers of interrupted backups (`.snapshot-*`, `.*.tmp` older than a day) and empty month folders in the audio folder.
+
 ## [1.31.3] - 2026-11-22
 
 ### New

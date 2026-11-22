@@ -829,15 +829,18 @@ func (a *App) handleStatus(w http.ResponseWriter, r *http.Request) {
 			"listen_aktiv_minuten": a.Cfg.DoneActiveMinutes, "besuch_pause_minuten": a.Cfg.VisitGapMinutes, "preise_bekannt": a.Cfg.PricePlanIn != nil && a.Cfg.PricePlanOut != nil && a.Cfg.PriceSearchCall != nil,
 		},
 	}
-	disk := func(path string) map[string]any {
-		free, err := freeBytes(path)
+	// Je Ablage: Pfad, von der App belegt, frei und gesamt auf dem Dateisystem.
+	disk := func(name, path string) map[string]any {
+		m := map[string]any{"name": name, "pfad": path}
+		free, total, err := diskSpace(path)
 		if err != nil {
-			return map[string]any{"fehler": err.Error()}
+			m["fehler"] = err.Error()
+			return m
 		}
-		return map[string]any{"frei_mb": free >> 20, "knapp": free < a.Cfg.MinFreeBytes}
+		m["belegt"], m["frei"], m["gesamt"], m["knapp"] = dirSize(path), free, total, free < a.Cfg.MinFreeBytes
+		return m
 	}
-	out["speicher_audio"] = disk(a.Cfg.AudioDir)
-	out["speicher_daten"] = disk(a.Cfg.DataDir)
+	out["speicher"] = []map[string]any{disk("Daten", a.Cfg.DataDir), disk("Aufnahmen", a.Cfg.AudioDir), disk("Backups", a.Cfg.BackupDir)}
 	tj, _ := a.DB.TrashedJobs(0)
 	tp, _ := a.DB.TrashedPlannings(0)
 	out["papierkorb"] = len(tj) + len(tp)

@@ -249,6 +249,18 @@ func (a *App) cleanBackups() {
 		}
 		logf("Release-Vorrat: %s gelöscht (30 Tage nicht genutzt)", e.Name())
 	}
+	// Reste abgebrochener Läufe (.snapshot-*.db, .<name>.tmp) nach einem Tag.
+	if left, err := os.ReadDir(a.Cfg.BackupDir); err == nil {
+		for _, e := range left {
+			fi, err := e.Info()
+			if err != nil || !strings.HasPrefix(e.Name(), ".") || e.IsDir() || time.Since(fi.ModTime()) < 24*time.Hour {
+				continue
+			}
+			if err := os.Remove(filepath.Join(a.Cfg.BackupDir, e.Name())); err == nil {
+				logf("Backups: Rest %s gelöscht", e.Name())
+			}
+		}
+	}
 	keep := time.Duration(a.Cfg.BackupRetentionDays) * 24 * time.Hour
 	newest := true
 	for _, b := range a.backups() {

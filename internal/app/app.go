@@ -3,9 +3,11 @@ package app
 
 import (
 	"context"
+	"io/fs"
 	"log"
 	"net"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -145,6 +147,28 @@ func freeBytes(path string) (uint64, error) {
 		return 0, err
 	}
 	return st.Bavail * uint64(st.Bsize), nil
+}
+
+// diskSpace: freier und gesamter Platz des Dateisystems unter path.
+func diskSpace(path string) (free, total uint64, err error) {
+	var st syscall.Statfs_t
+	if err := syscall.Statfs(path, &st); err != nil {
+		return 0, 0, err
+	}
+	return st.Bavail * uint64(st.Bsize), st.Blocks * uint64(st.Bsize), nil
+}
+
+// dirSize: Summe aller Dateien unter path.
+func dirSize(path string) (n int64) {
+	filepath.WalkDir(path, func(_ string, d fs.DirEntry, err error) error {
+		if err == nil && d.Type().IsRegular() {
+			if fi, err := d.Info(); err == nil {
+				n += fi.Size()
+			}
+		}
+		return nil
+	})
+	return n
 }
 
 func logf(format string, args ...any) { log.Printf(format, args...) }

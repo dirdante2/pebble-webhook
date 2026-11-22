@@ -2215,7 +2215,10 @@ async function zeigeStatus() {
     if (aktuell?.name !== 'status') return;
     const abo = await pushAbo().catch(() => null);
     const pushDa = 'PushManager' in window;
-    const platz = (p) => (p.fehler ? T`nicht lesbar: ${esc(p.fehler)}` : T`${(p.frei_mb / 1024).toFixed(1)} GB frei${p.knapp ? T(' – <strong>knapp, neue Aufnahmen werden abgewiesen</strong>') : ''}`);
+    const speicher = (p) => T`<div class="karte speicherkarte"><div class="zeile"><strong>${esc(tx(p.name))}</strong>${p.fehler ? '' : T`<span>${groesse(p.belegt)}</span>`}</div>
+      <div class="leise pfad">${esc(p.pfad)}</div>
+      ${p.fehler ? T`<div class="hinweis schlecht">nicht lesbar: ${esc(p.fehler)}</div>` : T`<meter class="balken${p.knapp ? ' knapp' : ''}" min="0" max="${p.gesamt}" value="${p.gesamt - p.frei}" aria-label="${esc(tx('{0} von {1} belegt', groesse(p.gesamt - p.frei), groesse(p.gesamt)))}"></meter>
+        <div class="leise">frei ${groesse(p.frei)} von ${groesse(p.gesamt)}${p.knapp ? T(' – <strong>knapp, neue Aufnahmen werden abgewiesen</strong>') : ''}</div>`}</div>`;
     const joplin = !s.joplin.aktiv ? tx('ausgeschaltet') : s.joplin.fehler ? T`<strong>Fehler:</strong> ${esc(s.joplin.fehler)}` : T`erreichbar${s.joplin.offene_planungen ? T`, ${s.joplin.offene_planungen} Planung(en) noch nicht übertragen` : ''}`;
     const updateKarte = neueVersion ? T`<a class="karte updatekarte" href="/status/update">${updateSymbol}<span><strong>Update ${esc(neueVersion)} verfügbar</strong><br><span class="leise">Änderungen ansehen und installieren</span></span></a>` : '';
     seite.innerHTML = T`${statusReiter('status')}<h1>Status</h1>${updateKarte}
@@ -2226,9 +2229,11 @@ async function zeigeStatus() {
           <div class="leise">${esc(f.datei)} · ${groesse(f.groesse)}</div></div>`).join('')}
         ${s.audio_unbekannt.length > 1 ? T('<div class="leiste"><button class="btn haupt" data-import-alle="1">Alle importieren</button></div>') : ''}` : ''}
       <dl><dt>Aufträge</dt><dd>${s.auftraege} gesamt, ${s.warteschlange} in Arbeit</dd>
-        <dt>Speicher Audio</dt><dd>${platz(s.speicher_audio)}</dd><dt>Speicher Daten</dt><dd>${platz(s.speicher_daten)}</dd>
         ${s.joplin.aktiv ? T`<dt>Joplin</dt><dd>${joplin}</dd>` : ''}</dl>
       ${s.joplin.aktiv ? T('<div class="leiste"><button class="btn klein" data-a="pruefen">Joplin jetzt prüfen</button></div>') : ''}
+      <h2>Speicher</h2>
+      <p class="leise">Je Ablage: von der App belegt (rechts), darunter das Dateisystem.</p>
+      ${(s.speicher || []).map(speicher).join('')}
       ${s.probleme.length ? T`<h2>Aufträge mit Fehlern</h2>${s.fehlgeschlagen ? T('<div class="leiste"><button class="btn gefahr" data-a="fehler-weg">Alle fehlerhaften löschen</button></div>') : ''}${s.probleme.map(karte).join('')}` : ''}
       <h2>Benachrichtigungen</h2>
       ${!pushDa ? T('<p class="leise">Dieser Browser unterstützt keine Benachrichtigungen. Auf dem iPhone die App erst zum Home-Bildschirm hinzufügen.</p>')
@@ -2666,7 +2671,7 @@ function aenderungenHtml(text) {
 const SYM_LADEN = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11m-5-5 5 5 5-5M5 20h14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 const SYM_ZURUECK = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12a8 8 0 1 0 2.4-5.7M4 4v4.5h4.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 // Dateigröße lesbar (KB/MB/GB).
-const groesse = (n) => (n < 1024 * 1024 ? `${Math.max(1, Math.round(n / 1024))} KB` : n < 1024 ** 3 ? `${(n / 1024 / 1024).toFixed(1)} MB` : `${(n / 1024 ** 3).toFixed(1)} GB`);
+const groesse = (n) => (!n ? "0 KB" : n < 1024 * 1024 ? `${Math.max(1, Math.round(n / 1024))} KB` : n < 1024 ** 3 ? `${(n / 1024 / 1024).toFixed(1)} MB` : `${(n / 1024 ** 3).toFixed(1)} GB`);
 
 async function zeigeUpdate(teil) {
   seite.innerHTML = T`<p class="leer">Lädt …</p>`;

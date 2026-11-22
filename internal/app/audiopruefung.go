@@ -107,6 +107,26 @@ func (a *App) sortAudio() {
 	}
 }
 
+// removeEmptyDirs löscht leere Unterordner (z. B. Monate, deren Aufnahmen nach der Frist gelöscht oder in
+// die Unterordner verschoben wurden); root selbst und die Ordner diktat/planung bleiben.
+func (a *App) removeEmptyDirs(root string) {
+	var dirs []string
+	filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+		if err == nil && d.IsDir() && p != root {
+			dirs = append(dirs, p)
+		}
+		return nil
+	})
+	for i := len(dirs) - 1; i >= 0; i-- { // tiefste zuerst
+		if rel, _ := filepath.Rel(root, dirs[i]); rel == "diktat" || rel == "planung" {
+			continue
+		}
+		if entries, err := os.ReadDir(dirs[i]); err == nil && len(entries) == 0 {
+			os.Remove(dirs[i])
+		}
+	}
+}
+
 // audioMimeOf: MIME-Typ zur Dateiendung (Gegenstück zu audioExt).
 func audioMimeOf(name string) string {
 	switch strings.ToLower(filepath.Ext(name)) {
