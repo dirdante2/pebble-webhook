@@ -128,8 +128,9 @@ func (a *App) installedTime(releases []release) time.Time {
 	}
 	if m := buildStampRe.FindStringSubmatch(a.Version); m != nil {
 		if t, err := time.ParseInLocation("20060102-1504", m[1], time.Local); err == nil {
-			// Eigener Build: der Commit (und damit die nightly daraus) folgt meist erst Minuten danach.
-			return t.Add(30 * time.Minute)
+			// Eigener Build: es zählt allein die Zeit – jede später veröffentlichte Version des Kanals ist neuer,
+			// gleich welche Nummer sie trägt.
+			return t
 		}
 	}
 	if m := semverRe.FindStringSubmatch(current); m != nil && m[4] == "nightly" && len(m[5]) == 12 {
@@ -195,9 +196,10 @@ func (a *App) installedChannel() string {
 }
 
 // AvailableUpdate: empfohlene Version des Kanals aus der letzten Prüfung, ohne GitHub zu fragen ("" = keine).
-// Nur im Kanal der laufenden Version: ein anderer gewählter Kanal oder ein eigener Build meldet kein Update.
+// Nur im Kanal der laufenden Version (ein eigener Build gehört zum gewählten Kanal); ein anderer gewählter
+// Kanal meldet kein Update. Neuer heißt später veröffentlicht, nicht höhere Nummer.
 func (a *App) AvailableUpdate() string {
-	if a.installedChannel() != a.updateChannel() {
+	if ch := a.installedChannel(); ch != "lokal" && ch != a.updateChannel() {
 		return ""
 	}
 	a.updates.mu.Lock()
