@@ -23,6 +23,7 @@ type Config struct {
 	PublicURL    string // https://host, ohne Slash am Ende
 	DataDir      string
 	AudioDir     string
+	BackupDir    string // Ablage der Backups (Startwert BACKUP_DIR, vom Installer freigegeben)
 	TrustedProxy string
 
 	// APIToken öffnet einen Maschinenzugang (Authorization: Bearer) zu wenigen Routen; leer = abgeschaltet.
@@ -78,6 +79,11 @@ type Config struct {
 	UpdateChannel  string // stable | beta | nightly
 	AutoUpdate     bool   // täglich zur Uhrzeit AutoUpdateTime die neueste Version des Kanals installieren
 	AutoUpdateTime string // HH:MM
+
+	BackupSchedule      string // täglich | wöchentlich (montags) | monatlich (am 1.) | aus
+	BackupTime          string // HH:MM
+	BackupRetentionDays int    // geplante und manuelle Backups so lange behalten
+	BackupAudio         bool   // Aufnahmen mit ins Backup
 }
 
 // LoadFile setzt Variablen aus einer KEY=VALUE-Datei, ohne vorhandene zu überschreiben.
@@ -112,9 +118,10 @@ func LoadFile(path string) error {
 // Bootstrap sind die Werte, die der Dienst vor dem Öffnen der Datenbank braucht; sie bleiben in der
 // Umgebung (systemd EnvironmentFile). Alle übrigen Einstellungen liegen in der Datenbank (siehe Fields).
 type Bootstrap struct {
-	Listen   string
-	DataDir  string
-	AudioDir string
+	Listen    string
+	DataDir   string
+	AudioDir  string
+	BackupDir string
 }
 
 func LoadBootstrap() Bootstrap {
@@ -125,7 +132,7 @@ func LoadBootstrap() Bootstrap {
 		return def
 	}
 	return Bootstrap{Listen: get("LISTEN", "0.0.0.0:8080"), DataDir: get("DATA_DIR", "/var/lib/pebble-webhook"),
-		AudioDir: get("AUDIO_DIR", "/srv/pebble-audio")}
+		AudioDir: get("AUDIO_DIR", "/srv/pebble-audio"), BackupDir: get("BACKUP_DIR", "/srv/pebble-backup")}
 }
 
 // Load liest alle Einstellungen aus der Umgebung (Tests, Übernahme einer alten env-Datei).
@@ -225,6 +232,7 @@ func FromValues(boot Bootstrap, lookup func(string) string) (*Config, error) {
 		PublicURL:    strings.TrimRight(need("PUBLIC_URL"), "/"),
 		DataDir:      boot.DataDir,
 		AudioDir:     boot.AudioDir,
+		BackupDir:    boot.BackupDir,
 		TrustedProxy: str("TRUSTED_PROXY", ""),
 
 		APIToken: str("API_TOKEN", ""),
@@ -279,6 +287,11 @@ func FromValues(boot Bootstrap, lookup func(string) string) (*Config, error) {
 		UpdateChannel:  str("UPDATE_CHANNEL", "stable"),
 		AutoUpdate:     str("AUTO_UPDATE", "aktiv") == "aktiv",
 		AutoUpdateTime: str("AUTO_UPDATE_TIME", "04:00"),
+
+		BackupSchedule:      str("BACKUP_SCHEDULE", "täglich"),
+		BackupTime:          str("BACKUP_TIME", "03:00"),
+		BackupRetentionDays: num("BACKUP_RETENTION_DAYS", 30),
+		BackupAudio:         str("BACKUP_AUDIO", "inaktiv") == "aktiv",
 	}
 	if c.UpdateRepo == "aus" {
 		c.UpdateRepo = ""
@@ -331,6 +344,14 @@ func FromValues(boot Bootstrap, lookup func(string) string) (*Config, error) {
 	if _, err := time.Parse("15:04", c.AutoUpdateTime); err != nil || len(c.AutoUpdateTime) != 5 {
 		errs = append(errs, i18n.T("Uhrzeit automatisches Update: HH:MM, z. B. 04:00"))
 	}
+	if _, err := time.Parse("15:04", c.BackupTime); err != nil || len(c.BackupTime) != 5 {
+		errs = append(errs, i18n.T("Uhrzeit Backup: HH:MM, z. B. 03:00"))
+	}
+	switch c.BackupSchedule {
+	case "täglich", "wöchentlich", "monatlich", "aus":
+	default:
+		errs = append(errs, i18n.T("Backup-Plan: täglich, wöchentlich, monatlich oder aus"))
+	}
 	if c.UpdateRepo != "" && !repoRe.MatchString(c.UpdateRepo) {
 		errs = append(errs, i18n.T("Update-Quelle: owner/repo oder aus"))
 	}
@@ -348,6 +369,7 @@ var intLimits = map[string][2]int{
 	"RESEARCH_MAX_OUTPUT_TOKENS": {256, 200_000},
 	"AUDIO_RETENTION_DAYS":       {1, 36_500},
 	"TRASH_RETENTION_DAYS":       {1, 36_500},
+	"BACKUP_RETENTION_DAYS":      {1, 36_500},
 	"EMPTY_RETENTION_HOURS":      {0, 87_600},
 	"FAILED_RETENTION_HOURS":     {0, 87_600},
 	"PLANNING_AUTOCLOSE_DAYS":    {0, 3650},

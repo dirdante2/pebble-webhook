@@ -7,6 +7,17 @@ Version numbers X.Y.Z:
 - **Y** – a new feature (e.g. appointments, multiple languages, theme choice with day/night mode).
 - **Z** – all other UI changes and small bug fixes; safe to install or roll back at any time.
 
+## [1.29.0] - 2026-11-22
+
+### New
+- Backups: every backup is one archive in `BACKUP_DIR` (start value in `/etc/pebble-webhook/env`, default `/srv/pebble-backup`) with the database including all settings, the start values, version and channel – optionally the recordings.
+- Scheduled full backup: daily, weekly (Mondays) or monthly (on the 1st) at a chosen time, kept for a chosen number of days (default daily 03:00, 30 days, without recordings; `BACKUP_SCHEDULE`, `BACKUP_TIME`, `BACKUP_RETENTION_DAYS`, `BACKUP_AUDIO`). "Back up now" and download on the Backups tab.
+- Restoring a backup brings back data and settings and installs the version it was made with from its channel (own builds: data only).
+
+### Changed
+- Backups before updates are archives in the same format (database, settings, version, channel); the program is no longer copied – it can be downloaded again. They stay 30 days. Old backup folders remain restorable until they expire.
+- The health-check rollback after an update uses a copy kept only for that run.
+
 ## [1.28.1] - 2026-11-22
 
 ### New

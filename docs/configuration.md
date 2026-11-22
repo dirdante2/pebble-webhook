@@ -9,6 +9,7 @@ All settings except the three start values live in the database and are edited i
 | `LISTEN` | `0.0.0.0:8080` | address and port of the HTTP server |
 | `DATA_DIR` | `/var/lib/pebble-webhook` | database and state |
 | `AUDIO_DIR` | `/var/lib/pebble-webhook/audio` | recordings |
+| `BACKUP_DIR` | `/srv/pebble-backup` | backups; after changing it run `install.sh` again (creates the folder, allows the service to write there) |
 
 Restart after changes: `sudo systemctl restart pebble-webhook`.
 
@@ -35,6 +36,7 @@ Every save is validated first: number ranges (e.g. max recording 1–2048 MB, re
 | Retention (Fristen) | delete audio after N days, empty trash after N days, delete empty or failed recordings, auto-close plannings, retries, minimum free disk space |
 | Display and memory | how long done items stay active, visit gap for "new" (shared by all devices), minimum history entries, memory training size |
 | Access and updates | API token for machine access, web push contact, update channel (stable / beta / nightly), automatic update (on by default, daily at `AUTO_UPDATE_TIME`, default 04:00), update source (`owner/repo`, `aus` = off) |
+| Backup | schedule (`täglich` / `wöchentlich` / `monatlich` / `aus`, default daily), time (default 03:00), days to keep (default 30), with or without recordings |
 
 ## Upgrading from an env-only setup
 

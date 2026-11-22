@@ -10,7 +10,7 @@
 #   --source            build from the source tree this script lives in (needs Go)
 #   --binary PATH       install a prebuilt binary (used by deploy/deploy.sh)
 #   --apply-request     run by pebble-webhook-update.service: install the version requested in the web app,
-#                       or go back to a saved state (program and database from DATA_DIR/backup)
+#                       or restore a backup from BACKUP_DIR (data, settings and the version it was made with)
 #
 # Running it again updates the program; data, settings and the env file stay untouched.
 set -euo pipefail
@@ -38,6 +38,13 @@ done
 [ "$(id -u)" = 0 ] || { echo "please run as root (sudo)" >&2; exit 1; }
 command -v systemctl >/dev/null || { echo "systemd is required" >&2; exit 1; }
 
+# Start values from the env file (defaults for a fresh install).
+envval() { local v; v="$(grep -oP "^$1=\K.*" /etc/pebble-webhook/env 2>/dev/null | tail -n1 || true)"; v="${v%\"}"; v="${v#\"}"; echo "${v:-$2}"; }
+AUDIO_DIR="$(envval AUDIO_DIR "$DATA_DIR/audio")"
+BACKUP_DIR="$(envval BACKUP_DIR /srv/pebble-backup)"
+ARCHIVE_RE='^pebble-[0-9A-Za-z.+-]+-(stable|beta|nightly|lokal)-[0-9]{8}-[0-9]{6}-(update|plan|manuell)(-audio)?\.tar\.gz$'
+RELEASE_RE='^[0-9]+\.[0-9]+\.[0-9]+(-(beta|nightly)\.[0-9]+)?$'
+
 status() {
     if [ -n "${FROM_REQUEST:-}" ]; then echo "$*" > "$STATUS"; chown pebble:pebble "$STATUS"; fi
     echo "$*"
@@ -47,19 +54,27 @@ if [ "$MODE" = request ]; then
     # Written by the web app (user pebble): "<owner/repo> <version>". Validate strictly before use.
     [ -f "$REQUEST" ] || exit 0
     FROM_REQUEST=1
-    read -r REQ_REPO REQ_VERSION < "$REQUEST" || true
+    read -r REQ_REPO REQ_VERSION REQ_EXTRA < "$REQUEST" || true
     rm -f "$REQUEST"
     if [ "$REQ_REPO" = restore ]; then
-        # "restore <backup>": program and database of an earlier state (saved before each update).
-        [[ "$REQ_VERSION" =~ ^pebble-[0-9A-Za-z.+-]+-[0-9]{8}-[0-9]{6}$ ]] || { status "error: invalid backup"; exit 1; }
-        RESTORE="$DATA_DIR/backup/$REQ_VERSION"
-        [ -x "$RESTORE/pebble-webhook" ] && [ -f "$RESTORE/pebble.db" ] || { status "error: backup incomplete"; exit 1; }
-        MODE="restore"
+        # "restore <backup> [<owner/repo>]": an archive from BACKUP_DIR (data + the version it names), or an old
+        # backup folder from DATA_DIR/backup (program and database, until 1.28).
+        if [[ "$REQ_VERSION" =~ $ARCHIVE_RE ]]; then
+            ARCHIVE="$BACKUP_DIR/$REQ_VERSION"
+            [ -f "$ARCHIVE" ] && [ ! -L "$ARCHIVE" ] || { status "error: backup not found"; exit 1; }
+            [[ "${REQ_EXTRA:-}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] && REPO="$REQ_EXTRA"
+            MODE="archive"
+        else
+            [[ "$REQ_VERSION" =~ ^pebble-[0-9A-Za-z.+-]+-[0-9]{8}-[0-9]{6}$ ]] || { status "error: invalid backup"; exit 1; }
+            RESTORE="$DATA_DIR/backup/$REQ_VERSION"
+            [ -x "$RESTORE/pebble-webhook" ] && [ -f "$RESTORE/pebble.db" ] || { status "error: backup incomplete"; exit 1; }
+            MODE="restore"
+        fi
         trap 'status "error: going back to $REQ_VERSION failed (journalctl -u pebble-webhook-update)"' ERR
         status "running restore $REQ_VERSION"
     else
     [[ "$REQ_REPO" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || { status "error: invalid repository"; exit 1; }
-    [[ "$REQ_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-(beta|nightly)\.[0-9]+)?$ ]] || { status "error: invalid version"; exit 1; }
+    [[ "$REQ_VERSION" =~ $RELEASE_RE ]] || { status "error: invalid version"; exit 1; }
     REPO="$REQ_REPO"; VERSION="$REQ_VERSION"; MODE="release"
     trap 'status "error: update to $VERSION failed (journalctl -u pebble-webhook-update)"' ERR
     status "running $VERSION"
@@ -74,6 +89,30 @@ esac
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
+chmod 0711 "$TMP"
+
+# Restoring an archive: unpack it as the service user (never as root), then decide about the program – the version
+# named in the backup is installed from its channel; the running one stays if it is that version or if the backup
+# comes from an own build ("lokal"), which cannot be downloaded.
+DONE_NOTE=""
+if [ "$MODE" = archive ]; then
+    install -d -o pebble -g pebble -m 0700 "$TMP/restore"
+    runuser -u pebble -- tar -xzf "$ARCHIVE" -C "$TMP/restore" --no-same-owner --no-same-permissions
+    [ -z "$(find "$TMP/restore" -type l -print -quit)" ] || { status "error: backup contains links"; exit 1; }
+    [ -f "$TMP/restore/pebble.db" ] && [ -f "$TMP/restore/meta.json" ] || { status "error: backup incomplete"; exit 1; }
+    R_VERSION="$(grep -oP '"version": "\K[^"]+' "$TMP/restore/meta.json" | head -n1 || true)"
+    R_CHANNEL="$(grep -oP '"kanal": "\K[^"]+' "$TMP/restore/meta.json" | head -n1 || true)"
+    CUR="$(/usr/local/bin/pebble-webhook version 2>/dev/null | awk '{print $1}' || true)"
+    RESTORE_DATA=1
+    if [ -n "$R_VERSION" ] && [ "$R_VERSION" = "$CUR" ]; then
+        MODE="keep"
+    elif [[ "$R_CHANNEL" =~ ^(stable|beta|nightly)$ ]] && [[ "$R_VERSION" =~ $RELEASE_RE ]]; then
+        MODE="release"; VERSION="$R_VERSION"
+    else
+        MODE="keep"; DONE_NOTE=" (version ${R_VERSION:-?} cannot be downloaded, kept ${CUR:-the installed one})"
+    fi
+    echo "Restoring $REQ_VERSION: data from the backup, program ${VERSION:-${CUR:-unchanged}}"
+fi
 
 # --- 1. get the program ---
 case "$MODE" in
@@ -115,6 +154,9 @@ case "$MODE" in
     binary)
         install -m 0755 "$BINARY" "$TMP/pebble-webhook"
         ;;
+    keep)
+        install -m 0755 /usr/local/bin/pebble-webhook "$TMP/pebble-webhook"
+        ;;
     restore)
         # Copy first: the backup of the current state below may rotate the old one away.
         install -m 0755 "$RESTORE/pebble-webhook" "$TMP/pebble-webhook"
@@ -127,7 +169,7 @@ esac
 
 # --- 2. user, directories, start values ---
 id pebble >/dev/null 2>&1 || useradd --system --home-dir "$DATA_DIR" --shell /usr/sbin/nologin pebble
-install -d -o pebble -g pebble -m 0750 "$DATA_DIR" "$DATA_DIR/audio"
+install -d -o pebble -g pebble -m 0750 "$DATA_DIR" "$DATA_DIR/audio" "$BACKUP_DIR"
 [ -d "$DATA_DIR/releases" ] && chown -R pebble:pebble "$DATA_DIR/releases"
 install -d -o root -g pebble -m 0750 /etc/pebble-webhook
 install -d -m 0755 "$LIB_DIR"
@@ -137,25 +179,67 @@ if [ ! -f /etc/pebble-webhook/env ]; then
 LISTEN=0.0.0.0:8080
 DATA_DIR=$DATA_DIR
 AUDIO_DIR=$DATA_DIR/audio
+# Backups (database, settings, version, channel; optionally recordings). After changing it run this script again,
+# it creates the folder and allows the service to write there.
+BACKUP_DIR=$BACKUP_DIR
 EOF
     chown root:pebble /etc/pebble-webhook/env
     chmod 0640 /etc/pebble-webhook/env
+elif ! grep -q '^BACKUP_DIR=' /etc/pebble-webhook/env; then
+    printf '\n# Backups (database, settings, version, channel; optionally recordings). After changing it run install.sh again.\nBACKUP_DIR=%s\n' "$BACKUP_DIR" >> /etc/pebble-webhook/env
 fi
 
-# --- 3. back up program and database before replacing a running version (backups older than 30 days go) ---
+# --- 3. back up the running state before replacing it: an archive in BACKUP_DIR with database (incl. all settings),
+#        start values, version and channel (update backups older than 30 days go). The program itself is not
+#        backed up – restoring installs the version again; for the health check below a copy stays in $TMP. ---
 if [ -f "$DATA_DIR/pebble.db" ] && [ -x /usr/local/bin/pebble-webhook ]; then
-    OLD="$(/usr/local/bin/pebble-webhook version 2>/dev/null | awk '{print $1}')"
-    BACKUP="$DATA_DIR/backup/pebble-${OLD:-unknown}-$(date +%Y%m%d-%H%M%S)"
+    OLD_BUILD="$(/usr/local/bin/pebble-webhook version 2>/dev/null | tr -d '"\\' || true)"
+    OLD="$(echo "$OLD_BUILD" | awk '{print $1}')"
+    [[ "$OLD" =~ ^[0-9A-Za-z.+-]+$ ]] || OLD="unbekannt"
+    OLD_CH="$(cat "$DATA_DIR/installed-channel" 2>/dev/null || true)"
+    [[ "$OLD_CH" =~ ^(stable|beta|nightly|lokal)$ ]] || OLD_CH="lokal"
     systemctl stop pebble-webhook 2>/dev/null || true
-    install -d -o pebble -g pebble -m 0750 "$DATA_DIR/backup" "$BACKUP"
-    for f in pebble.db pebble.db-wal pebble.db-shm; do [ -f "$DATA_DIR/$f" ] && cp -p "$DATA_DIR/$f" "$BACKUP/"; done
-    # The program too, so the web app can go back to exactly this state (program + database).
-    cp -p /usr/local/bin/pebble-webhook "$BACKUP/pebble-webhook"
-    # Channel the running version came from (stable/beta/nightly, or "lokal" for own builds).
-    [ -f "$DATA_DIR/installed-channel" ] && cp -p "$DATA_DIR/installed-channel" "$BACKUP/kanal"
-    chown -R pebble:pebble "$BACKUP"
-    find "$DATA_DIR/backup" -mindepth 1 -maxdepth 1 -name 'pebble-*' -type d -mtime +30 -not -path "$BACKUP" -exec rm -rf {} +
-    echo "Database backed up to $BACKUP"
+    cp -p /usr/local/bin/pebble-webhook "$TMP/old-pebble-webhook"
+    install -d -m 0700 "$TMP/old"
+    for f in pebble.db pebble.db-wal pebble.db-shm; do [ -f "$DATA_DIR/$f" ] && cp -p "$DATA_DIR/$f" "$TMP/old/"; done
+    cat > "$TMP/old/meta.json" <<EOF
+{
+  "format": 1,
+  "version": "$OLD",
+  "build": "$OLD_BUILD",
+  "kanal": "$OLD_CH",
+  "erstellt": "$(date -Iseconds)",
+  "art": "update",
+  "audio": false,
+  "data_dir": "$DATA_DIR",
+  "audio_dir": "$AUDIO_DIR"
+}
+EOF
+    { echo "# Start values at the time of the backup (/etc/pebble-webhook/env)"
+      grep -E '^(LISTEN|DATA_DIR|AUDIO_DIR|BACKUP_DIR)=' /etc/pebble-webhook/env 2>/dev/null || true; } > "$TMP/old/env"
+    NAME="pebble-$OLD-$OLD_CH-$(date +%Y%m%d-%H%M%S)-update.tar.gz"
+    install -d -o pebble -g pebble -m 0750 "$BACKUP_DIR"
+    tar -czf "$BACKUP_DIR/.$NAME.tmp" -C "$TMP/old" .
+    mv "$BACKUP_DIR/.$NAME.tmp" "$BACKUP_DIR/$NAME"
+    chown pebble:pebble "$BACKUP_DIR/$NAME"
+    chmod 0640 "$BACKUP_DIR/$NAME"
+    BACKUP="$BACKUP_DIR/$NAME"
+    find "$BACKUP_DIR" -maxdepth 1 -type f -name 'pebble-*-update*.tar.gz' -mtime +30 -not -path "$BACKUP" -delete
+    [ -d "$DATA_DIR/backup" ] && find "$DATA_DIR/backup" -mindepth 1 -maxdepth 1 -name 'pebble-*' -type d -mtime +30 -exec rm -rf {} +
+    echo "Backed up to $BACKUP"
+fi
+if [ -n "${RESTORE_DATA:-}" ]; then
+    systemctl stop pebble-webhook 2>/dev/null || true
+    rm -f "$DATA_DIR"/pebble.db "$DATA_DIR"/pebble.db-wal "$DATA_DIR"/pebble.db-shm
+    for f in pebble.db pebble.db-wal pebble.db-shm; do [ -f "$TMP/restore/$f" ] && cp "$TMP/restore/$f" "$DATA_DIR/"; done
+    chown pebble:pebble "$DATA_DIR"/pebble.db*
+    chmod 0640 "$DATA_DIR"/pebble.db*
+    if [ -d "$TMP/restore/audio" ]; then
+        install -d -o pebble -g pebble -m 0750 "$AUDIO_DIR"
+        cp -R "$TMP/restore/audio/." "$AUDIO_DIR/"
+        chown -R pebble:pebble "$AUDIO_DIR"
+    fi
+    echo "Data restored from $ARCHIVE"
 fi
 if [ "$MODE" = restore ]; then
     systemctl stop pebble-webhook 2>/dev/null || true
@@ -181,7 +265,7 @@ elif [ -f "${BASH_SOURCE[0]:-/nonexistent}" ] && [ "$(readlink -f "${BASH_SOURCE
     install -m 0755 "${BASH_SOURCE[0]}" "$LIB_DIR/install.sh"
 fi
 
-cat > /etc/systemd/system/pebble-webhook.service <<'EOF'
+cat > /etc/systemd/system/pebble-webhook.service <<EOF
 [Unit]
 Description=pebble-webhook (voice notes from the Pebble Index 01)
 After=network-online.target
@@ -200,7 +284,7 @@ TimeoutStopSec=30
 StateDirectory=pebble-webhook
 StateDirectoryMode=0750
 UMask=0027
-ReadWritePaths=-/srv/pebble-audio
+ReadWritePaths=-/srv/pebble-audio -$AUDIO_DIR -$BACKUP_DIR
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
@@ -251,13 +335,13 @@ healthy() {
     return 1
 }
 if ! healthy; then
-    if [ -n "${BACKUP:-}" ] && [ -x "$BACKUP/pebble-webhook" ] && [ -f "$BACKUP/pebble.db" ]; then
-        echo "New version not healthy – going back to ${OLD:-the previous version} (program and database from $BACKUP)" >&2
+    if [ -x "$TMP/old-pebble-webhook" ] && [ -f "$TMP/old/pebble.db" ]; then
+        echo "New version not healthy – going back to ${OLD:-the previous version} (program and database as before this run)" >&2
         journalctl -u pebble-webhook -n 20 --no-pager >&2 || true
         systemctl stop pebble-webhook || true
-        install -m 0755 "$BACKUP/pebble-webhook" /usr/local/bin/pebble-webhook
+        install -m 0755 "$TMP/old-pebble-webhook" /usr/local/bin/pebble-webhook
         rm -f "$DATA_DIR"/pebble.db "$DATA_DIR"/pebble.db-wal "$DATA_DIR"/pebble.db-shm
-        for f in pebble.db pebble.db-wal pebble.db-shm; do [ -f "$BACKUP/$f" ] && cp -p "$BACKUP/$f" "$DATA_DIR/"; done
+        for f in pebble.db pebble.db-wal pebble.db-shm; do [ -f "$TMP/old/$f" ] && cp -p "$TMP/old/$f" "$DATA_DIR/"; done
         chown pebble:pebble "$DATA_DIR"/pebble.db*
         systemctl start pebble-webhook
         if healthy; then
@@ -275,6 +359,7 @@ fi
 case "$MODE" in
     release) case "$VERSION" in *-beta.*) CH=beta ;; *-nightly.*) CH=nightly ;; "") CH=stable ;; *) CH=stable ;; esac ;;
     restore) CH="$(cat "$TMP/kanal" 2>/dev/null || echo lokal)" ;;
+    keep) if [ -z "$DONE_NOTE" ]; then CH="$R_CHANNEL"; else CH="$(cat "$DATA_DIR/installed-channel" 2>/dev/null || echo lokal)"; fi ;;
     *) CH=lokal ;;
 esac
 echo "$CH" > "$DATA_DIR/installed-channel"
@@ -282,7 +367,7 @@ chown pebble:pebble "$DATA_DIR/installed-channel"
 
 NEW="$(/usr/local/bin/pebble-webhook version)"
 if [ -n "${FROM_REQUEST:-}" ]; then
-    status "done $VERSION"
+    if [ -n "${RESTORE_DATA:-}" ]; then status "done restore $REQ_VERSION$DONE_NOTE"; else status "done $VERSION"; fi
     exit 0
 fi
 echo "Installed: pebble-webhook $NEW"

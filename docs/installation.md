@@ -54,7 +54,7 @@ Open the printed link (`/ersteinrichtung?code=…`) – ideally already through 
 | Audio | `/var/lib/pebble-webhook/audio/YYYY/MM/` |
 | Service | `systemctl status pebble-webhook`, logs `journalctl -u pebble-webhook` |
 | Updater | `/usr/local/lib/pebble-webhook/install.sh`, units `pebble-webhook-update.{path,service}` |
-| Backups | `/var/lib/pebble-webhook/backup/` – database copy before every update (newest 5) |
+| Backups | `/srv/pebble-backup/` (`BACKUP_DIR`) – archives with database, settings, version and channel: before every update (30 days) and scheduled (see [updates](updates.md#backups)) |
 
 Back up `/var/lib/pebble-webhook`; it holds everything.
 

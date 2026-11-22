@@ -1970,3 +1970,9 @@ func (s *Store) DeleteGroup(name string) (conflict string, err error) {
 	}
 	return "", tx.Commit()
 }
+
+// Snapshot schreibt eine in sich stimmige Kopie der Datenbank nach path (VACUUM INTO; path darf nicht existieren).
+func (s *Store) Snapshot(path string) error {
+	_, err := s.DB.Exec(`VACUUM INTO ?`, path)
+	return err
+}

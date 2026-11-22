@@ -19,7 +19,7 @@ type Field struct {
 	Generate bool     `json:"erzeugen,omitempty"` // Geheimnis, das der Assistent selbst erzeugt
 }
 
-// Fields: alle Einstellungen außer den Start-Werten (LISTEN, DATA_DIR, AUDIO_DIR).
+// Fields: alle Einstellungen außer den Start-Werten (LISTEN, DATA_DIR, AUDIO_DIR, BACKUP_DIR).
 var Fields = []Field{
 	{Key: "LANGUAGE", Group: "Sprache", Label: "Sprache", Help: "Sprache der Web-App, der Meldungen und der Texte, die die KI schreibt; auch die Transkription richtet sich danach. Bestehende Einträge bleiben, wie sie sind.", Kind: "choice", Default: "de", Choices: []string{"de", "en"}},
 
@@ -78,6 +78,11 @@ var Fields = []Field{
 	{Key: "AUTO_UPDATE", Group: "Zugang und Updates", Label: "Automatisches Update", Help: "aktiv = jeden Tag zur gewählten Uhrzeit die neueste Version des Update-Kanals installieren, wenn es eine neuere gibt (vorher Backup).", Kind: "choice", Default: "aktiv", Choices: []string{"aktiv", "inaktiv"}},
 	{Key: "AUTO_UPDATE_TIME", Group: "Zugang und Updates", Label: "Uhrzeit automatisches Update", Help: "Uhrzeit (HH:MM, Zeitzone des Servers), zu der das automatische Update prüft und installiert.", Kind: "text", Default: "04:00"},
 	{Key: "UPDATE_REPO", Group: "Zugang und Updates", Label: "Update-Quelle (GitHub owner/repo)", Help: "aus = keine Update-Prüfung.", Kind: "text", Default: "dirdante2/pebble-webhook"},
+
+	{Key: "BACKUP_SCHEDULE", Group: "Backup", Label: "Backup-Plan", Help: "Wann das Komplett-Backup läuft (Datenbank mit Einstellungen, Version und Kanal): täglich, wöchentlich (montags), monatlich (am 1.) oder aus.", Kind: "choice", Default: "täglich", Choices: []string{"täglich", "wöchentlich", "monatlich", "aus"}},
+	{Key: "BACKUP_TIME", Group: "Backup", Label: "Uhrzeit Backup", Help: "Uhrzeit (HH:MM, Zeitzone des Servers) des geplanten Backups.", Kind: "text", Default: "03:00"},
+	{Key: "BACKUP_RETENTION_DAYS", Group: "Backup", Label: "Backups behalten (Tage)", Help: "Ältere geplante und manuelle Backups werden gelöscht; Backups vor Updates bleiben 30 Tage.", Kind: "int", Default: "30"},
+	{Key: "BACKUP_AUDIO", Group: "Backup", Label: "Aufnahmen sichern", Help: "aktiv = die Audiodateien kommen mit ins Backup (größer).", Kind: "choice", Default: "inaktiv", Choices: []string{"aktiv", "inaktiv"}},
 }
 
 // Field sucht eine Einstellung; ok=false bei unbekanntem Schlüssel.

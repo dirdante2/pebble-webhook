@@ -515,6 +515,7 @@ a.tagchip { text-decoration: none; }
 /* Konfiguration: ? | Name | ✎ | Wert, Erklärung darunter */
 .konfliste { padding-top: .2rem; padding-bottom: .2rem; }
 .konfzeile { display: grid; grid-template-columns: 1.9rem minmax(0, 42%) 1.9rem minmax(0, 1fr); align-items: center; gap: .1rem .4rem; padding: .45rem 0; font-size: .92rem; }
+.konfzeile.ohnehilfe { grid-template-columns: minmax(0, 42%) 1.9rem minmax(0, 1fr); }
 .konfzeile + .konfzeile { border-top: 1px solid var(--linie); }
 .konfname { color: var(--leise); }
 .konfwert { overflow-wrap: anywhere; }

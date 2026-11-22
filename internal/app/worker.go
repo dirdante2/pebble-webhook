@@ -20,6 +20,7 @@ var backoff = []time.Duration{30 * time.Second, 2 * time.Minute, 10 * time.Minut
 func (a *App) Run(ctx context.Context) {
 	go a.CheckUpdates(ctx)
 	go a.AutoUpdate(ctx)
+	go a.BackupSchedule(ctx)
 	a.Cleanup()
 	lastCleanup := time.Now()
 	for {

@@ -194,107 +194,6 @@ func (a *App) installedChannel() string {
 	return "lokal"
 }
 
-// savedState ist ein Backup vor einem Update oder Versionswechsel: Programm und Datenbank der Version, die
-// damals lief, mit ihrem Kanal (stable/beta/nightly, lokal = eigener Build).
-type savedState struct {
-	Name     string `json:"name"`
-	Version  string `json:"version"`
-	Channel  string `json:"kanal"`
-	At       int64  `json:"zeit"`
-	Complete bool   `json:"vollstaendig"` // mit Programm (ab 1.27.4); ältere Sicherungen haben nur die Datenbank
-}
-
-var backupNameRe = regexp.MustCompile(`^pebble-([0-9A-Za-z.+-]+)-(\d{8}-\d{6})$`)
-
-// savedStates liest DATA_DIR/backup (neueste zuerst); angelegt vom Installer vor jedem Wechsel.
-func (a *App) savedStates() []savedState {
-	out := []savedState{}
-	entries, _ := os.ReadDir(filepath.Join(a.Cfg.DataDir, "backup"))
-	for _, e := range entries {
-		m := backupNameRe.FindStringSubmatch(e.Name())
-		if !e.IsDir() || m == nil {
-			continue
-		}
-		at, err := time.ParseInLocation("20060102-150405", m[2], time.Local)
-		if err != nil {
-			continue
-		}
-		dir := filepath.Join(a.Cfg.DataDir, "backup", e.Name())
-		_, errBin := os.Stat(filepath.Join(dir, "pebble-webhook"))
-		_, errDB := os.Stat(filepath.Join(dir, "pebble.db"))
-		channel := ""
-		if b, err := os.ReadFile(filepath.Join(dir, "kanal")); err == nil {
-			channel = strings.TrimSpace(string(b))
-		} else if _, ch, ok := parseVersion(m[1]); ok && ch != "stable" {
-			channel = ch // Vorabversion: am Namen erkennbar; ohne Endung bleibt es offen
-		}
-		out = append(out, savedState{Name: e.Name(), Version: m[1], Channel: channel, At: at.UnixMilli(), Complete: errBin == nil && errDB == nil})
-	}
-	sort.Slice(out, func(i, k int) bool { return out[i].At > out[k].At })
-	return out
-}
-
-// backupRetention: Backups älter als das löscht die tägliche Bereinigung (und der Installer beim nächsten Update).
-const backupRetention = 30 * 24 * time.Hour
-
-// cleanBackups löscht Backups älter als backupRetention (das jüngste bleibt immer) und heruntergeladene
-// Releases im lokalen Vorrat (DATA_DIR/releases), die so lange nicht mehr genutzt wurden.
-func (a *App) cleanBackups() {
-	cache := filepath.Join(a.Cfg.DataDir, "releases")
-	entries, _ := os.ReadDir(cache)
-	for _, e := range entries {
-		fi, err := e.Info()
-		if err != nil || !e.IsDir() || time.Since(fi.ModTime()) < backupRetention {
-			continue
-		}
-		if err := os.RemoveAll(filepath.Join(cache, e.Name())); err != nil {
-			logf("Release-Vorrat: %s: %v", e.Name(), err)
-			continue
-		}
-		logf("Release-Vorrat: %s gelöscht (30 Tage nicht genutzt)", e.Name())
-	}
-	states := a.savedStates()
-	for i, st := range states {
-		if i == 0 || time.Since(time.UnixMilli(st.At)) < backupRetention {
-			continue
-		}
-		if err := os.RemoveAll(filepath.Join(a.Cfg.DataDir, "backup", st.Name)); err != nil {
-			logf("Backups: %s: %v", st.Name, err)
-			continue
-		}
-		logf("Backups: %s gelöscht (älter als 30 Tage)", st.Name)
-	}
-}
-
-// handleUpdateRestore: zurück zu einem gespeicherten Stand (Programm und Datenbank) über den Updater.
-func (a *App) handleUpdateRestore(w http.ResponseWriter, r *http.Request) {
-	var in struct {
-		Name string `json:"name"`
-	}
-	if readJSON(r, &in) != nil || !backupNameRe.MatchString(in.Name) {
-		writeErr(w, 400, "ungueltig", "Stand fehlt")
-		return
-	}
-	if !updateInstallable() {
-		writeErr(w, http.StatusConflict, "nicht_moeglich", "Kein Updater installiert – Installation mit install.sh nötig")
-		return
-	}
-	found := false
-	for _, st := range a.savedStates() {
-		found = found || (st.Name == in.Name && st.Complete)
-	}
-	if !found {
-		writeErr(w, 404, "fehlt", "Stand nicht gefunden oder ohne Programm")
-		return
-	}
-	os.WriteFile(filepath.Join(a.Cfg.DataDir, "update-status"), []byte("requested restore "+in.Name+"\n"), 0o640)
-	if err := os.WriteFile(filepath.Join(a.Cfg.DataDir, "update-request"), []byte("restore "+in.Name+"\n"), 0o640); err != nil {
-		writeErr(w, 500, "speicher", "Anfrage nicht schreibbar")
-		return
-	}
-	writeJSON(w, 200, map[string]any{"ok": true})
-}
-
 // AvailableUpdate: empfohlene Version des Kanals aus der letzten Prüfung, ohne GitHub zu fragen ("" = keine).
 func (a *App) AvailableUpdate() string {
 	a.updates.mu.Lock()
@@ -542,7 +441,7 @@ func (a *App) handleUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	out := map[string]any{"aktuell": current, "quelle": a.Cfg.UpdateRepo, "kanal": a.updateChannel(), "kanaele": []string{"stable", "beta", "nightly"},
 		"installierbar": updateInstallable(), "status": a.updateStatus(), "versionen": []channelRelease{},
-		"mindestens": "1.14.0", "staende": a.savedStates(), "auto": a.autoUpdateOn(), "auto_zeit": a.Cfg.AutoUpdateTime, "auto_letzt": func() string { v, _ := a.DB.Get(autoUpdateKey); return v }(), "aktuell_aenderungen": now, "alle_aenderungen": allNotes}
+		"mindestens": "1.14.0", "backups": a.backups(), "backup": a.backupPlan(), "auto": a.autoUpdateOn(), "auto_zeit": a.Cfg.AutoUpdateTime, "auto_letzt": func() string { v, _ := a.DB.Get(autoUpdateKey); return v }(), "aktuell_aenderungen": now, "alle_aenderungen": allNotes}
 	if a.Cfg.UpdateRepo == "" {
 		out["fehler"] = i18n.T("Update-Prüfung ist aus (Einstellung Update-Quelle)")
 		writeJSON(w, 200, out)

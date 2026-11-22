@@ -315,7 +315,7 @@ const routen = [
   [/^\/verbinden$/, 'verbinden', zeigeVerbinden],
   [/^\/ersteinrichtung$/, 'ersteinrichtung', zeigeErsteinrichtung],
   [/^\/status\/einstellungen$/, 'einstellungen', zeigeEinstellungen],
-  [/^\/status\/update$/, 'update', zeigeUpdate],
+  [/^\/status\/update(\/backups)?$/, 'update', zeigeUpdate],
   [/^\/status\/einstellungen\/bearbeiten$/, 'einstellungenBearbeiten', () => geheZu('/status/einstellungen', true)],
   [/^\/status\/einstellungen\/([A-Z_]+)$/, 'einstellungBearbeiten', zeigeEinstellungBearbeiten],
   [/^\/einrichten$/, 'einrichten', zeigeEinrichten],
@@ -2650,11 +2650,14 @@ function aenderungenHtml(text) {
 
 // Updates: installierte Version, Versionen des gewählten Kanals (die letzten 3), frühere Stände.
 // Änderungslisten nur auf Knopfdruck in einem Blatt; die vollständige Liste liegt auf GitHub.
-async function zeigeUpdate() {
+// Dateigröße lesbar (KB/MB/GB).
+const groesse = (n) => (n < 1024 * 1024 ? `${Math.max(1, Math.round(n / 1024))} KB` : n < 1024 ** 3 ? `${(n / 1024 / 1024).toFixed(1)} MB` : `${(n / 1024 ** 3).toFixed(1)} GB`);
+
+async function zeigeUpdate(teil) {
   seite.innerHTML = T`<p class="leer">Lädt …</p>`;
   const KANAL_TEXT = { stable: tx('stable – Langzeit-Versionen'), beta: tx('beta – neue Funktionen, noch nicht ausgereift'), nightly: tx('nightly – jede Änderung, ungetestet') };
   let u = null;
-  let reiter = 'updates';
+  let reiter = teil ? 'backups' : 'updates';
   let alle = false; // „Mehr“: alle gespeicherten Versionen des Kanals statt der letzten 3
   const zeigeLog = (titel, text) => {
     document.querySelector('dialog.logblatt')?.remove();
@@ -2690,7 +2693,7 @@ async function zeigeUpdate() {
         <div class="versionknoepfe"><button class="btn klein" data-log="${esc(r.version)}">Änderungen</button>${knopf}</div></div>`;
     };
     const kopf = T`<h1>Updates</h1>
-      <nav class="btn-group unter" aria-label="Updates">${[['updates', tx('Updates')], ['backups', tx('Backups')]].map(([k, n]) => T`<button class="btn${k === reiter ? ' aktiv' : ''}" data-reiter="${k}" aria-pressed="${k === reiter}">${n}${k === 'backups' ? ` <span class="zaehler still">${(u.staende || []).length}</span>` : ''}</button>`).join('')}</nav>
+      <nav class="btn-group unter" aria-label="Updates">${[['updates', tx('Updates')], ['backups', tx('Backups')]].map(([k, n]) => T`<button class="btn${k === reiter ? ' aktiv' : ''}" data-reiter="${k}" aria-pressed="${k === reiter}">${n}${k === 'backups' ? ` <span class="zaehler still">${(u.backups || []).length}</span>` : ''}</button>`).join('')}</nav>
       ${status}${u.fehler ? T`<div class="hinweis warn">${esc(u.fehler)}</div>` : ''}`;
     const updates = T`<div class="karte versionzeile aktuell"><div class="versionkopf"><span class="leise">Installiert</span><span class="versionzeile1"><span class="badge neutral">${esc(tx(u.aktuell_kanal || ''))}</span><strong class="versiongross">${esc(u.aktuell)}</strong></span></div>
         <div class="versionknoepfe"><button class="btn klein" data-log="">Änderungen</button></div></div>
@@ -2701,7 +2704,7 @@ async function zeigeUpdate() {
       ${liste.length ? (alle ? liste : liste.slice(0, 3)).map(zeile).join('') : u.fehler ? '' : T('<p class="leise">In diesem Kanal gibt es noch keine Version.</p>')}
       ${!alle && liste.length > 3 ? T`<div class="leiste"><button class="btn" data-mehr-versionen="1">Mehr (${liste.length - 3})</button></div>` : ''}
       ${liste.length && !liste.some((r) => r.neu) ? T('<p class="leise">Keine neuere Version als die installierte in diesem Kanal.</p>') : ''}
-      ${u.installierbar ? T('<p class="leise">Vor jedem Wechsel werden Programm und Datenbank gesichert.</p>') : T('<div class="hinweis">Installieren aus der App braucht die Installation per <code>install.sh</code>; sonst das Skript mit <code>--version</code> ausführen.</div>')}
+      ${u.installierbar ? T('<p class="leise">Vor jedem Wechsel werden Datenbank, Einstellungen, Version und Kanal gesichert.</p>') : T('<div class="hinweis">Installieren aus der App braucht die Installation per <code>install.sh</code>; sonst das Skript mit <code>--version</code> ausführen.</div>')}
       <h2>Automatisches Update</h2>
       <nav class="btn-group unter" aria-label="Automatisches Update">${[[true, tx('An')], [false, tx('Aus')]].map(([an, n]) => T`<button class="btn${u.auto === an ? ' aktiv' : ''}" data-auto="${an ? '1' : '0'}" aria-pressed="${u.auto === an}">${n}</button>`).join('')}</nav>
       <p class="leise">${u.auto ? esc(tx('Täglich um {0} die neueste Version aus {1} installieren, wenn sie neuer ist (vorher Backup).', u.auto_zeit, u.kanal)) : tx('Aus – Updates nur von Hand.')}
@@ -2709,10 +2712,27 @@ async function zeigeUpdate() {
       ${u.auto_letzt ? T`<p class="leise">${esc(tx('Letzter Lauf: {0}', u.auto_letzt))}</p>` : ''}
       <p class="leise">${esc(u.quelle || 'aus')}${u.geprueft ? T` · geprüft ${zeit(u.geprueft)}` : ''}</p>
       <div class="leiste"><button class="btn" data-pruefen="1">Jetzt prüfen</button></div>`;
-    const backups = T`<p class="leise">Vor jedem Update und Versionswechsel: Programm und Datenbank der Version, die lief. Zurückwechseln ersetzt beides; was seitdem dazukam, fehlt danach. Backups älter als 30 Tage werden gelöscht.</p>
-      ${(u.staende || []).length ? u.staende.map((st) => T`<div class="karte versionzeile"><div class="versionkopf">${st.kanal ? T`<span class="badge neutral">${esc(tx(st.kanal))}</span>` : ''}<strong>${esc(st.version)}</strong><span class="leise">${zeit(st.zeit)}</span></div>
-          <div class="versionknoepfe">${st.vollstaendig ? (u.installierbar ? T`<button class="btn klein" data-zurueck="${esc(st.name)}" data-version="${esc(st.version)}"${laeuft ? ' disabled' : ''}>Zurückwechseln</button>` : '')
-    : T('<span class="leise">nur Datenbank</span>')}</div></div>`).join('') : T('<p class="leise">Noch keine Backups.</p>')}`;
+    const b = u.backup || {};
+    const ART = { update: tx('vor Update'), plan: tx('geplant'), manuell: tx('manuell') };
+    const PLAN_NAME = { 'täglich': tx('täglich'), 'wöchentlich': tx('wöchentlich (montags)'), monatlich: tx('monatlich (am 1.)'), aus: tx('aus') };
+    const letzt = (b.letzt || '').match(/^(\S+ \S+) (ok|fehler) ?(.*)$/);
+    const konf = (name, wert, key) => T`<div class="konfzeile ohnehilfe"><span class="konfname">${esc(name)}</span>
+      ${key ? T`<a class="konfedit" href="/status/einstellungen/${key}?zurueck=/status/update/backups" aria-label="${esc(tx('{0} bearbeiten', name))}">${STIFT}</a>` : '<span></span>'}<span class="konfwert">${wert}</span></div>`;
+    const backups = T`<h2>Automatisches Backup</h2>
+      <div class="karte konfliste">${konf(tx('Plan'), esc(PLAN_NAME[b.plan] || b.plan || ''), 'BACKUP_SCHEDULE')}
+        ${b.plan !== 'aus' ? konf(tx('Uhrzeit'), esc(b.zeit || ''), 'BACKUP_TIME') : ''}
+        ${konf(tx('Behalten'), esc(tx('{0} Tage', b.tage)), 'BACKUP_RETENTION_DAYS')}
+        ${konf(tx('Aufnahmen'), b.audio ? tx('mit') : tx('ohne'), 'BACKUP_AUDIO')}
+        ${konf(tx('Ordner'), esc(b.ordner || ''), '')}</div>
+      <p class="leise">${b.plan === 'aus' ? tx('Aus – Backups nur von Hand und vor Updates.') : tx('Backups vor Updates bleiben 30 Tage.')} ${tx('Den Ordner legt der Startwert BACKUP_DIR in /etc/pebble-webhook/env fest; danach install.sh erneut ausführen.')}</p>
+      ${letzt ? (letzt[2] === 'ok' ? T`<p class="leise">${esc(tx('Letzter Lauf: {0}', letzt[1]))}</p>` : T`<div class="hinweis schlecht">${esc(tx('Letztes geplantes Backup fehlgeschlagen ({0}): {1}', letzt[1], letzt[3]))}</div>`) : ''}
+      <div class="leiste"><button class="btn haupt" data-sichern="1">Jetzt sichern</button></div>
+      <h2>Backups</h2>
+      <p class="leise">Jedes Backup enthält Datenbank mit allen Einstellungen, Version und Kanal. Wiederherstellen spielt die Daten ein und installiert die Version aus dem Backup; was seitdem dazukam, fehlt danach. Der jetzige Stand wird vorher gesichert.</p>
+      ${(u.backups || []).length ? u.backups.map((st) => T`<div class="karte versionzeile"><div class="versionkopf"><span class="versionzeile1">${st.kanal ? T`<span class="badge neutral">${esc(tx(st.kanal))}</span>` : ''}<strong>${esc(st.version)}</strong></span>
+          <span class="leise">${zeit(st.zeit)} · ${esc(ART[st.art] || st.art)}${st.audio ? T` · mit Aufnahmen` : ''}${st.groesse ? ` · ${groesse(st.groesse)}` : ''}</span></div>
+          <div class="versionknoepfe">${st.alt ? '' : T`<a class="btn klein" href="/api/backups/${encodeURIComponent(st.name)}" download>Herunterladen</a>`}${st.wiederherstellbar ? (u.installierbar ? T`<button class="btn klein" data-zurueck="${esc(st.name)}" data-version="${esc(st.version)}"${laeuft ? ' disabled' : ''}>Wiederherstellen</button>` : '')
+    : T('<span class="leise">unvollständig</span>')}</div></div>`).join('') : T('<p class="leise">Noch keine Backups.</p>')}`;
     seite.innerHTML = kopf + (reiter === 'backups' ? backups : updates);
   };
   // Nach einem angestoßenen Wechsel warten, bis der Updater fertig ist (sichert, lädt, ersetzt, startet neu).
@@ -2734,7 +2754,11 @@ async function zeigeUpdate() {
       const r = (u.versionen || []).find((x) => x.version === b.dataset.log);
       return r ? zeigeLog(r.version, r.aenderungen) : zeigeLog(u.aktuell, u.aktuell_aenderungen);
     }
-    if (b.dataset.reiter) { reiter = b.dataset.reiter; return laden(false); }
+    if (b.dataset.reiter) {
+      reiter = b.dataset.reiter;
+      history.replaceState(null, '', reiter === 'backups' ? '/status/update/backups' : '/status/update');
+      return laden(false);
+    }
     if (b.dataset.mehrVersionen) { alle = true; return laden(false); }
     b.disabled = true;
     try {
@@ -2750,10 +2774,15 @@ async function zeigeUpdate() {
         ladeZaehler();
         return laden(false);
       }
+      if (b.dataset.sichern) {
+        u = await api('/api/backups', { method: 'POST', body: {} });
+        melde(tx('Backup angelegt'));
+        return laden(false);
+      }
       if (b.dataset.zurueck) {
-        if (!confirm(tx('Zurück zum Stand von Version {0}? Programm und Datenbank werden ersetzt; was seitdem dazukam, fehlt danach. Der jetzige Stand wird vorher gesichert.', b.dataset.version))) { b.disabled = false; return; }
+        if (!confirm(tx('Backup von Version {0} wiederherstellen? Daten und Einstellungen werden ersetzt, die Version aus dem Backup wird installiert; was seitdem dazukam, fehlt danach. Der jetzige Stand wird vorher gesichert.', b.dataset.version))) { b.disabled = false; return; }
         await api('/api/update/zurueck', { method: 'POST', body: { name: b.dataset.zurueck } });
-        melde(tx('Zurückwechseln angestoßen'));
+        melde(tx('Wiederherstellen angestoßen'));
         return warte((s) => (s.status || '').startsWith('done'));
       }
       const ziel = b.dataset.installieren;

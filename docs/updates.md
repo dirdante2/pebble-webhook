@@ -17,7 +17,7 @@ The service checks the GitHub releases of the update source in the background ev
 - lists every newer version of your channel with its change notes and installs it with one click,
 - offers *Ältere Version installieren* to roll back to any older release (down to 1.14.0, the first version that keeps its settings in the database).
 
-How it works: the service writes `update-request` to its data directory; the systemd path unit `pebble-webhook-update.path` starts `install.sh --apply-request` as root. The installer stops the service, backs up the database to `/var/lib/pebble-webhook/backup/pebble-<old version>-<time>/` (the newest 5 are kept), downloads the release, verifies `SHA256SUMS`, replaces the binary and starts the service. Progress and errors are shown on the page; details in `journalctl -u pebble-webhook-update`.
+How it works: the service writes `update-request` to its data directory; the systemd path unit `pebble-webhook-update.path` starts `install.sh --apply-request` as root. The installer stops the service, backs up the running state to `BACKUP_DIR` (see Backups below), downloads the release (or takes it from the local cache), verifies `SHA256SUMS`, replaces the binary and starts the service. If the service does not answer `/healthz` within 30 s, program and database go back to the state before. Progress and errors are shown on the page; details in `journalctl -u pebble-webhook-update`.
 
 ## On the command line
 
@@ -27,7 +27,18 @@ sudo bash /usr/local/lib/pebble-webhook/install.sh --version 1.15.0        # any
 sudo bash /usr/local/lib/pebble-webhook/install.sh --version 1.16.0-beta.1
 ```
 
-To restore a database backup: stop the service, copy the files from the backup folder back to `/var/lib/pebble-webhook/`, start the service.
+## Backups
+
+*Updates → Backups* lists all backups, newest first. Each is one archive `pebble-<version>-<channel>-<time>-<kind>[-audio].tar.gz` in `BACKUP_DIR` (start value in `/etc/pebble-webhook/env`, default `/srv/pebble-backup`; after changing it run `install.sh` again) with
+
+- `meta.json` – version, build, channel, time, kind, recordings yes/no,
+- `pebble.db` – the database with all settings,
+- `env` – the start values,
+- `audio/` – the recordings, if chosen.
+
+Kinds: *before update* (by the installer before every update or version switch, kept 30 days), *scheduled* (daily, weekly on Mondays or monthly on the 1st at the chosen time) and *manual* (*Back up now*); scheduled and manual ones are kept `BACKUP_RETENTION_DAYS` (default 30). The program itself is not backed up.
+
+*Restore* backs up the current state, brings back database and recordings and installs the version named in the backup from its channel (cache or GitHub). Backups of own builds (`lokal`) restore the data only and keep the installed program. By hand: `tar -xzf <backup> -C <dir>`, stop the service, copy `pebble.db` to `/var/lib/pebble-webhook/`, start the service.
 
 ## Releases (maintainers)
 

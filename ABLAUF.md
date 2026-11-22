@@ -239,11 +239,18 @@ Token-Routen (alles andere bleibt bei der Passkey-Sitzung, kein Löschen): `GET 
 
 1. Hintergrund-Prüfung (`CheckUpdates`): 1 min nach dem Start, dann alle 4 h die Releases von `UPDATE_REPO`. Neue Version des aktiven Kanals → `GET /api/zaehler` liefert `update` → Pfeil-Symbol an „Status“ und Hinweiskarte auf der Statusseite → Klick öffnet Status → Updates (`GET /api/update`, aus dem Zwischenspeicher, „Jetzt prüfen“ = `?pruefen=1`): nur Versionen des aktiven Kanals (`UPDATE_CHANNEL`), Kanal per Auswahlliste → `POST /api/update/kanal` (sofort wirksam, ohne Neustart); „Ältere Version installieren“ bis 1.14.0 (ältere lesen die Einstellungen nicht aus der Datenbank). Reihenfolge: Basisversion, dann nightly < beta < stable, dann Nummer.
 2. „Installieren“ → `POST /api/update` → App schreibt `DATA_DIR/update-request` („owner/repo X.Y.Z[-beta.N|-nightly.N]“) und `update-status`.
-3. `pebble-webhook-update.path` → `install.sh --apply-request` als root: Anfrage prüfen (Muster), Dienst stoppen, Datenbank nach `DATA_DIR/backup/pebble-<alt>-<zeit>/` sichern (5 neueste bleiben), Release laden, `SHA256SUMS` prüfen, Binary und Updater ersetzen, Dienst starten, `update-status` = `done X` bzw. `error: …`.
+3. `pebble-webhook-update.path` → `install.sh --apply-request` als root: Anfrage prüfen (Muster), Dienst stoppen, laufenden Stand als Archiv nach `BACKUP_DIR` sichern (Art update, 30 Tage; Programm + DB zusätzlich nur für diesen Lauf in `$TMP`), Release laden (Vorrat `DATA_DIR/releases`), `SHA256SUMS` prüfen, Binary und Updater ersetzen, Dienst starten, 30 s `/healthz` – sonst Programm + DB zurück, `update-status` = `done X` bzw. `error: …`.
 4. Web-App fragt alle 2 s nach, bis die neue Version läuft.
 5. Ausrollen auf den eigenen Server: `deploy/deploy.sh` (verlangt Abschnitt in `CHANGELOG.md`, ruft `install.sh --binary`, sichert dabei ebenfalls die Datenbank).
 6. Veröffentlichen: GitHub Actions (`.github/workflows/release.yml`): Push auf main → nightly (`VERSION` + Zeitstempel, 10 neueste bleiben); Tag `vX.Y.Z-beta.N` → beta; Tag `vX.Y.Z` → stable (Abschnitt in `CHANGELOG.md` Pflicht).
 
+
+## Backups (seit 1.29.0)
+
+1. Archiv `pebble-<version>-<kanal>-<zeit>-<art>[-audio].tar.gz` in `BACKUP_DIR` (Startwert in der env, Vorgabe `/srv/pebble-backup`, vom Installer angelegt und per `ReadWritePaths` freigegeben): `meta.json`, `pebble.db` (inkl. Einstellungen), `env`, optional `audio/`.
+2. Geplant (`BackupSchedule`, minütlich): fällig nach `BACKUP_SCHEDULE` (täglich / montags / am 1.) ab `BACKUP_TIME`, einmal am Tag (kv `backup-letzt`) → `VACUUM INTO` → Archiv → Bereinigung (plan/manuell nach `BACKUP_RETENTION_DAYS`, update nach 30 Tagen, jüngstes bleibt).
+3. „Jetzt sichern“ → `POST /api/backups` (Aufnahmen nach `BACKUP_AUDIO`); „Herunterladen“ → `GET /api/backups/{name}`.
+4. „Wiederherstellen“ → `POST /api/update/zurueck` → `update-request` „restore <name> <repo>“ → Installer: Archiv als Nutzer pebble entpacken (keine Links), Version aus `meta.json`: gleich der laufenden → Programm bleibt; Kanal stable/beta/nightly → diese Version laden; lokal → Programm bleibt (Hinweis im Status). Dann wie Update: jetzigen Stand sichern, DB (+ Aufnahmen) einspielen, Programm ersetzen, Health-Check.
 
 ## Termin verschieben (seit 1.25.0)
 
