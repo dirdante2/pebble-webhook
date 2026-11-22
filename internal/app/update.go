@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime/debug"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -178,16 +179,30 @@ func (a *App) installedTime(releases []release) time.Time {
 	return time.Time{}
 }
 
-// channelList: Versionen eines Kanals, neueste Veröffentlichung zuerst (die Nummern der Kanäle hängen nicht
-// zusammen – eine stable kann eine höhere Nummer haben als die laufende nightly und umgekehrt).
+// channelsFor: Kanäle, deren Versionen ein Kanal anbietet – stable nur stable, beta dazu stable, nightly alle drei.
+// Nicht jede Version erscheint in jedem Kanal; so bekommt z. B. beta eine stable, die neuer ist als die letzte beta.
+func channelsFor(channel string) []string {
+	switch channel {
+	case "nightly":
+		return []string{"nightly", "beta", "stable"}
+	case "beta":
+		return []string{"beta", "stable"}
+	}
+	return []string{"stable"}
+}
+
+// channelList: Versionen eines Kanals samt der Kanäle, die er mit anbietet (channelsFor), neueste Veröffentlichung
+// zuerst (die Nummern der Kanäle hängen nicht zusammen – eine stable kann eine höhere Nummer haben als die
+// laufende nightly und umgekehrt).
 func (a *App) channelList(releases []release, channel string) []channelRelease {
 	current := strings.Fields(a.Version + " ")[0]
 	curChannel := a.installedChannel()
+	curBase, _, curOK := parseVersion(a.Version)
 	since := a.installedTime(releases)
 	commit := buildCommit()
 	list := []channelRelease{}
 	for _, rel := range releases {
-		if rel.Channel != channel {
+		if !slices.Contains(channelsFor(channel), rel.Channel) {
 			continue
 		}
 		v, _, _ := parseVersion(rel.Version)
@@ -203,6 +218,11 @@ func (a *App) channelList(releases []release, channel string) []channelRelease {
 		if t, err := time.Parse(time.RFC3339, rel.Published); err == nil && !since.IsZero() {
 			newer = !installed && !same && t.After(since.Add(time.Minute)) // eine Minute Spielraum für Build und Veröffentlichung
 		}
+		// Aus einem anderen Kanal als dem installierten zählt zusätzlich die Nummer: eine später veröffentlichte
+		// stable aus älterem Stand (z. B. 1.34.0 nach 1.35.0-nightly) ist kein Update.
+		if newer && rel.Channel != curChannel && curChannel != "lokal" && curOK { // eigener Build: allein die Zeit
+			newer = curBase[0] < v[0] || curBase[0] == v[0] && (curBase[1] < v[1] || curBase[1] == v[1] && curBase[2] < v[2])
+		}
 		_, errCached := os.Stat(filepath.Join(a.Cfg.DataDir, "releases", rel.Version, "SHA256SUMS"))
 		list = append(list, channelRelease{release: rel, Installed: installed, Newer: newer, Cached: errCached == nil})
 	}
@@ -210,11 +230,14 @@ func (a *App) channelList(releases []release, channel string) []channelRelease {
 	return list
 }
 
-// channelView: Versionen des gewählten Kanals; empfohlen ist die neueste, sofern sie nicht schon läuft.
+// channelView: Versionen des gewählten Kanals (mit channelsFor); empfohlen ist die neueste, sofern sie nicht schon läuft.
 func (a *App) channelView(releases []release) (list []channelRelease, recommended string, installedChannel string) {
 	list = a.channelList(releases, a.updateChannel())
-	if len(list) > 0 && list[0].Newer {
-		recommended = list[0].Version // nur wirklich Neueres meldet ein Update
+	for _, r := range list {
+		if r.Newer {
+			recommended = r.Version // neueste wirklich neuere (nach Veröffentlichung) meldet ein Update
+			break
+		}
 	}
 	return list, recommended, a.installedChannel()
 }
@@ -500,7 +523,7 @@ func (a *App) handleUpdate(w http.ResponseWriter, r *http.Request) {
 	out["geprueft"] = a.updates.at.UnixMilli()
 	a.updates.mu.Unlock()
 	list, rec, curChannel := a.channelView(releases)
-	out["versionen"], out["aktuell_kanal"] = list, curChannel
+	out["versionen"], out["aktuell_kanal"], out["kanal_umfasst"] = list, curChannel, channelsFor(a.updateChannel())
 	newIn := map[string]bool{}
 	for _, ch := range []string{"stable", "beta", "nightly"} {
 		for _, r := range a.channelList(releases, ch) {

@@ -676,3 +676,4 @@ dialog.logblatt h2 { margin-top: 0; }
 .symbolplatz { width: 2.4rem; flex: none; }
 .btn.symbol svg { width: 1.15rem; height: 1.15rem; }
 .versionzeile1 { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
+code.kopierbar { display: block; margin: .15rem 0 .4rem; overflow-wrap: anywhere; user-select: all; }

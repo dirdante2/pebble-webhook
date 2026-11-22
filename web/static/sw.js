@@ -15,7 +15,7 @@ self.addEventListener('activate', (e) => {
 
 self.addEventListener('fetch', (e) => {
   const url = new URL(e.request.url);
-  if (e.request.method !== 'GET' || url.origin !== location.origin || url.pathname.startsWith('/api/') || url.pathname.startsWith('/oauth/') || url.pathname.startsWith('/.well-known/') || url.pathname === '/mcp' || url.pathname === '/hook' || url.pathname === '/sw') return;
+  if (e.request.method !== 'GET' || url.origin !== location.origin || url.pathname.startsWith('/api/') || url.pathname.startsWith('/oauth/') || url.pathname.startsWith('/kalender/') || url.pathname.startsWith('/.well-known/') || url.pathname === '/mcp' || url.pathname === '/hook' || url.pathname === '/sw') return;
   const seite = e.request.mode === 'navigate';
   const key = seite ? '/' : url.pathname + url.search;
   if (!seite && !HUELLE.includes(key)) return;

@@ -321,6 +321,7 @@ const routen = [
   [/^\/status\/tags$/, 'tagsVerwalten', zeigeTagsVerwalten],
   [/^\/status\/darstellung$/, 'darstellung', zeigeDarstellung],
   [/^\/status\/joplin$/, 'joplin', zeigeJoplin],
+  [/^\/status\/kalender$/, 'kalender', zeigeKalender],
   [/^\/anmelden$/, 'anmelden', zeigeAnmelden],
   [/^\/verbinden$/, 'verbinden', zeigeVerbinden],
   [/^\/ersteinrichtung$/, 'ersteinrichtung', zeigeErsteinrichtung],
@@ -2294,6 +2295,8 @@ async function zeigeStatus() {
       <h2>Verbundene Apps (MCP)</h2>
       ${o.apps.length ? o.apps.map((x) => T`<div class="karte"><div class="zeile"><span><strong>${esc(x.name)}</strong></span><button class="btn klein gefahr" data-app="${esc(x.id)}">Trennen</button></div>
         <div class="leise">verbunden ${zeit(x.angelegt)}${x.zuletzt ? T` · zuletzt genutzt ${zeit(x.zuletzt)}` : ''}</div></div>`).join('') : T('<p class="leise">Keine. Claude, ChatGPT & Co. verbinden sich über die Adresse <code>/mcp</code> dieses Dienstes und fragen hier nach Freigabe.</p>')}
+      <h2>${esc(tx('Kalender-Abo'))}</h2>
+      <a class="karte" href="/status/kalender"><strong>${esc(tx('Termine in Google, Apple oder Outlook abonnieren'))}</strong><br><span class="leise">${esc(tx('Link und Anleitung'))}</span></a>
       <div class="leiste"><button class="btn gefahr" data-a="abmelden">Abmelden</button></div>`;
   };
   aktuell.neuLaden = laden;
@@ -2569,6 +2572,7 @@ async function zeigeRing() {
     const d = await api(`/api/ring${wahl ? `?ring=${encodeURIComponent(wahl)}` : ''}`);
     if (aktuell?.name !== 'ring') return;
     const g = d.ring, aktiv = !g.ende, p = g.prozent;
+    const anteil = (n, gesamt) => (gesamt ? `${n} (${Math.round((n / gesamt) * 100)} %)` : String(n));
     const kachel = (titel, sek, n) => T`<div class="kachel"><div class="leise">${esc(titel)}</div><div class="zahl">${esc(stunden(sek))}</div><div class="leise">${esc(tx('{0} Aufnahmen', n))}${n ? ` · Ø ${esc(stunden(sek / n))}` : ''}</div></div>`;
     const prog = d.prognose;
     const wann = (v) => (v === 0 ? tx('erreicht') : v == null ? tx('keine Nutzung') : datumKurz(v));
@@ -2590,6 +2594,7 @@ async function zeigeRing() {
       </div>
       <div class="kacheln">${kachel(tx('Gesamt'), g.sekunden, g.anzahl)}${kachel(tx('Notizen'), g.diktat.sekunden, g.diktat.anzahl)}${kachel(tx('Planungen'), g.planung.sekunden, g.planung.anzahl)}</div>
       <p class="leise">${esc(tx('Tastendrücke: Halten {0} · Klick + Halten {1}', g.halten, g.klick_halten))}</p>
+      <p class="leise">${esc(tx('Fehlaufnahmen (keine Sprache): {0}', anteil(g.fehlaufnahmen, g.anzahl)))} · ${esc(tx('Gelöscht: {0}', anteil(g.geloescht, g.anzahl)))}</p>
       <h2>${esc(tx('Aufnahmezeit je Monat'))}</h2>
       <div class="karte">${T('<div class="legende"><span><i class="s1"></i>Notizen</span><span><i class="s2"></i>Planungen</span></div>')}${monate.length ? saeulen(monate, 'rmon', false, opt) : T`<p class="leise">${esc(tx('Noch keine Aufnahmen.'))}</p>`}<div class="ablesen" id="rmon-wert">${esc(tx('Säule antippen für die Werte des Monats.'))}</div></div>
       ${d.ringe.length > 1 ? T`<h2>${esc(tx('Ringe im Vergleich'))}</h2>${vergleich}` : ''}
@@ -2838,6 +2843,48 @@ async function zeigeJoplin() {
   aufraeumen = () => { form.onclick = null; };
 }
 
+// Kalender-Abo: geheimer iCal-Link mit Anleitung für Google, Apple und Outlook.
+async function zeigeKalender() {
+  seite.innerHTML = T`<p class="leer">${esc(tx('Lädt …'))}</p>`;
+  const laden = async () => {
+    const k = await api('/api/kalender');
+    if (aktuell?.name !== 'kalender') return;
+    const webcal = k.url.replace(/^https?:/, 'webcal:');
+    seite.innerHTML = T`<p><a class="btn klein" href="/status">← ${esc(tx('Status'))}</a></p><h1>${esc(tx('Kalender-Abo'))}</h1>
+      <p class="leise">${esc(tx('Alle Termine aus den Notizen ({0}) als Kalender zum Abonnieren: neue und verschobene erscheinen von selbst, erledigte mit ✓, gelöschte verschwinden. Nur lesend – Änderungen im Kalender kommen nicht zurück.', k.termine))}</p>
+      <div class="karte"><div class="leise">${esc(tx('Dein Link (geheim halten)'))}</div><code class="kopierbar" id="icallink">${esc(k.url)}</code>
+        <div class="leiste"><button class="btn haupt" data-k="kopieren">${esc(tx('Link kopieren'))}</button><a class="btn" href="${esc(webcal)}">${esc(tx('In Kalender-App öffnen'))}</a></div></div>
+      <h2>${esc(tx('Google Kalender'))}</h2><ol class="anleitung">
+        <li>${esc(tx('Link oben kopieren.'))}</li>
+        <li>${esc(tx('Am Computer calendar.google.com öffnen (in der Handy-App geht das nicht).'))}</li>
+        <li>${esc(tx('Links bei „Weitere Kalender“ auf + → „Per URL“.'))}</li>
+        <li>${esc(tx('Link einfügen → „Kalender hinzufügen“. Er erscheint als „{0}“ und danach auch auf dem Handy.', k.name))}</li></ol>
+      <p class="leise">${esc(tx('Google holt abonnierte Kalender nur alle paar Stunden (bis zu einem Tag) neu – neue Termine erscheinen dort also mit Verzögerung. Erinnerungen kommen weiter als Benachrichtigung dieser App.'))}</p>
+      <h2>${esc(tx('iPhone, Mac, Outlook'))}</h2>
+      <p>${esc(tx('„In Kalender-App öffnen“ antippen und das Abo bestätigen – oder in der Kalender-App „Kalenderabo hinzufügen“ wählen und den Link einfügen.'))}</p>
+      <h2>${esc(tx('Link ersetzen'))}</h2>
+      <p class="leise">${esc(tx('Wer den Link kennt, sieht alle Termine. Ein neuer Link macht den alten sofort ungültig; danach im Kalender neu abonnieren.'))}</p>
+      <div class="leiste"><button class="btn gefahr" data-k="neu">${esc(tx('Neuen Link erzeugen'))}</button></div>`;
+  };
+  aktuell.neuLaden = laden;
+  await laden();
+  seite.onclick = async (ev) => {
+    const b = ev.target.closest('[data-k]');
+    if (!b) return;
+    if (b.dataset.k === 'kopieren') {
+      const text = document.getElementById('icallink').textContent;
+      try { await navigator.clipboard.writeText(text); melde(tx('Link kopiert')); } catch { melde(tx('Kopieren nicht möglich – Link markieren und kopieren')); }
+      return;
+    }
+    if (b.dataset.k === 'neu') {
+      if (!confirm(tx('Neuen Link erzeugen? Der bisherige Link funktioniert dann nicht mehr.'))) return;
+      b.disabled = true;
+      try { await api('/api/kalender/neu', { method: 'POST' }); melde(tx('Neuer Link erzeugt')); await laden(); } catch (f) { b.disabled = false; melde(f.message); }
+    }
+  };
+  aufraeumen = () => { seite.onclick = null; };
+}
+
 // Einen Wert der Konfiguration ändern (eigene Seite, Formular mit nur diesem Feld).
 async function zeigeEinstellungBearbeiten(key) {
   // Zurück dorthin, woher man kam (z. B. Updates → Uhrzeit), sonst zur Konfiguration.
@@ -2902,19 +2949,19 @@ const groesse = (n) => (!n ? "0 KB" : n < 1024 * 1024 ? `${Math.max(1, Math.roun
 
 async function zeigeUpdate(teil) {
   seite.innerHTML = T`<p class="leer">Lädt …</p>`;
-  const KANAL_TEXT = { stable: tx('stable – Langzeit-Versionen'), beta: tx('beta – neue Funktionen, noch nicht ausgereift'), nightly: tx('nightly – jede Änderung, ungetestet') };
+  const KANAL_TEXT = { stable: tx('stable – Langzeit-Versionen'), beta: tx('beta – neue Funktionen, noch nicht ausgereift; zeigt auch stable'), nightly: tx('nightly – jede Änderung, ungetestet; zeigt auch beta und stable') };
   let u = null;
   // Updates und Backups sind eigene Menüpunkte; beide nutzen dieselbe Antwort von /api/update.
   const reiter = teil === 'backups' ? 'backups' : 'updates', meinName = teil === 'backups' ? 'backups' : 'update';
-  let alle = false; // „Mehr“: alle gespeicherten Versionen des Kanals statt der letzten 3
+  let alle = false; // „Mehr“: alle gespeicherten Versionen des Kanals (samt mit angebotener Kanäle) statt der letzten 3
   const zeigeLog = (titel, text) => zeigeAenderungen(titel, text, u.alle_aenderungen);
   const laden = async (pruefen) => {
     u = await api(`/api/update${pruefen ? '?pruefen=1' : ''}`);
     if (aktuell?.name !== meinName) return;
     const liste = u.versionen || [];
     const laeuft = /^(requested|running)/.test(u.status || '');
-    // Installiert ist eine Version aus einem anderen Kanal (oder ein eigener Build): die neueste des gewählten Kanals ist der Wechsel.
-    const wechsel = liste.length > 0 && u.aktuell_kanal !== u.kanal;
+    // Installiert ist eine Version aus einem Kanal, den der gewählte nicht mit anbietet (oder ein eigener Build): die neueste des gewählten Kanals ist der Wechsel.
+    const wechsel = liste.length > 0 && !(u.kanal_umfasst || [u.kanal]).includes(u.aktuell_kanal);
     const status = !u.status ? '' : u.status.startsWith('error') ? T`<div class="hinweis schlecht">Letztes Update: ${esc(u.status)}</div>`
       : laeuft ? T`<div class="hinweis warn">Update läuft (${esc(u.status)}) …</div>` : '';
     const zeile = (r) => {
@@ -3427,7 +3474,7 @@ async function zeigeEinrichten() {
 // ---------- Menü (Hamburger links): drei Hauptseiten, darunter ihre Unterseiten ----------
 
 // Seite → Bereich im Menü.
-const BEREICH = { ring: 'status', ringTauschen: 'status', ringBearbeiten: 'status', joplin: 'status', einstellungBearbeiten: 'status', darstellung: 'status', geraetNeu: 'status', tagsVerwalten: 'status', kosten: 'status', papierkorb: 'status', update: 'status', backups: 'status', einstellungen: 'status', einstellungenBearbeiten: 'status', pebble: 'status', gedaechtnis: 'status', gedaechtnisBearbeiten: 'status', liste: 'listen', verschieben: 'listen', listeBearbeiten: 'listen', gruppeBearbeiten: 'listen', eintrag: 'verlauf', planung: 'verlauf', tags: 'verlauf', antwort: 'verlauf', umhaengen: 'verlauf', wortlaut: 'verlauf', einsortieren: 'verlauf', suche: 'verlauf' };
+const BEREICH = { kalender: 'status', ring: 'status', ringTauschen: 'status', ringBearbeiten: 'status', joplin: 'status', einstellungBearbeiten: 'status', darstellung: 'status', geraetNeu: 'status', tagsVerwalten: 'status', kosten: 'status', papierkorb: 'status', update: 'status', backups: 'status', einstellungen: 'status', einstellungenBearbeiten: 'status', pebble: 'status', gedaechtnis: 'status', gedaechtnisBearbeiten: 'status', liste: 'listen', verschieben: 'listen', listeBearbeiten: 'listen', gruppeBearbeiten: 'listen', eintrag: 'verlauf', planung: 'verlauf', tags: 'verlauf', antwort: 'verlauf', umhaengen: 'verlauf', wortlaut: 'verlauf', einsortieren: 'verlauf', suche: 'verlauf' };
 const lokal = (k, v = '') => { try { return localStorage.getItem(k) ?? v; } catch { return v; } };
 function maleMenue() {
   const name = aktuell?.name || '';
@@ -3450,7 +3497,7 @@ function maleMenue() {
     { id: 'verlauf', name: tx('Verlauf'), href: '/', setze: ['verlauf-art', 'alles'], unter: ARTEN.map(([a, n]) => ({ name: a === 'termin' ? tx('Termine') : n, href: '/', setze: ['verlauf-art', a], an: name === 'verlauf' && art === a, extra: (a === 'fragen' ? '' : neuZahl(neuZahlen[a])) + zahl(zahlen[a] ?? 0, a !== 'fragen') })) },
     { id: 'listen', name: tx('Listen'), href: '/listen', unter: gruppen.map(([g, offen, neu]) => ({ name: gruppenTitel(g), href: gruppenPfad(g), an: !!gruppe && gruppe.toLowerCase() === g.toLowerCase(), extra: neuZahl(neu) + zahl(offen, true) })) },
     { id: 'status', name: tx('Einstellungen'), href: '/status', unter: [
-      { name: tx('Status'), href: '/status', an: ['status', 'pebble', 'joplin', 'einstellungen', 'einstellungBearbeiten', 'geraetNeu', 'darstellung'].includes(name), extra: audioFehler ? T` <span class="zaehler fehler" title="${tx('{0} Aufnahmen ohne Eintrag', audioFehler)}">${audioFehler}</span>` : '' },
+      { name: tx('Status'), href: '/status', an: ['status', 'pebble', 'joplin', 'kalender', 'einstellungen', 'einstellungBearbeiten', 'geraetNeu', 'darstellung'].includes(name), extra: audioFehler ? T` <span class="zaehler fehler" title="${tx('{0} Aufnahmen ohne Eintrag', audioFehler)}">${audioFehler}</span>` : '' },
       { name: tx('Updates'), href: '/status/update', an: name === 'update', extra: neueVersion ? ` ${updateSymbol}` : '' },
       { name: tx('Backups'), href: '/status/backups', an: name === 'backups' },
       { name: tx('Gedächtnis'), href: '/status/gedaechtnis', an: name === 'gedaechtnis' || name === 'gedaechtnisBearbeiten', extra: zahl(offeneVorschlaege) },

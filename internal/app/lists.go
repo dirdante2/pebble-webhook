@@ -577,6 +577,10 @@ func (a *App) removeJob(j *store.Job) error {
 	if err := a.DB.DeleteItemsOf(j.ID, ""); err != nil {
 		return err
 	}
+	// Ring-Auswertung: Fehlaufnahme/gelöscht bleiben nach dem Löschen des Eintrags erhalten.
+	if err := a.DB.SyncRecordingFlagsOf(j.ID); err != nil {
+		return err
+	}
 	return a.DB.DeleteJob(j.ID)
 }
 

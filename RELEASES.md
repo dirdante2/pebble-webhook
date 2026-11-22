@@ -4,6 +4,20 @@ Summarised notes for **beta** and **stable** releases. Each section lists only w
 
 A tag `vX.Y.Z-stable` (stable; before 1.33.5 `vX.Y.Z`) or `vX.Y.Z-beta` (beta) needs a section `## [X.Y.Z]` or `## [X.Y.Z-beta]` here; the release workflow uses it as the release notes.
 
+## [1.35.0] - 2026-11-22
+
+### Calendar
+- Calendar subscription: Status → Kalender-Abo shows a secret iCal link with all appointments, with instructions for Google Calendar, Apple and Outlook. Done ones are marked ✓, deleted ones disappear; "New link" invalidates the old one.
+
+### Ring usage
+- Counters for misfires (no speech recognised) and deleted recordings with their share; they stay counted after an entry is removed for good.
+
+### Updates
+- beta also offers stable versions, nightly offers beta and stable – a stable newer than the last beta now shows the update icon and card on beta too and is picked by the automatic update. A version from another channel counts as newer only with a higher number.
+
+### App
+- The app manifest is English by default and includes German; the installed app's name follows the device language where the browser supports it.
+
 ## [1.34.0] - 2026-11-22
 
 ### Ring usage

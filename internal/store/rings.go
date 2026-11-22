@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"errors"
+	"strings"
 )
 
 // Ringe und ihre Aufnahmen: der Pebble Index 01 hat einen fest verbauten Akku für rund 12–15 Stunden Aufnahme.
@@ -180,6 +181,39 @@ func (s *Store) SetRecordingSeconds(jobID string, seconds float64, source string
 	return err
 }
 
+// syncFlags übernimmt „leer“ und „gelöscht“ aus jobs; Zeilen ohne Eintrag behalten ihren letzten Stand.
+const syncFlags = `UPDATE ring_recordings SET
+	empty = (SELECT j.empty FROM jobs j WHERE j.id = ring_recordings.job_id),
+	deleted_at = (SELECT j.deleted_at FROM jobs j WHERE j.id = ring_recordings.job_id)
+	WHERE EXISTS (SELECT 1 FROM jobs j WHERE j.id = ring_recordings.job_id)`
+
+func migrateRecordingFlags(db *sql.DB) error {
+	if _, err := db.Exec(`ALTER TABLE ring_recordings ADD COLUMN deleted_at INTEGER NOT NULL DEFAULT 0`); err != nil && !strings.Contains(err.Error(), "duplicate column") {
+		return err
+	}
+	if _, err := db.Exec(`ALTER TABLE ring_recordings ADD COLUMN empty INTEGER NOT NULL DEFAULT 0`); err == nil {
+		if _, err := db.Exec(`UPDATE ring_recordings SET empty = 1 WHERE NOT EXISTS (SELECT 1 FROM jobs j WHERE j.id = ring_recordings.job_id)`); err != nil {
+			return err
+		}
+	} else if !strings.Contains(err.Error(), "duplicate column") {
+		return err
+	}
+	_, err := db.Exec(syncFlags)
+	return err
+}
+
+// SyncRecordingFlags gleicht „leer“ und „gelöscht“ aller Aufnahmen mit ihren Einträgen ab (vor jeder Auswertung).
+func (s *Store) SyncRecordingFlags() error {
+	_, err := s.DB.Exec(syncFlags)
+	return err
+}
+
+// SyncRecordingFlagsOf gleicht eine Aufnahme ab – vor dem endgültigen Löschen ihres Eintrags.
+func (s *Store) SyncRecordingFlagsOf(jobID string) error {
+	_, err := s.DB.Exec(syncFlags+` AND job_id = ?`, jobID)
+	return err
+}
+
 func (s *Store) RecordingCount() (n int, err error) {
 	err = s.DB.QueryRow(`SELECT COUNT(*) FROM ring_recordings`).Scan(&n)
 	return
@@ -188,10 +222,12 @@ func (s *Store) RecordingCount() (n int, err error) {
 // RingTotals: Summen eines Rings.
 type RingTotals struct {
 	Count         int                `json:"anzahl"`
-	Seconds       float64            `json:"sekunden"`     // Summe der bekannten Längen
-	Unknown       int                `json:"ohne_dauer"`   // Aufnahmen ohne Länge
-	Estimated     int                `json:"geschaetzt"`   // Aufnahmen mit geschätzter Länge
-	SecondsByMode map[string]float64 `json:"sekunden_art"` // diktat | planung | …
+	Seconds       float64            `json:"sekunden"`      // Summe der bekannten Längen
+	Unknown       int                `json:"ohne_dauer"`    // Aufnahmen ohne Länge
+	Estimated     int                `json:"geschaetzt"`    // Aufnahmen mit geschätzter Länge
+	Empty         int                `json:"fehlaufnahmen"` // ohne Sprache (Fehlauslösung)
+	Deleted       int                `json:"geloescht"`     // vom Nutzer gelöscht (Papierkorb oder endgültig)
+	SecondsByMode map[string]float64 `json:"sekunden_art"`  // diktat | planung | …
 	CountByMode   map[string]int     `json:"anzahl_art"`
 	ByTrigger     map[string]int     `json:"gesten"`
 	First, Last   int64              `json:"-"`
@@ -200,7 +236,7 @@ type RingTotals struct {
 func (s *Store) RingTotals(nr int64) (*RingTotals, error) {
 	t := &RingTotals{SecondsByMode: map[string]float64{}, CountByMode: map[string]int{}, ByTrigger: map[string]int{}}
 	rows, err := s.DB.Query(`SELECT mode, trigger, COUNT(*), COALESCE(SUM(CASE WHEN seconds >= 0 THEN seconds END), 0),
-		SUM(seconds < 0), SUM(seconds_source = ?), MIN(received_at), MAX(received_at)
+		SUM(seconds < 0), SUM(seconds_source = ?), SUM(empty), SUM(deleted_at > 0), MIN(received_at), MAX(received_at)
 		FROM ring_recordings WHERE ring_nr = ? GROUP BY mode, trigger`, SecondsEstimate, nr)
 	if err != nil {
 		return nil, err
@@ -208,16 +244,18 @@ func (s *Store) RingTotals(nr int64) (*RingTotals, error) {
 	defer rows.Close()
 	for rows.Next() {
 		var mode, trig string
-		var n, unknown, est int
+		var n, unknown, est, empty, deleted int
 		var secs float64
 		var first, last int64
-		if err := rows.Scan(&mode, &trig, &n, &secs, &unknown, &est, &first, &last); err != nil {
+		if err := rows.Scan(&mode, &trig, &n, &secs, &unknown, &est, &empty, &deleted, &first, &last); err != nil {
 			return nil, err
 		}
 		t.Count += n
 		t.Seconds += secs
 		t.Unknown += unknown
 		t.Estimated += est
+		t.Empty += empty
+		t.Deleted += deleted
 		t.SecondsByMode[mode] += secs
 		t.CountByMode[mode] += n
 		t.ByTrigger[trig] += n

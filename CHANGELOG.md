@@ -9,6 +9,17 @@ Version numbers X.Y.Z:
 
 Own builds show X.Y.Z.A: **A** is a local build counter (one per deployed change, starting at 1 for every new X.Y.Z); it never appears in Git or releases, so one version can collect several changes.
 
+## [1.35.0] - 2026-11-22
+
+### New
+- Calendar subscription: Status → Kalender-Abo shows a secret iCal link (opened in the browser it downloads the .ics instead of showing the app) with all appointments, with step-by-step instructions for Google Calendar, Apple and Outlook. Done ones are marked ✓, deleted ones disappear; "New link" invalidates the old one.
+- Ring page: counters for misfires (no speech recognised) and deleted recordings, each with its share of all recordings. Both stay counted after the entry is removed for good.
+
+### Changed
+- Update channels include the more stable ones: beta also offers stable versions, nightly offers beta and stable. A stable newer than the last beta now shows the update icon, the "New version" card and is picked by the automatic update. A version from another channel than the installed one counts as newer only with a higher number.
+- App manifest (name and description when installed on Android or desktop) is English by default and includes German; the browser picks by device language, independent of the LANGUAGE setting.
+- `deploy/deploy.sh` takes no level any more; X.Y.Z is set by hand in `VERSION` before the push, every deploy only counts A up.
+
 ## [1.34.0] - 2026-11-22
 
 ### New

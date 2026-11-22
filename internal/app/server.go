@@ -114,6 +114,10 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("GET /api/darstellung", s(a.handleDarstellung))
 	mux.HandleFunc("POST /api/besuch", s(a.handleBesuch))
 	mux.HandleFunc("POST /api/joplin/pruefen", s(a.handleJoplinCheck))
+	mux.HandleFunc("GET /api/kalender", s(a.handleCalendar))
+	mux.HandleFunc("POST /api/kalender/neu", s(a.handleCalendarNewLink))
+	// Kalender-Abo (iCal): ohne Sitzung, geschützt durch den geheimen Link.
+	mux.HandleFunc("GET /kalender/{datei}", a.handleCalendarFeed)
 	mux.HandleFunc("PUT /api/darstellung", s(a.handleDarstellungSave))
 	mux.HandleFunc("DELETE /api/tags/{name}", s(a.handleDeleteTag))
 	mux.HandleFunc("POST /api/eintraege/{id}/tags", s(a.handleSetTags("job")))
@@ -175,10 +179,11 @@ func staticHandler(langFor func(*http.Request) string) http.HandlerFunc {
 	ver := hex.EncodeToString(sum.Sum(nil))[:12]
 	index = bytes.ReplaceAll(index, []byte("__V__"), []byte(ver))
 	sw := newStaticFile("sw.js", bytes.ReplaceAll(worker, []byte("__V__"), []byte(ver)))
-	indexes, manifests := map[string]*staticFile{}, map[string]*staticFile{}
+	// Manifest für alle Sprachen gleich: Englisch als Basis, Deutsch unter "translations" (wählt der Browser nach Gerätesprache).
+	mani := newStaticFile("manifest.webmanifest", manifest)
+	indexes := map[string]*staticFile{}
 	for _, lang := range []string{"de", "en"} {
 		indexes[lang] = newStaticFile("index.html", localizeShell(index, lang))
-		manifests[lang] = newStaticFile("manifest.webmanifest", localizeShell(manifest, lang))
 	}
 	return func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/api/") || (r.Method != http.MethodGet && r.Method != http.MethodHead) {
@@ -190,7 +195,7 @@ func staticHandler(langFor func(*http.Request) string) http.HandlerFunc {
 		case name == "sw" || name == "sw.js":
 			sw.serve(w, r, false)
 		case name == "manifest.webmanifest":
-			manifests[langFor(r)].serve(w, r, false)
+			mani.serve(w, r, false)
 		case assets[name] != nil:
 			assets[name].serve(w, r, r.URL.Query().Get("v") == ver)
 		default:
@@ -240,15 +245,14 @@ func (f *staticFile) serve(w http.ResponseWriter, r *http.Request, immutable boo
 	writeMaybeGzip(w, r, f.data, f.gz)
 }
 
-// shellTexts: feste Texte in index.html und im Manifest, die je Sprache ersetzt werden.
+// shellTexts: feste Texte in index.html, die je Sprache ersetzt werden.
 var shellTexts = []string{"Offline – gezeigt wird der zuletzt geladene Stand. Aktionen werden vorgemerkt.",
-	"Notizen und Planungen aus Pebble-Aufnahmen", "Alle Einträge durchsuchen …", "Menü öffnen", "Volltextsuche",
+	"Alle Einträge durchsuchen …", "Menü öffnen", "Volltextsuche",
 	"Nach Tags filtern", "Suche löschen", "Sprachnotizen", "Menü", "Lädt …"}
 
 func localizeShell(src []byte, lang string) []byte {
 	s := string(src)
 	s = strings.ReplaceAll(s, `lang="__LANG__"`, `lang="`+lang+`"`)
-	s = strings.ReplaceAll(s, `"lang": "de"`, `"lang": "`+lang+`"`)
 	for _, t := range shellTexts {
 		u := i18n.In(lang, t)
 		s = strings.ReplaceAll(s, `"`+t+`"`, `"`+u+`"`)

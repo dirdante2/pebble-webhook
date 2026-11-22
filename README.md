@@ -12,6 +12,7 @@ One Go binary: webhook, worker, SQLite and web app. No queue, no second database
 - **Plannings**: web research in rounds, continued by voice or text, with open questions
 - **Lists and groups** sorted by the AI; tags, full-text search, trash with restore; new entries marked across all devices
 - **Memory**: the AI learns names, terms and sorting rules you confirm
+- **Calendar subscription** (iCal link) for Google Calendar, Apple or Outlook
 - Optional one-way export to a **Joplin** server
 - Built-in **MCP server** with OAuth: connect Claude, ChatGPT & co., read lists and tick items off from AI chats
 - **Ring usage**: the Index 01 battery lasts about 12–15 hours of recording. Every recording is counted (seconds, notes vs. plannings, button presses) per ring ID (`#12345`); warnings at 60/80/95/100 %, forecast at constant use, ring swap with comparison

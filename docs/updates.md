@@ -10,7 +10,7 @@
 
 Every number exists once per channel; which release is newer is decided by its publication time, not by the number.
 
-Only releases of the active channel are offered. Switch the channel with the dropdown on *Status → Updates* (applies immediately) or under *Status → Konfiguration*.
+The active channel also offers the more stable ones: stable shows only stable, beta shows beta and stable, nightly shows all three – so a stable that is newer than the last beta is offered on beta too. A release from another channel than the installed one counts as newer only if it also has a higher number. Switch the channel with the dropdown on *Status → Updates* (applies immediately) or under *Status → Konfiguration*.
 
 ## In the web app
 

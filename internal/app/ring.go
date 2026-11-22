@@ -390,7 +390,7 @@ func (a *App) ringView(g *store.Ring) (map[string]any, error) {
 	}
 	v := map[string]any{"nr": g.Nr, "hardware_id": g.HardwareID, "start": g.StartedAt, "ende": g.EndedAt,
 		"kapazitaet_sekunden": g.CapacitySeconds, "sekunden": t.Seconds, "prozent": t.Seconds / float64(g.CapacitySeconds) * 100,
-		"anzahl":  t.Count,
+		"anzahl": t.Count, "fehlaufnahmen": t.Empty, "geloescht": t.Deleted,
 		"diktat":  map[string]any{"sekunden": t.SecondsByMode["diktat"], "anzahl": t.CountByMode["diktat"]},
 		"planung": map[string]any{"sekunden": t.SecondsByMode["planung"], "anzahl": t.CountByMode["planung"]},
 		"halten":  t.ByTrigger["single-click-hold"], "klick_halten": t.ByTrigger["double-click-hold"],
@@ -403,6 +403,9 @@ func (a *App) handleRing(w http.ResponseWriter, r *http.Request) {
 	ringMu.Lock()
 	_, err := a.ensureRingLocked()
 	ringMu.Unlock()
+	if err == nil {
+		err = a.DB.SyncRecordingFlags()
+	}
 	if err != nil {
 		writeErr(w, 500, "speicher", "Datenbankfehler")
 		return

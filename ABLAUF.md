@@ -157,6 +157,14 @@ In der Web-App und in Joplin heißt die Art „Notiz“ (Nutzervorgabe 15.11.202
 3. Notiz schreiben: `PUT /api/items/root:/<id>.md:/content` im Ablageformat der Clients; Id fest aus Auftrag bzw. Planung abgeleitet, eine Wiederholung überschreibt also dieselbe Notiz.
 4. Die Joplin-Clients holen die Notiz beim nächsten Sync. Änderungen in Joplin fließen nicht zurück und gehen bei der nächsten Runde verloren. Voraussetzung: E2EE aus.
 
+## Kalender-Abo (iCal, seit 22.11.2026)
+
+1. Status → Kalender-Abo: `GET /api/kalender` erzeugt beim ersten Aufruf einen geheimen Token (kv `ical_token`) und zeigt den Link `<PUBLIC_URL>/kalender/<token>.ics`.
+2. Der Nutzer abonniert den Link in Google Kalender („Per URL“), Apple oder Outlook (`webcal://`).
+3. Der Kalender holt `GET /kalender/<token>.ics` (ohne Sitzung, Token zeitkonstant verglichen; falsch → 404) selbst ab – Google nur alle paar Stunden.
+4. Inhalt: alle Termine (auch erledigte mit „✓ “), UID = Eintrags-ID, Zeiten in UTC, ganztägige als Datum, Ort, Notiz + Link, Erinnerung als VALARM. Papierkorb = nicht mehr drin.
+5. „Neuen Link erzeugen“ (`POST /api/kalender/neu`) ersetzt den Token; der alte Link liefert sofort 404.
+
 ## Anmeldung
 
 1. Erstes Gerät: auf dem Server `pebble enroll` → Einmal-Link (15 min) → im Browser öffnen → Passkey anlegen (`/api/auth/einrichten/start|ende`) → Sitzung (Cookie, 90 Tage gleitend).
@@ -238,7 +246,7 @@ Token-Routen (alles andere bleibt bei der Passkey-Sitzung, kein Löschen): `GET 
 
 ## Updates (seit 1.14.0)
 
-1. Hintergrund-Prüfung (`CheckUpdates`): 1 min nach dem Start, dann alle 4 h die Releases von `UPDATE_REPO`. Neue Version des aktiven Kanals → `GET /api/zaehler` liefert `update` → Pfeil-Symbol an „Status“ und Hinweiskarte auf der Statusseite → Klick öffnet Status → Updates (`GET /api/update`, aus dem Zwischenspeicher, „Jetzt prüfen“ = `?pruefen=1`): nur Versionen des aktiven Kanals (`UPDATE_CHANNEL`), Kanal per Auswahlliste → `POST /api/update/kanal` (sofort wirksam, ohne Neustart); „Ältere Version installieren“ bis 1.14.0 (ältere lesen die Einstellungen nicht aus der Datenbank). Reihenfolge: Basisversion, dann nightly < beta < stable, dann Nummer.
+1. Hintergrund-Prüfung (`CheckUpdates`): 1 min nach dem Start, dann alle 4 h die Releases von `UPDATE_REPO`. Neue Version des aktiven Kanals → `GET /api/zaehler` liefert `update` → Pfeil-Symbol an „Status“ und Hinweiskarte auf der Statusseite → Klick öffnet Status → Updates (`GET /api/update`, aus dem Zwischenspeicher, „Jetzt prüfen“ = `?pruefen=1`): Versionen des aktiven Kanals (`UPDATE_CHANNEL`) samt stabilerer: stable nur stable, beta + stable, nightly alle drei (`channelsFor`); „neu“ = später veröffentlicht, aus fremdem Kanal zusätzlich höhere Nummer (außer eigener Build), Kanal per Auswahlliste → `POST /api/update/kanal` (sofort wirksam, ohne Neustart); „Ältere Version installieren“ bis 1.14.0 (ältere lesen die Einstellungen nicht aus der Datenbank). Reihenfolge: Basisversion, dann nightly < beta < stable, dann Nummer.
 2. „Installieren“ → `POST /api/update` → App schreibt `DATA_DIR/update-request` („owner/repo X.Y.Z[-beta.N|-nightly.N]“) und `update-status`.
 3. `pebble-webhook-update.path` → `install.sh --apply-request` als root: Anfrage prüfen (Muster), Dienst stoppen, laufenden Stand als Archiv nach `BACKUP_DIR` sichern (Art update, 30 Tage; Programm + DB zusätzlich nur für diesen Lauf in `$TMP`), Release laden (Vorrat `DATA_DIR/releases`), `SHA256SUMS` prüfen, Binary und Updater ersetzen, Dienst starten, 30 s `/healthz` – sonst Programm + DB zurück, `update-status` = `done X` bzw. `error: …`.
 4. Web-App fragt alle 2 s nach, bis die neue Version läuft.

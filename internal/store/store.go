@@ -320,6 +320,13 @@ func Open(path string) (*Store, error) {
 			return nil, fmt.Errorf("Schema: %w", err)
 		}
 	}
+	// Fehlaufnahmen und Gelöschtes je Aufnahme (22.11.2026): dauerhaft in ring_recordings, weil leere Aufnahmen und
+	// Endgelöschtes aus jobs verschwinden. Beim Anlegen fehlt ein Eintrag nur nach dem Purge leerer Aufnahmen
+	// (der Papierkorb wurde vor den Ringen nie endgültig geleert) – solche Zeilen gelten als Fehlaufnahme.
+	if err := migrateRecordingFlags(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("Schema: Aufnahmen: %w", err)
+	}
 	if err := migrateLists(db); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("Schema: Listen: %w", err)
