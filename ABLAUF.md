@@ -251,7 +251,7 @@ Token-Routen (alles andere bleibt bei der Passkey-Sitzung, kein Löschen): `GET 
 3. `pebble-webhook-update.path` → `install.sh --apply-request` als root: Anfrage prüfen (Muster), Dienst stoppen, laufenden Stand als Archiv nach `BACKUP_DIR` sichern (Art update, 30 Tage; Programm + DB zusätzlich nur für diesen Lauf in `$TMP`), Release laden (Vorrat `DATA_DIR/releases`), `SHA256SUMS` prüfen, Binary und Updater ersetzen, Dienst starten, 30 s `/healthz` – sonst Programm + DB zurück, `update-status` = `done X` bzw. `error: …`.
 4. Web-App fragt alle 2 s nach, bis die neue Version läuft.
 5. Ausrollen auf den eigenen Server: `deploy/deploy.sh` (verlangt Abschnitt in `CHANGELOG.md`, ruft `install.sh --binary`, sichert dabei ebenfalls die Datenbank).
-6. Veröffentlichen: GitHub Actions (`.github/workflows/release.yml`): Push auf main → nightly (`VERSION` + Zeitstempel, 10 neueste bleiben); Tag `vX.Y.Z-beta.N` → beta; Tag `vX.Y.Z` → stable (Abschnitt in `CHANGELOG.md` Pflicht).
+6. Veröffentlichen: Push auf main baut nichts. Danach aktiv `deploy/release.sh [nightly|beta|stable]` (Vorgabe nightly) → prüft VERSION = gepushter Stand, setzt und pusht genau einen Tag `vX.Y.Z-<kanal>` → GitHub Actions (`.github/workflows/release.yml`) prüft Tag = `VERSION`, baut, veröffentlicht, verschiebt den Kanal-Release; nightly: Notizen aus `CHANGELOG.md`, 10 neueste bleiben; beta/stable: Abschnitt in `RELEASES.md` Pflicht. Bei beta/stable keine nightly derselben Version – die Update-Seite bietet über Kanäle hinweg an.
 
 
 ## Backups (seit 1.29.0)

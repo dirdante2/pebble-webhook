@@ -2,14 +2,16 @@
 # Release titles: "X.Y.Z stable|beta|nightly" – the tag keeps its suffix only to stay unique.
 # Each build also replaces the moving release "stable", "beta" or "nightly" (same files), so
 # releases/download/<channel>/… always points at the newest version of that channel.
-#   nightly – every push to main: vX.Y.Z-nightly (VERSION file; every commit bumps it, an existing number fails the build), pre-release, newest 10 kept
+# Pushes to main build nothing; a build is started on purpose after the push by pushing ONE tag for the
+# pushed VERSION (deploy/release.sh): nightly by default, beta or stable instead – never several for one push.
+#   nightly – tag vX.Y.Z-nightly: pre-release, notes from the CHANGELOG.md section X.Y.Z, newest 10 kept
 #   beta    – tag vX.Y.Z-beta: pre-release, notes from the RELEASES.md section X.Y.Z-beta (required)
 #   stable  – tag vX.Y.Z-stable (before 1.33.5: vX.Y.Z): release, notes from the RELEASES.md section X.Y.Z (required)
+# X.Y.Z of the tag must equal the VERSION file of the tagged commit; an existing number per channel fails.
 name: release
 
 on:
   push:
-    branches: [main]
     tags: ['v*']
 
 permissions:
@@ -37,25 +39,25 @@ jobs:
           set -euo pipefail
           # section "## [X]" of a notes file, without its heading
           section() { awk -v h="## [$1]" 'index($0, h) == 1 {f=1; next} /^## \[/ {f=0} f' "$2" | sed '/./,$!d'; }
-          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
-            VERSION="${GITHUB_REF_NAME#v}"
-            [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-stable|-beta)?$ ]] || { echo "tag must be vX.Y.Z-stable or vX.Y.Z-beta"; exit 1; }
-            # beta and stable: the summarised section from RELEASES.md (required; stable as ## [X.Y.Z])
-            section "${VERSION%-stable}" RELEASES.md > notes.md
-            [ -s notes.md ] || { echo "RELEASES.md has no section ## [${VERSION%-stable}]"; exit 1; }
-            PRE=$([[ "$VERSION" == *-beta ]] && echo true || echo false)
-          else
-            # VERSION is exactly X.Y.Z; the local build counter A (X.Y.Z.A) never belongs in Git
-            grep -qxE '[0-9]+\.[0-9]+\.[0-9]+' VERSION || { echo "VERSION must be X.Y.Z"; exit 1; }
-            VERSION="$(cat VERSION)-nightly"
+          VERSION="${GITHUB_REF_NAME#v}"
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-stable|-beta|-nightly)?$ ]] || { echo "tag must be vX.Y.Z-stable, -beta or -nightly"; exit 1; }
+          # VERSION is exactly X.Y.Z (the local build counter A never belongs in Git) and matches the tag
+          grep -qxE '[0-9]+\.[0-9]+\.[0-9]+' VERSION || { echo "VERSION must be X.Y.Z"; exit 1; }
+          [ "${VERSION%-*}" = "$(cat VERSION)" ] || { echo "tag ${GITHUB_REF_NAME} does not match VERSION $(cat VERSION)"; exit 1; }
+          if [[ "$VERSION" == *-nightly ]]; then
             # nightly: the CHANGELOG.md section of this version, else the commit messages since the last nightly
             section "$(cat VERSION)" CHANGELOG.md > notes.md
             if [ ! -s notes.md ]; then
-              LAST="$(git tag -l 'v*-nightly*' --sort=-creatordate | head -1)"
+              LAST="$(git tag -l 'v*-nightly*' --sort=-creatordate | grep -vx "$GITHUB_REF_NAME" | head -1 || true)"
               { echo "Nightly build of ${GITHUB_SHA::7} – untested."; echo
                 git log --no-merges --format='- %s' ${LAST:+$LAST..}HEAD | head -40; } > notes.md
             fi
             PRE=true
+          else
+            # beta and stable: the summarised section from RELEASES.md (required; stable as ## [X.Y.Z])
+            section "${VERSION%-stable}" RELEASES.md > notes.md
+            [ -s notes.md ] || { echo "RELEASES.md has no section ## [${VERSION%-stable}]"; exit 1; }
+            PRE=$([[ "$VERSION" == *-beta ]] && echo true || echo false)
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "prerelease=$PRE" >> "$GITHUB_OUTPUT"
@@ -103,7 +105,7 @@ jobs:
             --notes "Moving release: always the newest $CH build, currently v$V. New installations start with stable; the channel is changed in the web app (Updates → Kanal)."
 
       - name: Keep the newest 10 nightlies
-        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        if: ${{ endsWith(github.ref, '-nightly') }}
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash

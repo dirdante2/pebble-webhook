@@ -6,7 +6,7 @@
 |---|---|---|
 | `stable` (default) | long-term releases | `X.Y.Z-stable` (before 1.33.9: `X.Y.Z`) |
 | `beta` | new features that are not mature yet | `X.Y.Z-beta` |
-| `nightly` | every change as soon as it is pushed, untested | `X.Y.Z-nightly` |
+| `nightly` | every pushed change that gets a nightly build, untested | `X.Y.Z-nightly` |
 
 Every number exists once per channel; which release is newer is decided by its publication time, not by the number.
 
@@ -49,12 +49,14 @@ Kinds: *before update* (by the installer before every update or version switch, 
 
 Releases are built by GitHub Actions (`.github/workflows/release.yml`) for linux amd64 and arm64, with `install.sh` and `SHA256SUMS`:
 
-- **nightly**: every push to `main` → pre-release `vX.Y.Z-nightly` (X.Y.Z from the `VERSION` file, which every commit bumps – an existing number fails the build; notes = the CHANGELOG.md section of that version, else the commit messages since the last nightly). The newest 10 are kept.
+A push to `main` builds nothing. After the push, `deploy/release.sh [nightly|beta|stable]` (default nightly) pushes one tag for the pushed `VERSION` and GitHub builds that channel only – a beta or stable build needs no nightly of the same version, since the update page offers stable on beta and all channels on nightly. The tag must match `VERSION`; an existing number per channel fails.
+
+- **nightly**: tag `vX.Y.Z-nightly` → pre-release, notes = the CHANGELOG.md section of that version, else the commit messages since the last nightly. The newest 10 are kept.
 - **beta**: push a tag `vX.Y.Z-beta` → pre-release, notes from `## [X.Y.Z-beta]` in RELEASES.md (required).
 - **stable**: push a tag `vX.Y.Z-stable` → release, notes from `## [X.Y.Z]` in RELEASES.md (required).
 
 Version numbers: **X** = breaking for database or app (new database needed or hard to roll back, e.g. migrations that change columns), **Y** = new feature, **Z** = other UI changes and small fixes that can be installed or rolled back freely. Roll back only within the same X.
 
-X.Y.Z changes once per pushed block of work: the first `deploy/deploy.sh major|minor|fix` after a commit raises it, every further deploy only counts the local build number A (`X.Y.Z.A`, kept in `lokal/BUILD`, never in Git; it starts at 1 for every new X.Y.Z). Every version needs a section `## [X.Y.Z] - YYYY-MM-DD` in [CHANGELOG.md](../CHANGELOG.md) with short bullet points (New / Changed / Fixed); `deploy/deploy.sh` refuses to deploy without it.
+X.Y.Z changes once per pushed block of work and is set by hand in `VERSION` before the push; every `deploy/deploy.sh` only counts the local build number A (`X.Y.Z.A`, kept in `lokal/BUILD`, never in Git; it starts at 1 for every new X.Y.Z). Every version needs a section `## [X.Y.Z] - YYYY-MM-DD` in [CHANGELOG.md](../CHANGELOG.md) with short bullet points (New / Changed / Fixed); `deploy/deploy.sh` refuses to deploy without it.
 
 Beta and stable releases get a summarised section in [RELEASES.md](../RELEASES.md): only what lasts since the previous beta/stable – intermediate steps and fixes of things new in the same span are left out. The update page shows these summaries on the beta and stable channels and every single version on nightly ("Frühere Änderungen"). Bump `VERSION` with every change so nightlies sort above the last release.

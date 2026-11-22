@@ -9,6 +9,11 @@ Version numbers X.Y.Z:
 
 Own builds show X.Y.Z.A: **A** is a local build counter (one per deployed change, starting at 1 for every new X.Y.Z); it never appears in Git or releases, so one version can collect several changes.
 
+## [1.35.1] - 2026-11-22
+
+### Changed
+- Releases: a push to `main` no longer builds a nightly by itself. After the push one build is started on purpose with `deploy/release.sh [nightly|beta|stable]` (default nightly); a beta or stable build needs no nightly of the same version. The workflow only reacts to tags and checks that the tag matches `VERSION`.
+
 ## [1.35.0] - 2026-11-22
 
 ### New
