@@ -551,21 +551,6 @@ func (a *App) trashPlanning(p *store.Planning, at int64) error {
 	return nil
 }
 
-// destroyJob löscht einen sichtbaren Auftrag endgültig, ohne Papierkorb (Automatik für leere und fehlgeschlagene).
-func (a *App) destroyJob(j *store.Job) error {
-	if err := a.removeJob(j); err != nil {
-		return err
-	}
-	if j.PlanningID != "" {
-		if err := a.detach(j.PlanningID, 0); err != nil {
-			logf("Löschen: Planung %s: %v", j.PlanningID, err)
-		}
-		a.hub.send("planung:" + j.PlanningID)
-	}
-	a.changed(j.ID)
-	return nil
-}
-
 // removeJob löscht Aufnahme, Listenpunkte, Joplin-Notiz und Zeile eines Auftrags endgültig; die Planung bleibt unberührt.
 // Nur für die Automatik (Purge) und die Endlöschung aus dem Papierkorb.
 func (a *App) removeJob(j *store.Job) error {
@@ -595,7 +580,8 @@ func (a *App) removeJob(j *store.Job) error {
 	return a.DB.DeleteJob(j.ID)
 }
 
-// Purge löscht leere Aufnahmen und fehlgeschlagene Aufträge nach Ablauf ihrer Frist.
+// Purge legt leere Aufnahmen und fehlgeschlagene Aufträge nach Ablauf ihrer Frist in den Papierkorb; die
+// Aufnahme bleibt, bis der Papierkorb sie endgültig löscht.
 func (a *App) Purge() {
 	jobs, err := a.DB.FailedJobs()
 	if err != nil {
@@ -611,7 +597,7 @@ func (a *App) Purge() {
 		if hours <= 0 || now-j.FailedAt < int64(hours)*3600_000 {
 			continue
 		}
-		if err := a.destroyJob(j); err != nil {
+		if err := a.deleteJob(j); err != nil {
 			logf("Aufräumen: Auftrag %s: %v", j.ID, err)
 			continue
 		}
@@ -619,11 +605,11 @@ func (a *App) Purge() {
 		if j.Empty {
 			what = "ohne Sprache"
 		}
-		logf("Auftrag %s (%s, %s) nach %d h gelöscht", j.ID, j.Mode, what, hours)
+		logf("Auftrag %s (%s, %s) nach %d h in den Papierkorb", j.ID, j.Mode, what, hours)
 	}
 }
 
-// purgeAt liefert den Zeitpunkt, zu dem ein fehlgeschlagener Auftrag gelöscht wird (0 = nie).
+// purgeAt liefert den Zeitpunkt, zu dem ein fehlgeschlagener Auftrag in den Papierkorb kommt (0 = nie).
 func (a *App) purgeAt(j *store.Job) int64 {
 	if !j.Failed || j.FailedAt == 0 {
 		return 0

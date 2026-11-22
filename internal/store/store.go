@@ -873,13 +873,6 @@ func (s *Store) Since(from int64) ([]*Job, error) {
 	return s.queryJobs(`SELECT `+jobCols+` FROM jobs WHERE deleted_at = 0 AND received_at >= ? AND mode IN ('diktat','planung') ORDER BY received_at`, from)
 }
 
-// ExpiredAudio liefert Aufträge, deren Audio älter als der Stichtag ist und noch liegt.
-func (s *Store) ExpiredAudio(cutoff int64) ([]*Job, error) {
-	// Nur fertige oder endgültig fehlgeschlagene: eine nachträglich importierte alte Aufnahme wird erst verarbeitet.
-	return s.queryJobs(`SELECT `+jobCols+` FROM jobs WHERE audio_path != '' AND audio_deleted_at = 0 AND received_at < ?
-		AND (state = ? OR failed = 1)`, cutoff, StateDone)
-}
-
 // JobsAsking liefert fertige Notizen, an denen noch Rückfragen der KI offen sind.
 func (s *Store) JobsAsking() ([]*Job, error) {
 	return s.queryJobs(`SELECT `+jobCols+` FROM jobs WHERE deleted_at = 0 AND mode = 'diktat' AND planning_id = '' AND state = ? AND failed = 0

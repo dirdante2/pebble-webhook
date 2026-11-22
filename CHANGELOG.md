@@ -7,6 +7,12 @@ Version numbers X.Y.Z:
 - **Y** – a new feature (e.g. appointments, multiple languages, theme choice with day/night mode).
 - **Z** – all other UI changes and small bug fixes; safe to install or roll back at any time.
 
+## [1.31.5] - 2026-11-22
+
+### Changed
+- Recordings are kept: no more deletion after a number of days (setting `AUDIO_RETENTION_DAYS` removed). A recording is only deleted together with its entry when the trash deletes it for good.
+- Empty recordings and entries that failed for good go to the trash after their period instead of being deleted at once; their recording stays until the trash period ends.
+
 ## [1.31.4] - 2026-11-22
 
 ### New

@@ -166,7 +166,8 @@ In der Web-App und in Joplin heißt die Art „Notiz“ (Nutzervorgabe 15.11.202
 ## Bereinigung
 
 0. Beim Start und danach täglich: Papierkorb älter als `TRASH_RETENTION_DAYS` endgültig löschen (siehe Löschen 4b).
-1. Beim Start und danach täglich: Aufträge mit Audio, deren Eingang länger als `AUDIO_RETENTION_DAYS` zurückliegt → Datei löschen, „abgelaufen“ vermerken – auch bei fehlgeschlagenen Aufträgen. Texte bleiben.
+1. Aufnahmen werden nie nach Alter gelöscht (seit 1.31.5, vorher `AUDIO_RETENTION_DAYS`), nur mit ihrem Eintrag bei der Endlöschung aus dem Papierkorb (Frist oder „Endgültig löschen“).
+2. Leere und dauerhaft fehlgeschlagene Aufträge kommen nach `EMPTY_RETENTION_HOURS` / `FAILED_RETENTION_HOURS` in den Papierkorb (Aufnahme bleibt).
 
 ## Anzeige in der Web-App (seit 17.11.2026)
 

@@ -58,10 +58,9 @@ var Fields = []Field{
 	{Key: "JOPLIN_PASSWORD", Group: "Joplin", Label: "Joplin-Passwort", Help: "Passwort zum Joplin-Konto.", Kind: "secret"},
 	{Key: "JOPLIN_NOTEBOOK", Group: "Joplin", Label: "Oberstes Notizbuch", Help: "Notizbuch in Joplin, unter dem Notizen, Planungen und Listen abgelegt werden.", Kind: "text", Default: "Sprachnotizen"},
 
-	{Key: "AUDIO_RETENTION_DAYS", Group: "Fristen", Label: "Aufnahmen löschen nach (Tagen)", Help: "Die Audiodatei wird danach gelöscht, der Text bleibt.", Kind: "int", Default: "60"},
 	{Key: "TRASH_RETENTION_DAYS", Group: "Fristen", Label: "Papierkorb leeren nach (Tagen)", Help: "Gelöschte Einträge bleiben so lange im Papierkorb, dann werden sie endgültig entfernt.", Kind: "int", Default: "183"},
-	{Key: "EMPTY_RETENTION_HOURS", Group: "Fristen", Label: "Leere Aufnahmen löschen nach (Stunden)", Help: "0 = nie.", Kind: "int", Default: "1"},
-	{Key: "FAILED_RETENTION_HOURS", Group: "Fristen", Label: "Fehlgeschlagene löschen nach (Stunden)", Help: "0 = nie.", Kind: "int", Default: "24"},
+	{Key: "EMPTY_RETENTION_HOURS", Group: "Fristen", Label: "Leere Aufnahmen in den Papierkorb nach (Stunden)", Help: "Aufnahmen ohne erkannte Sprache; die Aufnahme bleibt bis zum Ende der Papierkorb-Frist. 0 = nie.", Kind: "int", Default: "1"},
+	{Key: "FAILED_RETENTION_HOURS", Group: "Fristen", Label: "Fehlgeschlagene in den Papierkorb nach (Stunden)", Help: "Dauerhaft fehlgeschlagene Einträge; die Aufnahme bleibt bis zum Ende der Papierkorb-Frist. 0 = nie.", Kind: "int", Default: "24"},
 	{Key: "PLANNING_AUTOCLOSE_DAYS", Group: "Fristen", Label: "Planungen schließen nach (Tagen ohne Runde)", Help: "0 = nie.", Kind: "int", Default: "3"},
 	{Key: "MAX_ATTEMPTS", Group: "Fristen", Label: "Versuche je Schritt", Help: "So oft wird ein fehlgeschlagener Schritt (z. B. Transkription) wiederholt, bevor der Eintrag als Fehler gilt.", Kind: "int", Default: "6"},
 	{Key: "MIN_FREE_MB", Group: "Fristen", Label: "Mindestens freier Speicher (MB)", Help: "Darunter werden Aufnahmen abgewiesen.", Kind: "int", Default: "500"},

@@ -56,7 +56,6 @@ type Config struct {
 	ResearchLimitUSD     float64
 	ResearchMaxOutTokens int
 
-	AudioRetentionDays   int
 	TrashRetentionDays   int // Papierkorb: so viele Tage nach dem Löschen endgültig entfernen
 	AutoCloseDays        int // offene Planungen ohne neue Runde schließen; 0 = nie
 	MemoryTrainEntries   int // Lernlauf: so viele der jüngsten Notizen und Planungen auswerten
@@ -263,7 +262,6 @@ func FromValues(boot Bootstrap, lookup func(string) string) (*Config, error) {
 		PriceTranscribeMin:   price("PRICE_TRANSCRIBE_PER_MIN"),
 		ResearchMaxOutTokens: num("RESEARCH_MAX_OUTPUT_TOKENS", 6000),
 
-		AudioRetentionDays: num("AUDIO_RETENTION_DAYS", 60),
 		TrashRetentionDays: num("TRASH_RETENTION_DAYS", 183),
 		AutoCloseDays:      num("PLANNING_AUTOCLOSE_DAYS", 3),
 		MemoryTrainEntries: num("MEMORY_TRAIN_ENTRIES", 30),
@@ -367,7 +365,6 @@ var intLimits = map[string][2]int{
 	"HOOK_MAX_MB":                {1, 2048},
 	"HOOK_RATE_PER_MIN":          {1, 10_000},
 	"RESEARCH_MAX_OUTPUT_TOKENS": {256, 200_000},
-	"AUDIO_RETENTION_DAYS":       {1, 36_500},
 	"TRASH_RETENTION_DAYS":       {1, 36_500},
 	"BACKUP_RETENTION_DAYS":      {1, 36_500},
 	"EMPTY_RETENTION_HOURS":      {0, 87_600},

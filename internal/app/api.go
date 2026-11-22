@@ -825,7 +825,7 @@ func (a *App) handleStatus(w http.ResponseWriter, r *http.Request) {
 			"halten": a.Cfg.TriggerSingle, "doppelklick_halten": a.Cfg.TriggerDouble, "transkription": a.Cfg.Transcription,
 			"transkriptions_modell": a.Cfg.TranscribeModel, "recherche_modell": a.Cfg.PlanModel,
 			"diktat_modell": a.Cfg.DictationModel, "leer_stunden": a.Cfg.EmptyRetentionHours, "fehler_stunden": a.Cfg.FailedRetentionHours,
-			"limit_usd": a.Cfg.ResearchLimitUSD, "audio_tage": a.Cfg.AudioRetentionDays, "papierkorb_tage": a.Cfg.TrashRetentionDays, "schliessen_tage": a.Cfg.AutoCloseDays,
+			"limit_usd": a.Cfg.ResearchLimitUSD, "papierkorb_tage": a.Cfg.TrashRetentionDays, "schliessen_tage": a.Cfg.AutoCloseDays,
 			"listen_aktiv_minuten": a.Cfg.DoneActiveMinutes, "besuch_pause_minuten": a.Cfg.VisitGapMinutes, "preise_bekannt": a.Cfg.PricePlanIn != nil && a.Cfg.PricePlanOut != nil && a.Cfg.PriceSearchCall != nil,
 		},
 	}

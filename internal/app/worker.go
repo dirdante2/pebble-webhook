@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"slices"
 	"time"
 
@@ -425,30 +424,11 @@ func (a *App) AutoClose() {
 	}
 }
 
-// Cleanup löscht Audio, dessen Eingang länger als die Aufbewahrungsfrist zurückliegt –
-// auch bei fehlgeschlagenen Aufträgen. Texte und Verlauf bleiben. Vorher: abgelaufenen Papierkorb leeren.
+// Cleanup (täglich): abgelaufenen Papierkorb endgültig leeren – nur dort werden Aufnahmen gelöscht –,
+// Backups bereinigen, Aufnahmen ohne Eintrag suchen, leere Audio-Ordner entfernen.
 func (a *App) Cleanup() {
 	a.trashExpired()
 	a.cleanBackups()
 	a.scanAudio()
 	a.removeEmptyDirs(a.Cfg.AudioDir)
-	cutoff := time.Now().AddDate(0, 0, -a.Cfg.AudioRetentionDays).UnixMilli()
-	jobs, err := a.DB.ExpiredAudio(cutoff)
-	if err != nil {
-		logf("Bereinigung: %v", err)
-		return
-	}
-	for _, j := range jobs {
-		if err := os.Remove(j.AudioPath); err != nil && !os.IsNotExist(err) {
-			logf("Bereinigung: %s: %v", j.AudioPath, err)
-			continue
-		}
-		j.AudioDeletedAt = store.Now()
-		if err := a.DB.SaveJob(j); err != nil {
-			logf("Bereinigung: %v", err)
-		}
-	}
-	if len(jobs) > 0 {
-		logf("Bereinigung: %d Aufnahmen nach %d Tagen gelöscht", len(jobs), a.Cfg.AudioRetentionDays)
-	}
 }
