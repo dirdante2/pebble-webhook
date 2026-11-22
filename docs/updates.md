@@ -28,13 +28,7 @@ sudo bash /usr/local/lib/pebble-webhook/install.sh --version 1.16.0-beta.1
 sudo bash /usr/local/lib/pebble-webhook/install.sh --channel nightly       # newest of a channel (stable, beta, nightly)
 ```
 
-Every channel also has a moving release named after it (`stable`, `beta`, `nightly`) that always holds the newest build of that channel – the same command always gets the newest version:
-
-```bash
-curl -fsSL https://github.com/dirdante2/pebble-webhook/releases/download/stable/install.sh  | sudo bash -s -- --channel stable
-curl -fsSL https://github.com/dirdante2/pebble-webhook/releases/download/beta/install.sh    | sudo bash -s -- --channel beta
-curl -fsSL https://github.com/dirdante2/pebble-webhook/releases/download/nightly/install.sh | sudo bash -s -- --channel nightly
-```
+`--channel` takes the moving release of that name on GitHub (`stable`, `beta`, `nightly`), which always holds the newest build of the channel. The usual way to change the channel is the web app; a new installation always starts with stable.
 
 ## Backups
 

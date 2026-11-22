@@ -13,12 +13,7 @@
 curl -fsSL https://raw.githubusercontent.com/dirdante2/pebble-webhook/main/install.sh | sudo bash
 ```
 
-Another channel instead of stable (always its newest build):
-
-```bash
-curl -fsSL https://github.com/dirdante2/pebble-webhook/releases/download/beta/install.sh | sudo bash -s -- --channel beta
-curl -fsSL https://github.com/dirdante2/pebble-webhook/releases/download/nightly/install.sh | sudo bash -s -- --channel nightly
-```
+Installation always starts with the newest stable release. Switch to beta or nightly afterwards in the web app under *Updates → Kanal*.
 
 The installer
 

@@ -7,6 +7,11 @@ Version numbers X.Y.Z:
 - **Y** – a new feature (e.g. appointments, multiple languages, theme choice with day/night mode).
 - **Z** – all other UI changes and small bug fixes; safe to install or roll back at any time.
 
+## [1.33.4] - 2026-11-22
+
+### Changed
+- Installation always starts with the newest stable release; beta or nightly is chosen afterwards in the web app. The docs no longer offer per-channel install commands; `--channel` stays for the local installer.
+
 ## [1.33.3] - 2026-11-22
 
 ### New

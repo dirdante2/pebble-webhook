@@ -96,8 +96,7 @@ jobs:
           # Fester Tag je Kanal: .../releases/download/<kanal>/… ist immer die neueste Version des Kanals.
           gh release delete "$CH" --yes --cleanup-tag 2>/dev/null || true
           gh release create "$CH" out/* --title "$CH – always the newest ($V)" --target "$GITHUB_SHA" --prerelease --latest=false \
-            --notes "Moving release: always the newest $CH build, currently v$V. Install or update with
-          \`curl -fsSL https://github.com/${{ github.repository }}/releases/download/$CH/install.sh | sudo bash -s -- --channel $CH\`"
+            --notes "Moving release: always the newest $CH build, currently v$V. New installations start with stable; the channel is changed in the web app (Updates → Kanal)."
 
       - name: Keep the newest 10 nightlies
         if: ${{ !startsWith(github.ref, 'refs/tags/') }}

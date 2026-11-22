@@ -6,9 +6,9 @@
 # Options:
 #   --version X.Y.Z     install this release instead of the latest stable one (also X.Y.Z-beta.N,
 #                       X.Y.Z-nightly.N, or an older version to roll back; the database is backed up first)
-#   --channel NAME      install the newest release of stable, beta or nightly (moving release of that name):
-#                         curl -fsSL https://github.com/dirdante2/pebble-webhook/releases/download/nightly/install.sh \
-#                           | sudo bash -s -- --channel nightly
+#   --channel NAME      on an installed server: the newest release of stable, beta or nightly (moving
+#                       release of that name). A new installation always starts with stable; the channel is
+#                       changed afterwards in the web app.
 #   --repo OWNER/NAME   GitHub repository to download from (default below)
 #   --source            build from the source tree this script lives in (needs Go)
 #   --binary PATH       install a prebuilt binary (used by deploy/deploy.sh)
