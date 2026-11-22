@@ -7,6 +7,12 @@ Version numbers X.Y.Z:
 - **Y** – a new feature (e.g. appointments, multiple languages, theme choice with day/night mode).
 - **Z** – all other UI changes and small bug fixes; safe to install or roll back at any time.
 
+## [1.31.8] - 2026-11-22
+
+### Changed
+- Status page: entries as a card – notes and planning rounds, with recording / text answers from the web app / text only from the Pebble app, in progress and failed.
+- Storage card of the recordings: number of files, average size and length, total length (length read from the m4a files once and kept in memory).
+
 ## [1.31.7] - 2026-11-22
 
 ### Changed

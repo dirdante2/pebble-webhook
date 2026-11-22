@@ -820,7 +820,7 @@ func (a *App) handleStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out := map[string]any{
-		"version": a.Version, "audio_unbekannt": a.scanAudio(), "auftraege": counts.Total, "warteschlange": counts.Open, "fehlgeschlagen": counts.Failed,
+		"version": a.Version, "audio_unbekannt": a.scanAudio(), "auftraege": counts.Total, "auftraege_teile": map[string]int{"audio": counts.Audio, "web": counts.Web, "nur_text": counts.TextOnly, "notizen": counts.Notes, "runden": counts.Rounds}, "warteschlange": counts.Open, "fehlgeschlagen": counts.Failed,
 		"einstellungen": map[string]any{
 			"halten": a.Cfg.TriggerSingle, "doppelklick_halten": a.Cfg.TriggerDouble, "transkription": a.Cfg.Transcription,
 			"transkriptions_modell": a.Cfg.TranscribeModel, "recherche_modell": a.Cfg.PlanModel,
@@ -840,7 +840,7 @@ func (a *App) handleStatus(w http.ResponseWriter, r *http.Request) {
 		m["belegt"], m["frei"], m["gesamt"], m["knapp"] = dirSize(path), free, total, free < a.Cfg.MinFreeBytes
 		return m
 	}
-	out["speicher"] = []map[string]any{disk("Daten", a.Cfg.DataDir), disk("Aufnahmen", a.Cfg.AudioDir), disk("Backups", a.Cfg.BackupDir)}
+	out["speicher"] = []map[string]any{disk("Daten", a.Cfg.DataDir), func() map[string]any { m := disk("Aufnahmen", a.Cfg.AudioDir); m["dateien"] = a.audioStats(); return m }(), disk("Backups", a.Cfg.BackupDir)}
 	tj, _ := a.DB.TrashedJobs(0)
 	tp, _ := a.DB.TrashedPlannings(0)
 	out["papierkorb"] = len(tj) + len(tp)

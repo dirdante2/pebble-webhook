@@ -2218,6 +2218,7 @@ async function zeigeStatus() {
     const speicher = (p) => T`<div class="karte speicherkarte"><div class="zeile"><strong>${esc(tx(p.name))}</strong>${p.fehler ? '' : T`<span>${groesse(p.belegt)}</span>`}</div>
       <div class="pfadzeile leise"><span class="pfad">${esc(p.pfad)}</span>${p.fehler ? '' : T`<span class="frei">frei ${groesse(p.frei)} von ${groesse(p.gesamt)}</span>`}</div>
       ${p.fehler ? T`<div class="hinweis schlecht">nicht lesbar: ${esc(p.fehler)}</div>` : T`<meter class="balken${p.knapp ? ' knapp' : ''}" min="0" max="${p.gesamt}" value="${p.gesamt - p.frei}" aria-label="${esc(tx('{0} von {1} belegt', groesse(p.gesamt - p.frei), groesse(p.gesamt)))}"></meter>
+        ${p.dateien ? T`<div class="leise">${p.dateien.anzahl} Dateien${p.dateien.schnitt_groesse ? T` · Ø ${groesse(p.dateien.schnitt_groesse)}` : ''}${p.dateien.schnitt_sekunden ? T` · Ø ${dauer(p.dateien.schnitt_sekunden)} · zusammen ${dauer(p.dateien.gesamt_sekunden)}` : ''}</div>` : ''}
         ${p.knapp ? T('<div class="hinweis schlecht">Knapp – neue Aufnahmen werden abgewiesen.</div>') : ''}`}</div>`;
     const joplin = !s.joplin.aktiv ? tx('ausgeschaltet') : s.joplin.fehler ? T`<strong>Fehler:</strong> ${esc(s.joplin.fehler)}` : T`erreichbar${s.joplin.offene_planungen ? T`, ${s.joplin.offene_planungen} Planung(en) noch nicht übertragen` : ''}`;
     const updateKarte = neueVersion ? T`<a class="karte updatekarte" href="/status/update">${updateSymbol}<span><strong>Update ${esc(neueVersion)} verfügbar</strong><br><span class="leise">Änderungen ansehen und installieren</span></span></a>` : '';
@@ -2228,9 +2229,13 @@ async function zeigeStatus() {
         ${s.audio_unbekannt.map((f) => T`<div class="karte"><div class="zeile"><span><span class="badge fehler">ohne Eintrag</span> <span class="badge ${esc(f.modus)}">${esc(MODUS[f.modus] || f.modus)}</span> ${zeit(f.zeit)}</span><button class="btn klein" data-import="${esc(f.datei)}">Importieren</button></div>
           <div class="leise">${esc(f.datei)} · ${groesse(f.groesse)}</div></div>`).join('')}
         ${s.audio_unbekannt.length > 1 ? T('<div class="leiste"><button class="btn haupt" data-import-alle="1">Alle importieren</button></div>') : ''}` : ''}
-      <dl><dt>Aufträge</dt><dd>${s.auftraege} gesamt, ${s.warteschlange} in Arbeit</dd>
-        ${s.joplin.aktiv ? T`<dt>Joplin</dt><dd>${joplin}</dd>` : ''}</dl>
+      ${s.joplin.aktiv ? T`<dl><dt>Joplin</dt><dd>${joplin}</dd></dl>` : ''}
       ${s.joplin.aktiv ? T('<div class="leiste"><button class="btn klein" data-a="pruefen">Joplin jetzt prüfen</button></div>') : ''}
+      <h2>Einträge</h2>
+      <div class="karte speicherkarte"><div class="zeile"><strong>Eingänge</strong><span>${s.auftraege}</span></div>
+        ${s.auftraege_teile ? T`<div class="leise">${s.auftraege_teile.notizen} Notizen · ${s.auftraege_teile.runden} Planungsrunden</div>
+        <div class="leise">${s.auftraege_teile.audio} mit Aufnahme · ${s.auftraege_teile.web} Text-Antworten aus der Web-App${s.auftraege_teile.nur_text ? T` · ${s.auftraege_teile.nur_text} nur Text der Pebble-App` : ''}</div>` : ''}
+        <div class="leise">${s.warteschlange} in Arbeit · ${s.fehlgeschlagen} fehlgeschlagen</div></div>
       <h2>Speicher</h2>
       ${(s.speicher || []).map(speicher).join('')}
       ${s.probleme.length ? T`<h2>Aufträge mit Fehlern</h2>${s.fehlgeschlagen ? T('<div class="leiste"><button class="btn gefahr" data-a="fehler-weg">Alle fehlerhaften löschen</button></div>') : ''}${s.probleme.map(karte).join('')}` : ''}
@@ -2669,6 +2674,8 @@ function aenderungenHtml(text) {
 // Änderungslisten nur auf Knopfdruck in einem Blatt; die vollständige Liste liegt auf GitHub.
 const SYM_LADEN = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11m-5-5 5 5 5-5M5 20h14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 const SYM_ZURUECK = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12a8 8 0 1 0 2.4-5.7M4 4v4.5h4.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+// Dauer lesbar: 0:42, 12:05, 1:02:10.
+const dauer = (s) => { s = Math.round(s); const h = Math.floor(s / 3600), m = Math.floor(s / 60) % 60, z = String(s % 60).padStart(2, '0'); return h ? `${h}:${String(m).padStart(2, '0')}:${z}` : `${m}:${z}`; };
 // Dateigröße lesbar (KB/MB/GB).
 const groesse = (n) => (!n ? "0 KB" : n < 1024 * 1024 ? `${Math.max(1, Math.round(n / 1024))} KB` : n < 1024 ** 3 ? `${(n / 1024 / 1024).toFixed(1)} MB` : `${(n / 1024 ** 3).toFixed(1)} GB`);
 

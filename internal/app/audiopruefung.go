@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -249,4 +250,102 @@ func (a *App) handleAudioImport(w http.ResponseWriter, r *http.Request) {
 	}
 	a.Wake()
 	writeJSON(w, 200, map[string]any{"importiert": n, "dateien": a.scanAudio()})
+}
+
+// mp4Seconds liest die Länge einer m4a/mp4-Datei aus dem mvhd-Kasten (-1 = unbekannt).
+func mp4Seconds(path string) float64 {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return -1
+	}
+	var walk func(b []byte) float64
+	walk = func(b []byte) float64 {
+		for len(b) >= 8 {
+			size := int(uint32(b[0])<<24 | uint32(b[1])<<16 | uint32(b[2])<<8 | uint32(b[3]))
+			typ := string(b[4:8])
+			hdr := 8
+			if size == 1 && len(b) >= 16 {
+				size, hdr = int(be64(b[8:16])), 16
+			} else if size == 0 {
+				size = len(b)
+			}
+			if size < hdr || size > len(b) {
+				return -1
+			}
+			body := b[hdr:size]
+			switch typ {
+			case "moov":
+				return walk(body)
+			case "mvhd":
+				if len(body) >= 32 && body[0] == 1 {
+					return float64(be64(body[24:32])) / float64(be32(body[20:24]))
+				}
+				if len(body) >= 20 {
+					if ts := be32(body[12:16]); ts > 0 {
+						return float64(be32(body[16:20])) / float64(ts)
+					}
+				}
+				return -1
+			}
+			b = b[size:]
+		}
+		return -1
+	}
+	return walk(b)
+}
+
+func be32(b []byte) uint32 {
+	return uint32(b[0])<<24 | uint32(b[1])<<16 | uint32(b[2])<<8 | uint32(b[3])
+}
+func be64(b []byte) uint64 { return uint64(be32(b[:4]))<<32 | uint64(be32(b[4:8])) }
+
+var (
+	secondsMu    sync.Mutex
+	secondsCache = map[string]float64{} // Pfad+Größe → Länge; einmal gelesen, im Speicher gehalten
+)
+
+// audioStats: Zahl, Durchschnittsgröße und -länge der Aufnahmen in AUDIO_DIR (Länge nur m4a/mp4).
+func (a *App) audioStats() map[string]any {
+	var n, withLen int
+	var bytes int64
+	var secs float64
+	filepath.WalkDir(a.Cfg.AudioDir, func(p string, d fs.DirEntry, err error) error {
+		if err != nil || !d.Type().IsRegular() || audioMimeOf(p) == "" {
+			return nil
+		}
+		fi, err := d.Info()
+		if err != nil {
+			return nil
+		}
+		n++
+		bytes += fi.Size()
+		ext := strings.ToLower(filepath.Ext(p))
+		if ext != ".m4a" && ext != ".mp4" {
+			return nil
+		}
+		key := p + "|" + strconv.FormatInt(fi.Size(), 10)
+		secondsMu.Lock()
+		s, ok := secondsCache[key]
+		secondsMu.Unlock()
+		if !ok {
+			s = mp4Seconds(p)
+			secondsMu.Lock()
+			secondsCache[key] = s
+			secondsMu.Unlock()
+		}
+		if s >= 0 {
+			withLen++
+			secs += s
+		}
+		return nil
+	})
+	out := map[string]any{"anzahl": n}
+	if n > 0 {
+		out["schnitt_groesse"] = bytes / int64(n)
+	}
+	if withLen > 0 {
+		out["schnitt_sekunden"] = secs / float64(withLen)
+		out["gesamt_sekunden"] = secs
+	}
+	return out
 }

@@ -891,11 +891,16 @@ func (s *Store) DeleteJob(id string) error {
 
 type Counts struct {
 	Total, Open, Failed int
+	Audio, Web, TextOnly int // mit Aufnahme; Text-Antworten aus der Web-App; nur Text der Pebble-App
+	Notes, Rounds        int // Notizen; Planungsrunden
 }
 
 func (s *Store) Counts() (c Counts, err error) {
-	err = s.DB.QueryRow(`SELECT COUNT(*), COALESCE(SUM(state != ? AND failed = 0),0), COALESCE(SUM(failed),0) FROM jobs WHERE deleted_at = 0`, StateDone).
-		Scan(&c.Total, &c.Open, &c.Failed)
+	err = s.DB.QueryRow(`SELECT COUNT(*), COALESCE(SUM(state != ? AND failed = 0),0), COALESCE(SUM(failed),0),
+		COALESCE(SUM(audio_path != ''),0), COALESCE(SUM(audio_path = '' AND source = 'web'),0), COALESCE(SUM(audio_path = '' AND source != 'web' AND is_test = 0),0),
+		COALESCE(SUM(mode = 'diktat'),0), COALESCE(SUM(mode = 'planung'),0)
+		FROM jobs WHERE deleted_at = 0`, StateDone).
+		Scan(&c.Total, &c.Open, &c.Failed, &c.Audio, &c.Web, &c.TextOnly, &c.Notes, &c.Rounds)
 	return
 }
 
