@@ -1,9 +1,12 @@
 // Service Worker: App-Hülle offline, Web-Push. Daten kommen aus IndexedDB der Seite, nicht aus diesem Cache.
+// Die Hülle gehört zu genau einer App-Version (__V__): sie kommt immer aus dem Cache und wird nur mit einem
+// neuen Service Worker (= neue Version) einmal neu geladen. Danach lädt die Seite beim nächsten Wechsel neu.
 const CACHE = 'sprachnotizen-__V__';
 const HUELLE = ['/', '/app.js?v=__V__', '/app.css?v=__V__', '/theme.js?v=__V__', '/manifest.webmanifest', '/icon.svg', '/icon-192.png', '/icon-512.png'];
 
 self.addEventListener('install', (e) => {
-  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(HUELLE)).then(() => self.skipWaiting()));
+  // cache: 'no-cache' – nach ETag nachfragen, damit keine Hülle einer älteren Version im Browser-Speicher übernommen wird.
+  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(HUELLE.map((u) => new Request(u, { cache: 'no-cache' })))).then(() => self.skipWaiting()));
 });
 
 self.addEventListener('activate', (e) => {
@@ -13,17 +16,20 @@ self.addEventListener('activate', (e) => {
 self.addEventListener('fetch', (e) => {
   const url = new URL(e.request.url);
   if (e.request.method !== 'GET' || url.origin !== location.origin || url.pathname.startsWith('/api/') || url.pathname.startsWith('/oauth/') || url.pathname.startsWith('/.well-known/') || url.pathname === '/mcp' || url.pathname === '/hook' || url.pathname === '/sw') return;
-  // Erst das Netz (immer aktueller Stand), ohne Netz die gespeicherte Hülle.
-  const key = e.request.mode === 'navigate' ? '/' : url.pathname + url.search;
-  e.respondWith(
-    fetch(e.request).then((antwort) => {
-      if (antwort.ok && HUELLE.includes(key)) {
-        const kopie = antwort.clone();
-        caches.open(CACHE).then((c) => c.put(key, kopie));
-      }
+  const seite = e.request.mode === 'navigate';
+  const key = seite ? '/' : url.pathname + url.search;
+  if (!seite && !HUELLE.includes(key)) return;
+  e.respondWith(caches.open(CACHE).then(async (c) => {
+    const treffer = await c.match(key);
+    const netz = fetch(seite ? '/' : e.request).then((antwort) => {
+      if (antwort.ok) c.put(key, antwort.clone());
       return antwort;
-    }).catch(() => caches.match(key).then((treffer) => treffer || Response.error())),
-  );
+    });
+    if (!treffer) return netz;
+    // Seite: sofort aus dem Cache, im Hintergrund nachfragen (meist 304, z. B. neue Sprache).
+    if (seite) e.waitUntil(netz.catch(() => {}));
+    return treffer;
+  }).catch(() => Response.error()));
 });
 
 self.addEventListener('push', (e) => {

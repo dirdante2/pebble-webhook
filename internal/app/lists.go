@@ -843,8 +843,9 @@ func (a *App) handleLists(w http.ResponseWriter, r *http.Request) {
 }
 
 // pastBefore ist die Grenze (ms), vor der Erledigtes unter „Vergangen“ rutscht.
+// Auf die Minute gerundet, damit die Antwort zwischen zwei Abrufen gleich bleibt (ETag → 304).
 func (a *App) pastBefore() int64 {
-	return store.Now() - int64(a.Cfg.DoneActiveMinutes)*60_000
+	return store.Now()/60_000*60_000 - int64(a.Cfg.DoneActiveMinutes)*60_000
 }
 
 func (a *App) handleList(w http.ResponseWriter, r *http.Request) {

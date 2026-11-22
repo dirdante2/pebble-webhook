@@ -7,6 +7,17 @@ Version numbers X.Y.Z:
 - **Y** – a new feature (e.g. appointments, multiple languages, theme choice with day/night mode).
 - **Z** – all other UI changes and small bug fixes; safe to install or roll back at any time.
 
+## [1.32.0] - 2026-11-22
+
+### New
+- Offline first: script, styles and icons come from the service worker cache of the installed version; a new version is fetched once in the background and loads on the next page change.
+- Lists, status, memory, costs, trash and tags show the stored state at once and refresh it from the network afterwards.
+- The app opens without waiting for the server when the device was signed in before.
+
+### Changed
+- Less traffic: JSON answers carry an ETag (unchanged data = "304" without body) and are gzip-compressed; static files are pre-compressed.
+- Recordings stay in the browser cache for 30 days after playing; they still load only when played.
+
 ## [1.31.13] - 2026-11-22
 
 ### Changed

@@ -126,7 +126,7 @@ async function api(pfad, opt = {}) {
   let daten = null;
   try { daten = await antwort.json(); } catch (e) { /* leer */ }
   if (!antwort.ok) {
-    if (antwort.status === 401 && !pfad.startsWith('/api/auth/')) geheZu('/anmelden', true);
+    if (antwort.status === 401 && !pfad.startsWith('/api/auth/')) { try { localStorage.setItem('angemeldet', '0'); } catch { /* nur Startabkürzung */ } geheZu('/anmelden', true); }
     throw new ApiFehler(antwort.status, daten?.code || '', daten?.fehler || T`Fehler ${antwort.status}`);
   }
   return daten;
@@ -212,7 +212,14 @@ const loesche = (name, key) => lager(name, 'readwrite', (s) => s.delete(key));
 
 // GET mit Ablage: online frisch und gespeichert, ohne Verbindung die zuletzt gespeicherte Antwort.
 // Ohne gespeicherte Antwort bleibt der NetzFehler stehen.
-async function apiAbgelegt(pfad) {
+// vorab: nur die gespeicherte Antwort (sofort zeigen, bevor das Netz antwortet); ohne sie KeinVorrat.
+class KeinVorrat extends Error {}
+async function apiAbgelegt(pfad, vorab = false) {
+  if (vorab) {
+    const alt = await lies('antworten', pfad).catch(() => null);
+    if (!alt) throw new KeinVorrat(pfad);
+    return alt.daten;
+  }
   try {
     const daten = await api(pfad);
     lege('antworten', { pfad, daten, zeit: Date.now() }).catch(() => {});
@@ -339,6 +346,7 @@ async function zeige() {
   besuche.aktiv();
   // Vorgemerkte Wisch-Aktionen laufen beim Seitenwechsel sofort: ihr „Rückgängig“ gehört zur alten Ansicht.
   alleVorgemerktenAusfuehren();
+  if (neueHuelle) { location.reload(); return; }
   if (aufraeumen) { aufraeumen(); aufraeumen = null; }
   const vorher = aktuell?.name, vorherArg = aktuell?.arg;
   if (vorher === 'verlauf' && verlaufStand) verlaufStand.scroll = window.scrollY;
@@ -537,10 +545,11 @@ const besuche = (() => {
       return alt !== r.gesehen; // Grenze hat sich geändert: Ansicht neu zeichnen
     } catch { return false; /* offline: alte Grenze bleibt */ }
   };
+  let laufend = null;
   return {
-    // Beim Öffnen oder Zurückkehren: sofort melden (neuer Besuch entscheidet der Server).
-    async pruefe() { if (await melde(false)) aktuell?.neuLaden?.(); },
-    aktiv() { if (Date.now() - gesendet > 20000) melde(false); },
+    // Beim Öffnen oder Zurückkehren: sofort melden (neuer Besuch entscheidet der Server); eine eben gestartete Meldung zählt mit.
+    async pruefe() { if (await (laufend && Date.now() - gesendet < 3000 ? laufend : (laufend = melde(false)))) aktuell?.neuLaden?.(); },
+    aktiv() { if (Date.now() - gesendet > 20000) laufend = melde(false); },
     anmeldung() { return melde(true); },
     pause() { /* Pausenlänge gilt jetzt auf dem Server */ },
     // Zuletzt gesehen; ohne Stand gibt es noch nichts Neues.
@@ -1958,8 +1967,9 @@ async function zeigeListen(filter) {
       ${vergangen.length ? T`<div class="leiste"><button class="btn klein" data-vergangen="1">${vergangeneZeigen ? tx('Vergangene ausblenden') : T`Vergangene Listen anzeigen (${vergangen.length})`}</button></div>
         ${vergangeneZeigen ? T`<h2>Vergangen</h2>${gruppiert(vergangen, zeile)}` : ''}` : ''}`;
   };
-  const laden = async () => {
-    try { d = await apiAbgelegt('/api/listen?punkte=1'); } catch (f) {
+  const laden = async (vorab) => {
+    try { d = await apiAbgelegt('/api/listen?punkte=1', vorab); } catch (f) {
+      if (vorab) return;
       if (f instanceof NetzFehler) { if (!d && aktuell?.name === 'listen') seite.innerHTML = T('<p class="leer">Offline – die Listen sind noch nicht gespeichert.</p>'); return; }
       throw f;
     }
@@ -2002,6 +2012,7 @@ async function zeigeListen(filter) {
     }
   };
   aufraeumen = () => { seite.onclick = null; };
+  await laden(true).catch(() => {});
   await laden();
 }
 
@@ -2037,9 +2048,10 @@ async function zeigeListe(id) {
       <div class="leiste">${l.joplin_id ? T`<a class="btn" href="joplin://x-callback-url/openNote?id=${esc(l.joplin_id)}" target="_self">In Joplin öffnen</a>` : ''}<a class="btn" href="/liste/${id}/bearbeiten">Bearbeiten</a><button class="btn gefahr" data-liste-weg="1">Liste löschen</button></div>`;
     seite.querySelectorAll('details.lpmenue').forEach((dt) => { if (auf.has(dt.querySelector('[data-weg]')?.dataset.weg)) dt.open = true; });
   };
-  const laden = async () => {
+  const laden = async (vorab) => {
     const hier = () => aktuell?.name === 'liste' && aktuell.arg === id;
-    try { l = await apiAbgelegt(T`/api/listen/${id}`); male(); } catch (f) {
+    try { l = await apiAbgelegt(T`/api/listen/${id}`, vorab); male(); } catch (f) {
+      if (vorab) return;
       if (f instanceof NetzFehler) { if (!l && hier()) seite.innerHTML = T('<p class="leer">Offline – diese Liste ist noch nicht gespeichert.</p>'); }
       else if (f instanceof ApiFehler && f.status === 404) { if (hier()) seite.innerHTML = T('<p class="leer">Liste nicht gefunden.</p><p class="mitte"><a class="btn" href="/listen">Alle Listen</a></p>'); }
       else throw f;
@@ -2073,6 +2085,7 @@ async function zeigeListe(id) {
     } catch (f) { melde(f.message); laden(); }
   };
   aufraeumen = () => { seite.onclick = null; };
+  await laden(true).catch(() => {});
   await laden();
 }
 
@@ -2204,11 +2217,12 @@ function bytesZuB64(buf) {
 
 async function zeigeStatus() {
   seite.innerHTML = T`${statusReiter('status')}<p class="leer">Lädt …</p>`;
-  const laden = async () => {
+  const laden = async (vorab) => {
     let s, g, o;
     try {
-      [s, g, o] = await Promise.all([apiAbgelegt('/api/status'), apiAbgelegt('/api/geraete'), api('/api/oauth/apps').catch(() => ({ apps: [] })), ladeZaehler()]);
+      [s, g, o] = await Promise.all([apiAbgelegt('/api/status', vorab), apiAbgelegt('/api/geraete', vorab), apiAbgelegt('/api/oauth/apps', vorab).catch(() => ({ apps: [] })), vorab || ladeZaehler()]);
     } catch (f) {
+      if (vorab) return;
       if (f instanceof NetzFehler) { if (aktuell?.name === 'status') seite.innerHTML = T('<p class="leer">Offline – der Status ist noch nicht gespeichert.</p>'); return; }
       throw f;
     }
@@ -2321,11 +2335,12 @@ async function zeigeStatus() {
           return laden();
         }
         case 'push-test': await api('/api/push/test', { method: 'POST' }); return melde(tx('Test gesendet'));
-        case 'abmelden': await api('/api/auth/abmelden', { method: 'POST' }); return geheZu('/anmelden', true);
+        case 'abmelden': await api('/api/auth/abmelden', { method: 'POST' }); try { localStorage.setItem('angemeldet', '0'); } catch { /* nur Startabkürzung */ } return geheZu('/anmelden', true);
       }
     } catch (f) { b.disabled = false; melde(f.message); }
   };
   aufraeumen = () => { seite.onclick = null; };
+  await laden(true).catch(() => {});
   await laden();
 }
 
@@ -2363,8 +2378,9 @@ async function zeigeGedaechtnis() {
       ${g[reiter].length ? g[reiter].map((e) => T`<div class="karte gedkarte"><div>${esc(e.text)}</div><div class="leise">${GED_QUELLE[e.quelle] || esc(e.quelle)} · ${zeit(e.geaendert)}</div><div class="leiste">${knoepfe(e)}</div></div>`).join('') : T`<p class="leer">${leer}</p>`}
       <p class="leise">${lauf}${g.naechster_lernlauf ? T` Nächster ab ${zeit(g.naechster_lernlauf)}.` : ''} Ausgewertet werden die letzten ${g.lernlauf_eintraege} Einträge.</p>`;
   };
-  const laden = async () => {
-    try { g = await apiAbgelegt('/api/gedaechtnis'); } catch (f) {
+  const laden = async (vorab) => {
+    try { g = await apiAbgelegt('/api/gedaechtnis', vorab); } catch (f) {
+      if (vorab) return;
       if (f instanceof NetzFehler) { if (aktuell?.name === 'gedaechtnis') seite.innerHTML = T`<p class="leer">Offline – das Gedächtnis ist noch nicht gespeichert.</p>`; return; }
       throw f;
     }
@@ -2395,6 +2411,7 @@ async function zeigeGedaechtnis() {
     } catch (f) { if (b.dataset.g === 'lernen') wartet = false; b.disabled = false; melde(f.message); }
   };
   aufraeumen = () => { seite.onclick = null; };
+  await laden(true).catch(() => {});
   await laden();
 }
 
@@ -2850,8 +2867,8 @@ async function zeigeUpdate(teil) {
 
 async function zeigePapierkorb() {
   seite.innerHTML = T`<p class="leer">Lädt …</p>`;
-  const laden = async () => {
-    const k = await api('/api/papierkorb');
+  const laden = async (vorab) => {
+    const k = await apiAbgelegt('/api/papierkorb', vorab);
     if (aktuell?.name !== 'papierkorb') return;
     const titel = (e) => e.typ === 'planung'
       ? T`${esc(e.titel || tx('Planung ohne Titel'))} <span class="leise">· ${e.runden} ${e.runden === 1 ? tx('Runde') : tx('Runden')}</span>`
@@ -2881,14 +2898,16 @@ async function zeigePapierkorb() {
       melde(f.message);
     }
   };
+  await laden(true).catch(() => {});
   await laden();
 }
 
 async function zeigeKosten() {
   seite.innerHTML = T`<p class="leer">Lädt …</p>`;
-  const laden = async () => {
+  const laden = async (vorab) => {
     let k;
-    try { k = await apiAbgelegt('/api/kosten'); } catch (f) {
+    try { k = await apiAbgelegt('/api/kosten', vorab); } catch (f) {
+      if (vorab) return;
       if (f instanceof NetzFehler) { if (aktuell?.name === 'kosten') seite.innerHTML = T`<p class="leer">Offline – die Kosten sind noch nicht gespeichert.</p>`; return; }
       throw f;
     }
@@ -2933,6 +2952,7 @@ async function zeigeKosten() {
     }
   };
   aktuell.neuLaden = laden;
+  await laden(true).catch(() => {});
   await laden();
 }
 
@@ -3067,8 +3087,8 @@ async function zeigeDarstellung() {
 
 async function zeigeTagsVerwalten() {
   seite.innerHTML = T('<p class="leer">Lädt …</p>');
-  const laden = async () => {
-    const d = await api('/api/tags');
+  const laden = async (vorab) => {
+    const d = await apiAbgelegt('/api/tags', vorab);
     if (aktuell?.name !== 'tagsVerwalten') return;
     try { localStorage.setItem('tag-vorrat', JSON.stringify(d.tags)); } catch { /* nur Zwischenspeicher */ }
     maleMenue();
@@ -3099,6 +3119,7 @@ async function zeigeTagsVerwalten() {
     } catch (f) { b.disabled = false; melde(f.message); }
   };
   aufraeumen = () => { seite.onclick = null; };
+  await laden(true).catch(() => {});
   await laden();
 }
 
@@ -3294,7 +3315,7 @@ menue.addEventListener('click', async (e) => {
   const b = e.target.closest('[data-menue-abmelden]');
   if (!b || !confirm(tx('Auf diesem Gerät abmelden?'))) return;
   b.disabled = true;
-  try { await api('/api/auth/abmelden', { method: 'POST' }); if (menue.open) menue.close(); geheZu('/anmelden', true); } catch (f) { b.disabled = false; melde(f.message); }
+  try { await api('/api/auth/abmelden', { method: 'POST' }); try { localStorage.setItem('angemeldet', '0'); } catch { /* nur Startabkürzung */ } if (menue.open) menue.close(); geheZu('/anmelden', true); } catch (f) { b.disabled = false; melde(f.message); }
 });
 
 // Offene Gedächtnis-Vorschläge: Zahl an „Gedächtnis“ im Menü, Punkt am Menüknopf.
@@ -3355,19 +3376,36 @@ window.addEventListener('online', () => { zeigeVerbindung(); sendeAusgang(); akt
 window.addEventListener('offline', zeigeVerbindung);
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) { besuche.aktiv(); return; }
+  if (neueHuelle && !document.querySelector('dialog[open], #seite textarea, #seite input:not([type=search]), #seite select')) { location.reload(); return; }
   besuche.pruefe();
   sendeAusgang();
   aktuell?.neuLaden?.();
 });
 
-if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw').catch(() => {});
+// Service Worker: hält die Hülle dieser Version offline. Eine neue Version installiert er im Hintergrund;
+// die Seite lädt dann beim nächsten Seitenwechsel oder Zurückkehren neu (nie mitten in einer Eingabe).
+let neueHuelle = false, swPruefung = 0;
+if ('serviceWorker' in navigator) {
+  const hatteSw = !!navigator.serviceWorker.controller;
+  navigator.serviceWorker.addEventListener('controllerchange', () => { if (hatteSw) neueHuelle = true; });
+  navigator.serviceWorker.register('/sw').catch(() => {});
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden || Date.now() - swPruefung < 10 * 60 * 1000) return;
+    swPruefung = Date.now();
+    navigator.serviceWorker.getRegistration().then((r) => r?.update()).catch(() => {});
+  });
+}
 
 (async () => {
   zeigeVerbindung();
   const pfad = location.pathname;
+  // Schon einmal angemeldet: sofort aus dem Zwischenspeicher zeigen, die Sitzung prüft der Hintergrund.
+  const vorab = lokal('angemeldet') === '1' && pfad !== '/anmelden' && pfad !== '/einrichten' && pfad !== '/ersteinrichtung';
+  if (vorab) zeige();
   if (pfad !== '/anmelden' && pfad !== '/einrichten' && pfad !== '/ersteinrichtung') {
     try {
       const s = await api('/api/sitzung');
+      try { localStorage.setItem('angemeldet', s.angemeldet ? '1' : '0'); } catch { /* nur Startabkürzung */ }
       if (!s.angemeldet) {
         // Freigabe für eine App (OAuth): nach der Anmeldung dorthin zurück.
         if (pfad === '/verbinden') try { sessionStorage.setItem('nach-anmeldung', pfad + location.search); } catch { /* dann zur Startseite */ }
@@ -3383,5 +3421,5 @@ if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw').catch(
       if (!(e instanceof NetzFehler)) throw e; // offline: mit Zwischenspeicher weiter
     }
   }
-  zeige();
+  if (!vorab) zeige();
 })();

@@ -5,7 +5,9 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"io/fs"
+	"mime"
 	"net/http"
+	"path"
 	"strings"
 
 	"pebble-webhook/internal/i18n"
@@ -127,7 +129,7 @@ func (a *App) Handler() http.Handler {
 
 	mux.HandleFunc("/", staticHandler(func(*http.Request) string { return i18n.Lang() }))
 
-	return securityHeaders(mux)
+	return securityHeaders(apiCache(mux))
 }
 
 // securityHeaders setzt die Sicherheits-Header aller Antworten (Dienst und Ersteinrichtung).
@@ -146,11 +148,10 @@ func securityHeaders(mux http.Handler) http.Handler {
 
 // staticHandler liefert die PWA: Dateien unter static/, alle übrigen GET-Pfade bekommen die Hülle index.html.
 // Die Hülle gibt es je Sprache: lang-Attribut, feste Texte und (bei Englisch) das Wörterbuch für app.js.
+// Skript und Stil tragen die Version in der Adresse (?v=) und gelten dann ein Jahr unverändert; alles andere
+// prüft der Browser mit ETag nach (304 ohne Inhalt). Textdateien liegen fertig gepackt (gzip) bereit.
 func staticHandler(langFor func(*http.Request) string) http.HandlerFunc {
 	static, _ := fs.Sub(web.Files, "static")
-	files := http.FileServerFS(static)
-	// Ein Proxy davor kann .js/.css zwischenspeichern und Cache-Control übergehen. Deshalb tragen
-	// Skript und Stil eine Version in der Adresse, und der Service Worker liegt ohne Endung unter /sw.
 	sum := sha256.New()
 	read := func(name string) []byte {
 		data, err := fs.ReadFile(static, name)
@@ -161,45 +162,77 @@ func staticHandler(langFor func(*http.Request) string) http.HandlerFunc {
 		return data
 	}
 	index, worker, manifest := read("index.html"), read("sw.js"), read("manifest.webmanifest")
-	read("app.js")
-	read("app.css")
-	read("theme.js")
+	assets := map[string]*staticFile{}
+	for _, name := range []string{"app.js", "app.css", "theme.js", "icon.svg", "icon-192.png", "icon-512.png"} {
+		assets[name] = newStaticFile(name, read(name))
+	}
 	sum.Write(i18n.Dictionary("en"))
-	ver := []byte(hex.EncodeToString(sum.Sum(nil))[:12])
-	index = bytes.ReplaceAll(index, []byte("__V__"), ver)
-	worker = bytes.ReplaceAll(worker, []byte("__V__"), ver)
-	indexes := map[string][]byte{"de": localizeShell(index, "de"), "en": localizeShell(index, "en")}
-	manifests := map[string][]byte{"de": localizeShell(manifest, "de"), "en": localizeShell(manifest, "en")}
-	serve := func(w http.ResponseWriter, contentType string, data []byte) {
-		w.Header().Set("Content-Type", contentType)
-		w.Header().Set("Cache-Control", "no-cache")
-		w.Write(data)
+	ver := hex.EncodeToString(sum.Sum(nil))[:12]
+	index = bytes.ReplaceAll(index, []byte("__V__"), []byte(ver))
+	sw := newStaticFile("sw.js", bytes.ReplaceAll(worker, []byte("__V__"), []byte(ver)))
+	indexes, manifests := map[string]*staticFile{}, map[string]*staticFile{}
+	for _, lang := range []string{"de", "en"} {
+		indexes[lang] = newStaticFile("index.html", localizeShell(index, lang))
+		manifests[lang] = newStaticFile("manifest.webmanifest", localizeShell(manifest, lang))
 	}
 	return func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/api/") || (r.Method != http.MethodGet && r.Method != http.MethodHead) {
 			writeErr(w, 404, "fehlt", "Unbekannter Pfad")
 			return
 		}
-		w.Header().Set("Cache-Control", "no-cache")
 		name := strings.TrimPrefix(r.URL.Path, "/")
-		if name == "sw" || name == "sw.js" {
-			serve(w, "text/javascript; charset=utf-8", worker)
-			return
+		switch {
+		case name == "sw" || name == "sw.js":
+			sw.serve(w, r, false)
+		case name == "manifest.webmanifest":
+			manifests[langFor(r)].serve(w, r, false)
+		case assets[name] != nil:
+			assets[name].serve(w, r, r.URL.Query().Get("v") == ver)
+		default:
+			// Alle übrigen Pfade sind Seiten der Web-App: die Hülle ausliefern.
+			indexes[langFor(r)].serve(w, r, false)
 		}
-		if name == "manifest.webmanifest" {
-			serve(w, "application/manifest+json", manifests[langFor(r)])
-			return
-		}
-		if name != "" && name != "index.html" {
-			if f, err := static.Open(name); err == nil {
-				f.Close()
-				files.ServeHTTP(w, r)
-				return
-			}
-		}
-		// Alle übrigen Pfade sind Seiten der Web-App: die Hülle ausliefern.
-		serve(w, "text/html; charset=utf-8", indexes[langFor(r)])
 	}
+}
+
+// staticFile: eingebettete Datei mit Typ, ETag und (bei Text) gepackter Fassung.
+type staticFile struct {
+	data, gz    []byte
+	ctype, etag string
+}
+
+func newStaticFile(name string, data []byte) *staticFile {
+	h := sha256.Sum256(data)
+	f := &staticFile{data: data, ctype: mime.TypeByExtension(path.Ext(name)), etag: `"` + hex.EncodeToString(h[:8]) + `"`}
+	switch path.Ext(name) {
+	case ".html":
+		f.ctype = "text/html; charset=utf-8"
+	case ".js":
+		f.ctype = "text/javascript; charset=utf-8"
+	case ".webmanifest":
+		f.ctype = "application/manifest+json"
+	}
+	if strings.HasPrefix(f.ctype, "text/") || strings.Contains(f.ctype, "json") || strings.Contains(f.ctype, "svg") {
+		f.gz = gzipBytes(data)
+	}
+	return f
+}
+
+func (f *staticFile) serve(w http.ResponseWriter, r *http.Request, immutable bool) {
+	h := w.Header()
+	h.Set("Content-Type", f.ctype)
+	h.Set("ETag", f.etag)
+	h.Set("Vary", "Accept-Encoding")
+	if immutable {
+		h.Set("Cache-Control", "public, max-age=31536000, immutable")
+	} else {
+		h.Set("Cache-Control", "no-cache")
+	}
+	if etagMatch(r, f.etag) {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+	writeMaybeGzip(w, r, f.data, f.gz)
 }
 
 // shellTexts: feste Texte in index.html und im Manifest, die je Sprache ersetzt werden.

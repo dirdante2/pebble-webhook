@@ -260,3 +260,12 @@ Token-Routen (alles andere bleibt bei der Passkey-Sitzung, kein Löschen): `GET 
 2. Prüfung: Notiz mit Termin, fertig ausgewertet (sonst 409), gültiges Datum, nicht gleich dem bisherigen.
 3. Erinnerung: gleicher Vorlauf wie bisher; Wechsel auf ganztägig → 07:00 am Tag, auf Uhrzeit → 1 h vorher; `erinnert_at` zurück (erneut erinnern).
 4. Auswertung: Hinweis „Verschoben am …; vorher: …“ angehängt, `termin_info` neu; bestätigter/verpasster Termin wieder offen; Joplin-Stand nachziehen (`joplin_dirty`), Live-Update, Worker wecken.
+
+## Offline und Datenverbrauch
+
+1. Erster Aufruf → Service Worker `/sw` legt die Hülle der Version (`/`, `app.js?v=…`, `app.css?v=…`, `theme.js?v=…`, Icons, Manifest) in den Cache `sprachnotizen-<v>`.
+2. Jeder weitere Start → Hülle nur aus dem Cache; `/` wird im Hintergrund per ETag nachgefragt (meist 304).
+3. Neue Version → Browser findet geänderten `/sw` (beim Start, sonst höchstens alle 10 min beim Zurückkehren) → neuer Cache, alter gelöscht → Seite lädt beim nächsten Seitenwechsel bzw. Zurückkehren ohne offene Eingabe neu.
+4. Ansicht öffnen → gespeicherte Antwort aus IndexedDB (`antworten`) sofort zeigen → `GET /api/…` mit If-None-Match → 304 ohne Inhalt oder neuer Stand (gzip) → zeigen und speichern.
+5. Live: SSE `/api/ereignisse` meldet Änderungen → nur die offene Ansicht fragt nach (ETag).
+6. Audio → erst beim Abspielen (`preload="none"`), danach 30 Tage im Browser-Cache.

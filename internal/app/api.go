@@ -559,7 +559,8 @@ func (a *App) handleAudio(w http.ResponseWriter, r *http.Request) {
 	defer f.Close()
 	st, _ := f.Stat()
 	w.Header().Set("Content-Type", j.AudioMime)
-	w.Header().Set("Cache-Control", "private, max-age=86400")
+	// Eine Aufnahme ändert sich nie: einmal geladen, kommt sie 30 Tage aus dem Browser-Speicher.
+	w.Header().Set("Cache-Control", "private, max-age=2592000, immutable")
 	http.ServeContent(w, r, "", st.ModTime(), f)
 }
 
