@@ -32,7 +32,7 @@ sudo bash /usr/local/lib/pebble-webhook/install.sh --channel nightly       # new
 
 ## Backups
 
-*Updates → Backups* lists all backups, newest first. Each is one archive `pebble-<version>-<channel>-<time>-<kind>[-audio].tar.gz` in `BACKUP_DIR` (start value in `/etc/pebble-webhook/env`, default `/srv/pebble-backup`; after changing it run `install.sh` again) with
+*Backups* (menu, below Updates) lists all backups, newest first. Each is one archive `pebble-<version>-<channel>-<time>-<kind>[-audio].tar.gz` in `BACKUP_DIR` (start value in `/etc/pebble-webhook/env`, default `/srv/pebble-backup`; after changing it run `install.sh` again) with
 
 - `meta.json` – version, build, channel, time, kind, recordings yes/no,
 - `pebble.db` – the database with all settings,

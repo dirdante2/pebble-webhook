@@ -7,6 +7,11 @@ Version numbers X.Y.Z:
 - **Y** – a new feature (e.g. appointments, multiple languages, theme choice with day/night mode).
 - **Z** – all other UI changes and small bug fixes; safe to install or roll back at any time.
 
+## [1.33.8] - 2026-11-22
+
+### Changed
+- Backups have their own menu item below Updates (`/status/backups`); the update page no longer has tabs. The old address `/status/update/backups` forwards there.
+
 ## [1.33.7] - 2026-11-22
 
 ### Fixed

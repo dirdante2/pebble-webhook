@@ -322,7 +322,9 @@ const routen = [
   [/^\/verbinden$/, 'verbinden', zeigeVerbinden],
   [/^\/ersteinrichtung$/, 'ersteinrichtung', zeigeErsteinrichtung],
   [/^\/status\/einstellungen$/, 'einstellungen', zeigeEinstellungen],
-  [/^\/status\/update(\/backups)?$/, 'update', zeigeUpdate],
+  [/^\/status\/update$/, 'update', () => zeigeUpdate('')],
+  [/^\/status\/backups$/, 'backups', () => zeigeUpdate('backups')],
+  [/^\/status\/update\/backups$/, 'backups', () => geheZu('/status/backups', true)],
   [/^\/status\/einstellungen\/bearbeiten$/, 'einstellungenBearbeiten', () => geheZu('/status/einstellungen', true)],
   [/^\/status\/einstellungen\/([A-Z_]+)$/, 'einstellungBearbeiten', zeigeEinstellungBearbeiten],
   [/^\/einrichten$/, 'einrichten', zeigeEinrichten],
@@ -2718,7 +2720,8 @@ async function zeigeUpdate(teil) {
   seite.innerHTML = T`<p class="leer">Lädt …</p>`;
   const KANAL_TEXT = { stable: tx('stable – Langzeit-Versionen'), beta: tx('beta – neue Funktionen, noch nicht ausgereift'), nightly: tx('nightly – jede Änderung, ungetestet') };
   let u = null;
-  let reiter = teil ? 'backups' : 'updates';
+  // Updates und Backups sind eigene Menüpunkte; beide nutzen dieselbe Antwort von /api/update.
+  const reiter = teil === 'backups' ? 'backups' : 'updates', meinName = teil === 'backups' ? 'backups' : 'update';
   let alle = false; // „Mehr“: alle gespeicherten Versionen des Kanals statt der letzten 3
   const zeigeLog = (titel, text) => {
     document.querySelector('dialog.logblatt')?.remove();
@@ -2737,7 +2740,7 @@ async function zeigeUpdate(teil) {
   };
   const laden = async (pruefen) => {
     u = await api(`/api/update${pruefen ? '?pruefen=1' : ''}`);
-    if (aktuell?.name !== 'update') return;
+    if (aktuell?.name !== meinName) return;
     const liste = u.versionen || [];
     const laeuft = /^(requested|running)/.test(u.status || '');
     // Installiert ist eine Version aus einem anderen Kanal (oder ein eigener Build): die neueste des gewählten Kanals ist der Wechsel.
@@ -2753,8 +2756,7 @@ async function zeigeUpdate(teil) {
           <span class="leise">${esc(versionZeit(r.version) || r.datum || '')}</span></div>
         <div class="versionknoepfe"><button class="btn klein" data-log="${esc(r.version)}">Änderungen</button>${knopf}</div></div>`;
     };
-    const kopf = T`<h1>Updates</h1>
-      <nav class="btn-group unter" aria-label="Updates">${[['updates', tx('Updates')], ['backups', tx('Backups')]].map(([k, n]) => T`<button class="btn${k === reiter ? ' aktiv' : ''}" data-reiter="${k}" aria-pressed="${k === reiter}">${n}${k === 'backups' ? ` <span class="zaehler still">${(u.backups || []).length}</span>` : ''}</button>`).join('')}</nav>
+    const kopf = T`<h1>${reiter === 'backups' ? tx('Backups') : tx('Updates')}</h1>
       ${status}${u.fehler ? T`<div class="hinweis warn">${esc(u.fehler)}</div>` : ''}`;
     // Neueste Version des gewählten Kanals, die später als die installierte erschienen ist: eigene Karte über „Installiert“.
     const neu = liste.find((r) => r.neu);
@@ -2782,7 +2784,7 @@ async function zeigeUpdate(teil) {
     const PLAN_NAME = { 'täglich': tx('täglich'), 'wöchentlich': tx('wöchentlich (montags)'), monatlich: tx('monatlich (am 1.)'), aus: tx('aus') };
     const letzt = (b.letzt || '').match(/^(\S+ \S+) (ok|fehler) ?(.*)$/);
     const konf = (name, wert, key) => T`<div class="konfzeile ohnehilfe"><span class="konfname">${esc(name)}</span>
-      ${key ? T`<a class="konfedit" href="/status/einstellungen/${key}?zurueck=/status/update/backups" aria-label="${esc(tx('{0} bearbeiten', name))}">${STIFT}</a>` : '<span></span>'}<span class="konfwert">${wert}</span></div>`;
+      ${key ? T`<a class="konfedit" href="/status/einstellungen/${key}?zurueck=/status/backups" aria-label="${esc(tx('{0} bearbeiten', name))}">${STIFT}</a>` : '<span></span>'}<span class="konfwert">${wert}</span></div>`;
     const backups = T`<h2>Automatisches Backup</h2>
       <div class="karte konfliste">${konf(tx('Plan'), esc(PLAN_NAME[b.plan] || b.plan || ''), 'BACKUP_SCHEDULE')}
         ${b.plan !== 'aus' ? konf(tx('Uhrzeit'), esc(b.zeit || ''), 'BACKUP_TIME') : ''}
@@ -2822,11 +2824,6 @@ async function zeigeUpdate(teil) {
     if (b.dataset.log !== undefined) {
       const r = (u.versionen || []).find((x) => x.version === b.dataset.log);
       return r ? zeigeLog(T`${versionNr(r.version)} · ${tx(r.kanal)}`, r.aenderungen) : zeigeLog(T`${versionNr(u.aktuell)} · ${tx(u.aktuell_kanal || '')}`, u.aktuell_aenderungen);
-    }
-    if (b.dataset.reiter) {
-      reiter = b.dataset.reiter;
-      history.replaceState(null, '', reiter === 'backups' ? '/status/update/backups' : '/status/update');
-      return laden(false);
     }
     if (b.dataset.mehrVersionen) { alle = true; return laden(false); }
     b.disabled = true;
@@ -3258,7 +3255,7 @@ async function zeigeEinrichten() {
 // ---------- Menü (Hamburger links): drei Hauptseiten, darunter ihre Unterseiten ----------
 
 // Seite → Bereich im Menü.
-const BEREICH = { joplin: 'status', einstellungBearbeiten: 'status', darstellung: 'status', geraetNeu: 'status', tagsVerwalten: 'status', kosten: 'status', papierkorb: 'status', update: 'status', einstellungen: 'status', einstellungenBearbeiten: 'status', pebble: 'status', gedaechtnis: 'status', gedaechtnisBearbeiten: 'status', liste: 'listen', verschieben: 'listen', listeBearbeiten: 'listen', gruppeBearbeiten: 'listen', eintrag: 'verlauf', planung: 'verlauf', tags: 'verlauf', antwort: 'verlauf', umhaengen: 'verlauf', wortlaut: 'verlauf', einsortieren: 'verlauf', suche: 'verlauf' };
+const BEREICH = { joplin: 'status', einstellungBearbeiten: 'status', darstellung: 'status', geraetNeu: 'status', tagsVerwalten: 'status', kosten: 'status', papierkorb: 'status', update: 'status', backups: 'status', einstellungen: 'status', einstellungenBearbeiten: 'status', pebble: 'status', gedaechtnis: 'status', gedaechtnisBearbeiten: 'status', liste: 'listen', verschieben: 'listen', listeBearbeiten: 'listen', gruppeBearbeiten: 'listen', eintrag: 'verlauf', planung: 'verlauf', tags: 'verlauf', antwort: 'verlauf', umhaengen: 'verlauf', wortlaut: 'verlauf', einsortieren: 'verlauf', suche: 'verlauf' };
 const lokal = (k, v = '') => { try { return localStorage.getItem(k) ?? v; } catch { return v; } };
 function maleMenue() {
   const name = aktuell?.name || '';
@@ -3283,6 +3280,7 @@ function maleMenue() {
     { id: 'status', name: tx('Einstellungen'), href: '/status', unter: [
       { name: tx('Status'), href: '/status', an: ['status', 'pebble', 'joplin', 'einstellungen', 'einstellungBearbeiten', 'geraetNeu', 'darstellung'].includes(name), extra: audioFehler ? T` <span class="zaehler fehler" title="${tx('{0} Aufnahmen ohne Eintrag', audioFehler)}">${audioFehler}</span>` : '' },
       { name: tx('Updates'), href: '/status/update', an: name === 'update', extra: neueVersion ? ` ${updateSymbol}` : '' },
+      { name: tx('Backups'), href: '/status/backups', an: name === 'backups' },
       { name: tx('Gedächtnis'), href: '/status/gedaechtnis', an: name === 'gedaechtnis' || name === 'gedaechtnisBearbeiten', extra: zahl(offeneVorschlaege) },
       { name: tx('Tags'), href: '/status/tags', an: name === 'tagsVerwalten', extra: zahl(tagZahl, true) },
       { name: tx('KI-Kosten'), href: '/status/kosten', an: name === 'kosten' },
