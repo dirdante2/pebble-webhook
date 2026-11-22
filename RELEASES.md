@@ -4,6 +4,11 @@ Summarised notes for **beta** and **stable** releases. Each section lists only w
 
 A tag `vX.Y.Z-stable` (stable; before 1.33.5 `vX.Y.Z`) or `vX.Y.Z-beta` (beta) needs a section `## [X.Y.Z]` or `## [X.Y.Z-beta]` here; the release workflow uses it as the release notes.
 
+## [1.35.1] - 2026-11-22
+
+### Releases
+- Every version is built for one channel only – a stable or beta release no longer gets a nightly of the same number. The update page offers stable on beta and all channels on nightly, so every channel still sees the newest version.
+
 ## [1.35.0] - 2026-11-22
 
 ### Calendar
