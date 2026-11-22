@@ -2229,7 +2229,7 @@ async function zeigeStatus() {
         start += anteil;
         return bogen;
       }).join('') : '';
-      return T`<details class="karte eingangskarte"><summary><span class="zeile"><strong>Eingänge</strong><span class="eingangszahl">${s.auftraege}</span></span>
+      return T`<details class="karte eingangskarte"><summary><span class="zeile kartentitel"><strong>Eingänge</strong><span class="eingangszahl">${s.auftraege}</span></span>
           ${d.anzahl ? T`<span class="leise">${d.anzahl} Aufnahmen${d.schnitt_groesse ? T` · Ø ${groesse(d.schnitt_groesse)}` : ''}${d.schnitt_sekunden ? T` · Ø ${dauer(d.schnitt_sekunden)} · zusammen ${dauer(d.gesamt_sekunden)}` : ''}</span>` : ''}
           ${auffaellig ? T`<span class="zahlkacheln">${auffaellig}</span>` : ''}</summary>
         <div class="eingangsdetail">${summe ? T`<svg class="ringdiagramm" viewBox="-2 -2 40 40" role="img" aria-label="${esc(teile.map(([n, name]) => `${n} ${name}`).join(', '))}">${ring}</svg>` : ''}

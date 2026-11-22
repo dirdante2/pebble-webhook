@@ -602,6 +602,8 @@ dialog.logblatt h2 { margin-top: 0; }
 .speicherzeile .balken { margin-bottom: 0; }
 .speicherkarte .kartentitel strong::after { content: " ▸"; color: var(--leise); font-weight: 400; }
 .speicherkarte[open] .kartentitel strong::after { content: " ▾"; }
+.kartentitel { display: flex; align-items: center; padding-bottom: .55rem; margin-bottom: .35rem; border-bottom: 1px solid var(--linie); }
+.kartentitel strong { font-size: 1.05rem; }
 .speicherkarte .eingangszahl { font-size: 1.5rem; font-weight: 700; line-height: 1; }
 .speicherdetails { display: flex; flex-direction: column; gap: .6rem; margin-top: .8rem; padding-top: .6rem; border-top: 1px solid var(--linie); }
 .speicherdetails .pfadzeile { margin-top: .1rem; }
