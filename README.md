@@ -41,6 +41,12 @@ curl -fsSL https://raw.githubusercontent.com/dirdante2/pebble-webhook/main/insta
 
 The installer prints a link to the setup wizard. Put the service behind an HTTPS reverse proxy (passkeys need HTTPS), enter your OpenAI key and the public address, then create your first passkey.
 
+## Tips
+
+pebble-webhook is free and open source. If it is useful to you, a small tip on [Ko-fi](https://ko-fi.com/dirdante) helps keep it going – thank you!
+
+[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/A7O02B4AY7)
+
 ## Documentation
 
 - [Installation](docs/installation.md) – requirements, installer, reverse proxy, uninstall

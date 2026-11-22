@@ -1236,7 +1236,15 @@
 "‹ Zurück": "‹ Back",
 "← Gedächtnis": "← Memory",
 "✕ Zurücksetzen": "✕ Reset",
-"Entwicklung unterstützen": "Support development",
+"Unterstütze mich": "Support me",
+"In neuem Tab öffnen": "Open in new tab",
 "Gefällt dir die App?": "Enjoying the app?",
-"Sie ist kostenlos und quelloffen. Wer mag, unterstützt die Entwicklung mit einer kleinen Spende auf Ko-fi.": "It is free and open source. If you like, support its development with a small donation on Ko-fi."
+"Sie ist kostenlos und quelloffen. Wer mag, unterstützt die Entwicklung mit einer kleinen Spende auf Ko-fi.": "It is free and open source. If you like, support its development with a small donation on Ko-fi.",
+"Wörter je Aufnahme": "Words per recording",
+"{0} Tage · {1} Transkripte": "{0} days · {1} transcripts",
+"Min {0}": "Min {0}",
+"Ø {0}": "Avg {0}",
+"Max {0}": "Max {0}",
+"Wörter je Aufnahme: Min {0}, Ø {1}, Max {2}": "Words per recording: min {0}, avg {1}, max {2}",
+"{0} Runden": "{0} rounds"
 }

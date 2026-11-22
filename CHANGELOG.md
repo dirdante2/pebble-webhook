@@ -9,100 +9,110 @@ Version numbers X.Y.Z:
 
 Own builds show X.Y.Z.A: **A** is a local build counter (one per deployed change, starting at 1 for every new X.Y.Z); it never appears in Git or releases, so one version can collect several changes.
 
+## [1.37.0] - 2026-11-22
+
+### New
+- Status → Inputs: words per recording (last 30 days) as a bar from min to max with the average marked.
+
+### Changed
+- "Support me" button (Ko-fi style) in the menu and at the end of the status page opens Ko-fi in a sheet.
+- "App updated" card lists the changes of every version since the last confirmed one.
+- History: done entries show only header and title (greyed, not struck through).
+- History: last 24 h only the time, older "21.11, 18:53"; the time stays top right.
+- History: number of planning rounds as a counter next to the type badge.
+
 ## [1.36.0] - 2026-11-22
 
 ### New
-- Donations: a small "Support development" link at the bottom of the menu and a card at the very end of the status page lead to Ko-fi. The link comes from `.github/FUNDING.yml` of the update source (entry `ko_fi`), fetched with the update check; without it nothing is shown.
+- Ko-fi link in the menu and at the end of the status page; link from `FUNDING.yml` of the update source.
 
 ## [1.35.1] - 2026-11-22
 
 ### Changed
-- Releases: a push to `main` no longer builds a nightly by itself. After the push one build is started on purpose with `deploy/release.sh [nightly|beta|stable]` (default nightly); a beta or stable build needs no nightly of the same version. The workflow only reacts to tags and checks that the tag matches `VERSION`.
+- Releases: a push no longer builds a nightly; one build per push via `deploy/release.sh`.
 
 ## [1.35.0] - 2026-11-22
 
 ### New
-- Calendar subscription: Status → Kalender-Abo shows a secret iCal link (opened in the browser it downloads the .ics instead of showing the app) with all appointments, with step-by-step instructions for Google Calendar, Apple and Outlook. Done ones are marked ✓, deleted ones disappear; "New link" invalidates the old one.
-- Ring page: counters for misfires (no speech recognised) and deleted recordings, each with its share of all recordings. Both stay counted after the entry is removed for good.
+- Calendar subscription: secret iCal link with all appointments (Status → Kalender-Abo).
+- Ring page: counters for misfires and deleted recordings.
 
 ### Changed
-- Update channels include the more stable ones: beta also offers stable versions, nightly offers beta and stable. A stable newer than the last beta now shows the update icon, the "New version" card and is picked by the automatic update. A version from another channel than the installed one counts as newer only with a higher number.
-- App manifest (name and description when installed on Android or desktop) is English by default and includes German; the browser picks by device language, independent of the LANGUAGE setting.
-- `deploy/deploy.sh` takes no level any more; X.Y.Z is set by hand in `VERSION` before the push, every deploy only counts A up.
+- beta also offers stable, nightly offers beta and stable.
+- App manifest in English and German, picked by device language.
+- `deploy/deploy.sh` only counts A up; X.Y.Z is set by hand.
 
 ## [1.34.0] - 2026-11-22
 
 ### New
-- Ring lifetime: the Index 01 has a fixed battery (Pebble: 12–15 h of recording). Every recording is logged on arrival with its length (from the audio file, else from its cost, else estimated from size or text until the transcription reports it), kind (note/planning) and gesture (only hold and click + hold; anything unclear counts as hold); the log stays when entries or audio files are deleted (new tables `rings`, `ring_recordings`). On the first start the existing entries and audio files are added as ring 1.
-- Hints on every page at 60, 80, 95 and 100 % of the ring's capacity (setting `RING_CAPACITY_HOURS`, default 12) until confirmed, plus a push; at 100 % "+30 min" raises the capacity permanently.
-- Ring ID: required custom header from the Pebble app (setting `RING_ID_HEADER`, default `X-Ring-ID`), always in the form `#12345`, stored with every recording. The test event fails (400) without a valid ID; a recording without or with an invalid ID still counts for the active ring, the webhook answers "accepted, but ring ID missing or invalid" and an error shows on every page. The setup page lists the header with the active ring's ID. In the app the ID is entered as digits after a fixed `#`. If it changes, a hint on every page offers "Apply ring swap". Manual "Swap ring" with instructions; old rings stay for comparison.
-- Ring page (`/status/ring`, bar at the bottom of the menu): usage, notes vs. plannings, button presses, recording time per month, forecast for 80 % and 100 % at constant use (last 30 days), rings compared, edit ID and capacity.
-- README: hardware note with links to the Pebble Index 01 and repebble.com right below the title; ring usage in the feature list and screenshots (English demo data).
+- Ring usage: every recording is counted per ring (length, kind, gesture), also after deletion.
+- Hints and push at 60/80/95/100 % of the ring capacity (default 12 h); "+30 min" at 100 %.
+- Ring ID `#12345` via header `X-Ring-ID`; hint and "Apply ring swap" when it changes.
+- Ring page: usage, recording time per month, forecast, rings compared.
+- README: hardware note and ring usage.
 
 ### Fixed
-- The "App updated" card shows the changes in a sheet right there instead of opening the update page.
-- Lists: a list whose last item was just ticked off stays among the active lists as long as its ticked items (setting `LIST_DONE_ACTIVE_MINUTES`) instead of vanishing at once. Past lists look like the active ones and show all their items when expanded.
+- "App updated" card shows the changes right there.
+- A list whose last item was just ticked off stays active for a while.
 
 ### Changed
-- One version per channel: tags `vX.Y.Z-stable`, `vX.Y.Z-beta`, `vX.Y.Z-nightly` without extra numbers; every commit bumps the version, a build with an existing number fails. Older tags (`-beta.N`, `-nightly.<time>`) are still recognised.
-- The update page shows the publication time of each release.
-- Version X.Y.Z changes once per pushed block of work, no longer with every local deploy; own builds count each deploy as X.Y.Z.A (A only local, shown in the app as e.g. 1.34.0.2, channel "lokal").
-- Releases built from the same Git commit as the running version (e.g. stable and nightly of the same state, or an own build without local changes) never count as newer; the commit comes from the release on GitHub and from the build info of the binary.
+- One version per channel: tags `vX.Y.Z-stable|beta|nightly`.
+- Update page shows when each release was published.
+- Own builds show `X.Y.Z.A` (local counter).
+- A release from the same commit as the running version never counts as newer.
 
 ## [1.33.9] - 2026-11-22
 
 ### Changed
-- The "App updated" card is confirmed once for all devices: the server keeps the confirmed version (`POST /api/version/bestaetigt`), other open devices hide the card at once.
+- "App updated" card is confirmed once for all devices.
 
 ## [1.33.8] - 2026-11-22
 
 ### Changed
-- Backups have their own menu item below Updates (`/status/backups`); the update page no longer has tabs. The old address `/status/update/backups` forwards there.
+- Backups have their own menu item (`/status/backups`).
 
 ## [1.33.7] - 2026-11-22
 
 ### Fixed
-- Menu update icon follows the chosen channel again (not the channel of the running version): with stable chosen it shows a newer stable even when a nightly is installed.
+- Menu update icon follows the chosen channel again.
 
 ## [1.33.6] - 2026-11-22
 
 ### New
-- Update page: when the chosen channel has a version published after the installed one, a "New version available" card above "Installed" shows the newest one with changes and install button.
+- Update page: "New version available" card with changes and install button.
 
 ## [1.33.5] - 2026-11-22
 
 ### Changed
-- Stable tags carry their channel: `vX.Y.Z-stable` (beta `vX.Y.Z-beta.N`, nightly `vX.Y.Z-nightly.…`). Older stable tags without suffix are still recognised.
+- Stable tags are named `vX.Y.Z-stable`.
 
 ## [1.33.4] - 2026-11-22
 
 ### Changed
-- Install command in the docs: `curl -fsSL https://raw.githubusercontent.com/dirdante2/pebble-webhook/main/install.sh | sudo bash -s -- --channel stable`; beta or nightly afterwards in the web app (or `--channel beta|nightly`).
+- Docs: install command with `--channel stable`.
 
 ## [1.33.3] - 2026-11-22
 
 ### New
-- Moving releases `stable`, `beta` and `nightly` on GitHub: each build replaces the one of its channel, so `releases/download/<channel>/…` always holds the newest version of that channel.
-- Installer option `--channel stable|beta|nightly` installs the newest release of that channel, e.g. `curl -fsSL https://github.com/dirdante2/pebble-webhook/releases/download/nightly/install.sh | sudo bash -s -- --channel nightly`.
+- Moving GitHub releases `stable`, `beta`, `nightly`; installer option `--channel`.
 
 ## [1.33.2] - 2026-11-22
 
 ### Fixed
-- Own builds: every release of the chosen channel published after the build time counts as newer, whatever its number (no more 30-minute grace period that hid a nightly built shortly after). The menu icon shows such updates too.
+- Own builds: every later release of the chosen channel counts as newer.
 
 ## [1.33.1] - 2026-11-22
 
 ### Changed
-- Versions are shown as plain X.Y.Z with a fixed channel badge (stable, beta, nightly) – on the update page, in backups, in the menu and in the update card; nightlies show their build time instead of the number suffix.
-- GitHub release titles read "X.Y.Z stable", "X.Y.Z beta" or "X.Y.Z nightly"; the tag keeps its suffix only to stay unique.
+- Versions shown as X.Y.Z with a channel badge; release titles "X.Y.Z stable|beta|nightly".
 
 ## [1.33.0] - 2026-11-22
 
 ### New
-- After the app was updated (e.g. automatic update), a card on top of every page shows "old → new version" with a link to the changes and a large confirm button; it stays until confirmed (per device).
+- Card "App updated" (old → new) on every page until confirmed.
 
 ### Changed
-- Menu and status page show the update icon only when the channel of the running version has a newer release; another chosen channel or an own build shows none.
+- Update icon only when the running channel has a newer release.
 
 ## [1.32.0] - 2026-11-22
 

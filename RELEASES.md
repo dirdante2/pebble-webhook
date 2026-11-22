@@ -7,55 +7,48 @@ A tag `vX.Y.Z-stable` (stable; before 1.33.5 `vX.Y.Z`) or `vX.Y.Z-beta` (beta) n
 ## [1.35.1] - 2026-11-22
 
 ### Releases
-- Every version is built for one channel only – a stable or beta release no longer gets a nightly of the same number. The update page offers stable on beta and all channels on nightly, so every channel still sees the newest version.
+- One build per version and channel; stable and beta no longer get a nightly of the same number.
 
 ## [1.35.0] - 2026-11-22
 
-### Calendar
-- Calendar subscription: Status → Kalender-Abo shows a secret iCal link with all appointments, with instructions for Google Calendar, Apple and Outlook. Done ones are marked ✓, deleted ones disappear; "New link" invalidates the old one.
+### New
+- Calendar subscription: secret iCal link with all appointments (Status → Kalender-Abo).
+- Ring page: counters for misfires and deleted recordings.
 
-### Ring usage
-- Counters for misfires (no speech recognised) and deleted recordings with their share; they stay counted after an entry is removed for good.
-
-### Updates
-- beta also offers stable versions, nightly offers beta and stable – a stable newer than the last beta now shows the update icon and card on beta too and is picked by the automatic update. A version from another channel counts as newer only with a higher number.
-
-### App
-- The app manifest is English by default and includes German; the installed app's name follows the device language where the browser supports it.
+### Changed
+- beta also offers stable, nightly offers beta and stable.
+- App manifest in English and German, picked by device language.
 
 ## [1.34.0] - 2026-11-22
 
 ### Ring usage
-- The Index 01 has a fixed battery (Pebble: 12–15 h of recording). Every recording is counted per ring – seconds, notes vs. plannings, button presses – and stays counted when entries or audio files are deleted. Existing entries and audio files are added on the first start.
-- Ring ID in the form `#12345`, sent by the Pebble app in the required header `X-Ring-ID`; the test event fails without a valid ID. A new ID offers "Apply ring swap" on every page; "Swap ring" with instructions; old rings stay for comparison.
-- Hints at 60, 80, 95 and 100 % of the capacity (default 12 h) until confirmed, plus a push; at 100 % "+30 min" raises the capacity permanently.
-- Ring page with recording time per month, forecast for 80 % and 100 % at constant use (last 30 days) and rings compared; usage bar at the bottom of the menu.
+- Every recording is counted per ring (length, kind, gesture), also after deletion.
+- Ring ID `#12345` via header `X-Ring-ID`; "Apply ring swap" when it changes.
+- Hints and push at 60/80/95/100 % of the capacity (default 12 h); "+30 min" at 100 %.
+- Ring page with recording time per month, forecast and comparison; usage bar in the menu.
 
 ### Updates
-- One version per channel: tags `vX.Y.Z-stable`, `vX.Y.Z-beta`, `vX.Y.Z-nightly`; a release built from the same commit as the running version never counts as newer. The update page shows when each release was published.
-- Own builds show `X.Y.Z.A` (local build counter, never in Git).
-- The "App updated" card shows the changes in a sheet right there.
+- Tags `vX.Y.Z-stable|beta|nightly`; same commit never counts as newer; publication time shown.
+- Own builds show `X.Y.Z.A`.
+- "App updated" card shows the changes right there.
 
 ### Lists
-- A list whose last item was just ticked off stays among the active lists as long as its ticked items; past lists expand like the active ones.
+- A list whose last item was just ticked off stays active for a while.
 
 ## [1.33.9] - 2026-11-22
 
 ### Updates
-- Stable tags name their channel: `v1.33.9-stable` (beta `-beta.N`, nightly `-nightly.…`); older stable tags are still recognised.
-- Update page: a "New version available" card above "Installed" shows the newest version of the chosen channel with changes and install button.
-- The menu update icon follows the chosen channel; newer means published later, whatever the number.
-- Backups have their own menu item below Updates (`/status/backups`).
-- The "App updated" card is confirmed once for all devices.
+- "New version available" card on the update page.
+- Menu update icon follows the chosen channel.
+- Backups have their own menu item.
+- "App updated" card is confirmed once for all devices.
 
 ## [1.33.4] - 2026-11-22
 
 ### Updates
-- Every channel has a moving release `stable`, `beta` or `nightly` with its newest build; the installer takes it with `--channel`. Install command: `curl -fsSL https://raw.githubusercontent.com/dirdante2/pebble-webhook/main/install.sh | sudo bash -s -- --channel stable` – beta or nightly afterwards in the web app.
-- Versions are shown as X.Y.Z with a fixed channel badge (stable, beta, nightly); nightlies show their build time. Release titles read "X.Y.Z stable|beta|nightly".
-- Newer means published later within the channel, whatever the number – also for own builds.
-- The update icon in the menu appears only when the channel of the running version has a newer release.
-- After the app was updated, a card on top of every page shows old → new version with a large confirm button until it is confirmed (per device).
+- Moving releases `stable`, `beta`, `nightly`; installer option `--channel`.
+- Versions shown as X.Y.Z with a channel badge.
+- Card "App updated" (old → new) until confirmed.
 
 ## [1.32.0] - 2026-11-22
 

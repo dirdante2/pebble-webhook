@@ -501,6 +501,46 @@ func releaseNotes(current, channel string) (now string, earlier []noteSection, s
 	return now, earlier, "changelog"
 }
 
+// notesSince: Änderungsabschnitte nach der Version from bis einschließlich current (neueste oben), aus derselben
+// Quelle wie releaseNotes. Verglichen wird nur X.Y.Z – Abschnitte gibt es nur je X.Y.Z.
+func notesSince(from, current, channel string) []noteSection {
+	f, _, okF := parseVersion(from)
+	c, _, okC := parseVersion(current)
+	if !okF || !okC {
+		return nil
+	}
+	base := func(v version) [3]int { return [3]int{v[0], v[1], v[2]} }
+	lessBase := func(a, b [3]int) bool {
+		for i := range a {
+			if a[i] != b[i] {
+				return a[i] < b[i]
+			}
+		}
+		return false
+	}
+	pick := func(text string) []noteSection {
+		var out []noteSection
+		seen := map[[3]int]bool{}
+		for _, sec := range noteSections(text) {
+			v, _, ok := parseVersion(sec.Version)
+			if !ok || seen[base(v)] {
+				continue
+			}
+			if lessBase(base(f), base(v)) && !lessBase(base(c), base(v)) {
+				seen[base(v)] = true
+				out = append(out, sec)
+			}
+		}
+		return out
+	}
+	if channel != "nightly" {
+		if out := pick(pebblewebhook.Releases); len(out) > 0 {
+			return out
+		}
+	}
+	return pick(pebblewebhook.Changelog)
+}
+
 func (a *App) handleUpdate(w http.ResponseWriter, r *http.Request) {
 	current := strings.Fields(a.Version + " ")[0]
 	now, _, source := releaseNotes(current, a.updateChannel())
@@ -515,12 +555,19 @@ func (a *App) handleUpdate(w http.ResponseWriter, r *http.Request) {
 	out := map[string]any{"aktuell": current, "quelle": a.Cfg.UpdateRepo, "kanal": a.updateChannel(), "kanaele": []string{"stable", "beta", "nightly"},
 		"installierbar": updateInstallable(), "status": a.updateStatus(), "versionen": []channelRelease{},
 		"mindestens": "1.14.0", "backups": a.backups(), "backup": a.backupPlan(), "auto": a.autoUpdateOn(), "auto_zeit": a.Cfg.AutoUpdateTime, "auto_letzt": func() string { v, _ := a.DB.Get(autoUpdateKey); return v }(), "aktuell_aenderungen": now, "alle_aenderungen": allNotes}
+	if seit := r.URL.Query().Get("seit"); seit != "" {
+		out["seit_aenderungen"] = notesSince(seit, current, a.updateChannel())
+	}
 	if a.Cfg.UpdateRepo == "" {
 		out["fehler"] = i18n.T("Update-Prüfung ist aus (Einstellung Update-Quelle)")
 		writeJSON(w, 200, out)
 		return
 	}
-	releases, errMsg := a.fetchReleases(r.Context(), r.URL.Query().Get("pruefen") == "1")
+	pruefen := r.URL.Query().Get("pruefen") == "1"
+	if pruefen {
+		a.refreshDonate(r.Context()) // „Jetzt prüfen“ holt auch den Spenden-Link neu
+	}
+	releases, errMsg := a.fetchReleases(r.Context(), pruefen)
 	if errMsg != "" {
 		out["fehler"] = errMsg
 	}

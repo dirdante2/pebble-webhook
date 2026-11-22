@@ -919,6 +919,26 @@ func (s *Store) Counts() (c Counts, err error) {
 	return
 }
 
+// TranscriptWords: Wortzahl je Aufnahme mit Transkript ab since (ohne Fehlaufnahmen, Tests und Gelöschte).
+func (s *Store) TranscriptWords(since int64) ([]int, error) {
+	rows, err := s.DB.Query(`SELECT transcript FROM jobs WHERE deleted_at = 0 AND audio_path != '' AND is_test = 0 AND empty = 0 AND transcript != '' AND received_at >= ?`, since)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []int
+	for rows.Next() {
+		var t string
+		if err := rows.Scan(&t); err != nil {
+			return nil, err
+		}
+		if n := len(strings.Fields(t)); n > 0 {
+			out = append(out, n)
+		}
+	}
+	return out, rows.Err()
+}
+
 // --- Planungen ---
 
 const planCols = `id, title, status, plan, joplin_id, joplin_dirty, joplin_pushed_at, joplin_error, created_at, updated_at, closed_at, closed_by, nr, deleted_at`

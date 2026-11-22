@@ -148,7 +148,7 @@ func securityHeaders(mux http.Handler) http.Handler {
 		h.Set("X-Content-Type-Options", "nosniff")
 		h.Set("Referrer-Policy", "no-referrer")
 		h.Set("X-Frame-Options", "DENY")
-		h.Set("Content-Security-Policy", "default-src 'self'; img-src 'self' data:; media-src 'self' blob:; "+
+		h.Set("Content-Security-Policy", "default-src 'self'; img-src 'self' data:; media-src 'self' blob:; frame-src https://ko-fi.com; "+
 			"object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'")
 		h.Set("Permissions-Policy", "microphone=(self), camera=(), geolocation=()")
 		mux.ServeHTTP(w, r)
@@ -172,7 +172,7 @@ func staticHandler(langFor func(*http.Request) string) http.HandlerFunc {
 	}
 	index, worker, manifest := read("index.html"), read("sw.js"), read("manifest.webmanifest")
 	assets := map[string]*staticFile{}
-	for _, name := range []string{"app.js", "app.css", "theme.js", "icon.svg", "icon-192.png", "icon-512.png"} {
+	for _, name := range []string{"app.js", "app.css", "theme.js", "icon.svg", "icon-192.png", "icon-512.png", "kofi-cup.png"} {
 		assets[name] = newStaticFile(name, read(name))
 	}
 	sum.Write(i18n.Dictionary("en"))

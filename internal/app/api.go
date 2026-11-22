@@ -814,8 +814,16 @@ func (a *App) handleAnswer(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"id": j.ID})
 }
 
+// wordDays: Zeitraum der Wortzahl-Auswertung auf der Statusseite.
+const wordDays = 30
+
 func (a *App) handleStatus(w http.ResponseWriter, r *http.Request) {
 	counts, err := a.DB.Counts()
+	if err != nil {
+		writeErr(w, 500, "speicher", "Datenbankfehler")
+		return
+	}
+	words, err := a.DB.TranscriptWords(store.Now() - wordDays*86_400_000)
 	if err != nil {
 		writeErr(w, 500, "speicher", "Datenbankfehler")
 		return
@@ -872,6 +880,13 @@ func (a *App) handleStatus(w http.ResponseWriter, r *http.Request) {
 	out["probleme"] = list
 	subs, _ := a.DB.PushSubs()
 	out["push_abos"] = len(subs)
+	if len(words) > 0 {
+		lo, hi, sum := words[0], words[0], 0
+		for _, n := range words {
+			lo, hi, sum = min(lo, n), max(hi, n), sum+n
+		}
+		out["woerter"] = map[string]any{"tage": wordDays, "anzahl": len(words), "min": lo, "max": hi, "schnitt": float64(sum) / float64(len(words))}
+	}
 	writeJSON(w, 200, out)
 }
 

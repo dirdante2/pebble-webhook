@@ -66,7 +66,10 @@ function T(teile, ...werte) {
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const zeit = (ms) => new Date(ms).toLocaleString(LOCALE, { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
 // Datum und Uhrzeit ohne Jahr, für die Karten im Verlauf.
-const kurz = (ms) => new Date(ms).toLocaleString(LOCALE, { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+// Kurz: „21.11, 18:53“ – Punkt am Ende des Datums weg, das Komma trennt schon (Nutzer 22.11.2026).
+const kurz = (ms) => `${new Date(ms).toLocaleDateString(LOCALE, { day: '2-digit', month: '2-digit' }).replace(/\.$/, '')}, ${new Date(ms).toLocaleTimeString(LOCALE, { hour: '2-digit', minute: '2-digit' })}`;
+// Verlaufskarte: in den letzten 24 Stunden nur die Uhrzeit, ältere mit Datum.
+const kartenZeit = (ms) => (Date.now() - ms < 86_400_000 ? uhr(ms) : kurz(ms));
 const uhr = (ms) => new Date(ms).toLocaleTimeString(LOCALE, { hour: '2-digit', minute: '2-digit' });
 const tag = (ms) => new Date(ms).toLocaleDateString(LOCALE, { weekday: 'long', day: '2-digit', month: '2-digit', year: 'numeric' });
 const neueId = () => (crypto.randomUUID ? crypto.randomUUID() : Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, '0')).join(''));
@@ -516,18 +519,21 @@ function karte(e) {
   const fehler = e.status === 'fehler' ? T`<div class="leise">${esc(e.fehler || '')}${weg}</div>` : '';
   const schritt = e.status === 'in_arbeit' || e.status === 'wiederholung' ? ` · ${esc(e.schritt || '')}` : '';
   const planung = e.typ === 'planung';
-  const runde = planung && e.runden > 1 ? T` · ${e.runden} Runden` : '';
+  // Planungen mit mehreren Runden: Zähler direkt hinter dem Typ-Badge.
+  const runde = planung && e.runden > 1 ? T` <span class="zaehler runden" title="${esc(tx('{0} Runden', e.runden))}">${e.runden}</span>` : '';
   // „fertig“ ist der Normalfall und wird nicht angezeigt; rechts oben steht stattdessen Datum und Uhrzeit.
   const stand = e.status === 'fertig' ? '' : T`<span class="badge ${esc(e.status)}">${esc(STATUS[e.status] || e.status)}${schritt}</span> `;
   // Kurze Notizen sagt der Titel schon ganz: die Vorschau käme nur doppelt.
   const vorschau = (e.vorschau || '').length >= 100 ? T`<div class="vorschau">${esc(e.vorschau)}</div>` : '';
   const t = e.termin;
-  const termin = t ? T`<div class="terminkarte${t.verpasst ? ' verpasst' : ''}"><span>${t.verpasst ? T('<span class="badge alarm">verpasst</span> ') : ''}${t.bestaetigt ? `${erledigtZeichen} ` : ''}${esc(terminZeit(t))}${t.ort ? ` · ${esc(t.ort)}` : ''}</span></div>` : ''; // Bestätigen per Wischen nach rechts
-  return T`<a class="karte${neu}${t?.verpasst ? ' alarmkarte' : ''}${istErledigt(e) ? ' erledigt' : ''}" href="${planung ? '/planung/' : '/eintrag/'}${e.id}" ${kartenDaten(e)}>
-    <div class="zeile"><span>${nrHtml(e.nr)}${t ? T`<span class="badge termin">${terminArt(e.termin)}</span>` : T`<span class="badge ${esc(e.modus)}">${esc(MODUS[e.modus] || e.modus)}</span>`} ${planung ? planungZeichen(e.planung_status === 'offen') : ''}${e.liste ? T` <span class="badge liste">${esc(listenName(e.liste))}</span>${e.liste.erledigt ? ` ${erledigtZeichen}` : ''}` : ''}</span>
-      <span class="kartenzeit">${stand}<span class="leise">${kurz(e.aufgenommen)}${runde}</span></span></div>
+  // Erledigte Karten: nur Kopfzeile und Titel, ausgegraut. Untertext und Haken entfallen – das Grau sagt es schon.
+  const zu = istErledigt(e);
+  const termin = t && !zu ? T`<div class="terminkarte${t.verpasst ? ' verpasst' : ''}"><span>${t.verpasst ? T('<span class="badge alarm">verpasst</span> ') : ''}${t.bestaetigt ? `${erledigtZeichen} ` : ''}${esc(terminZeit(t))}${t.ort ? ` · ${esc(t.ort)}` : ''}</span></div>` : ''; // Bestätigen per Wischen nach rechts
+  return T`<a class="karte${neu}${t?.verpasst ? ' alarmkarte' : ''}${zu ? ' erledigt' : ''}" href="${planung ? '/planung/' : '/eintrag/'}${e.id}" ${kartenDaten(e)}>
+    <div class="zeile"><span>${nrHtml(e.nr)}${t ? T`<span class="badge termin">${terminArt(e.termin)}</span>` : T`<span class="badge ${esc(e.modus)}">${esc(MODUS[e.modus] || e.modus)}</span>${runde}`} ${planung && !zu ? planungZeichen(e.planung_status === 'offen') : ''}${e.liste ? T` <span class="badge liste">${esc(listenName(e.liste))}</span>${e.liste.erledigt && !zu ? ` ${erledigtZeichen}` : ''}` : ''}</span>
+      <span class="kartenzeit">${stand}<span class="leise">${kartenZeit(e.aufgenommen)}</span></span></div>
     <div class="titel">${esc(e.titel || tx('Ohne Titel'))}</div>
-    ${termin}${vorschau}${e.tags?.length ? T`<div class="tags">${e.tags.map((t) => T`<span class="tagchip">${esc(t)}</span>`).join('')}</div>` : ''}${fehler}
+    ${zu ? '' : termin}${zu ? '' : vorschau}${!zu && e.tags?.length ? T`<div class="tags">${e.tags.map((t) => T`<span class="tagchip">${esc(t)}</span>`).join('')}</div>` : ''}${fehler}
     ${e.fragen ? T`<div class="fragezeile"><span class="badge frage">${fragenText(e.fragen)}</span><span class="btn klein haupt" role="button" data-fragen="${e.id}" data-ftyp="${planung ? 'planung' : 'eintrag'}">Beantworten</span></div>` : ''}</a>`;
 }
 
@@ -2260,7 +2266,20 @@ async function zeigeStatus() {
           ${auffaellig ? T`<span class="zahlkacheln">${auffaellig}</span>` : ''}</summary>
         <div class="eingangsdetail">${summe ? T`<svg class="ringdiagramm" viewBox="-2 -2 40 40" role="img" aria-label="${esc(teile.map(([n, name]) => `${n} ${name}`).join(', '))}">${ring}</svg>` : ''}
           <ul class="legende">${teile.map(([n, name, art]) => T`<li><span class="punkt-farbe ${art}"></span>${esc(name)}<strong>${n}</strong></li>`).join('')}</ul></div>
+        ${woerter(s.woerter)}
         <p class="leise">Planungen: ${t.planungen} (${t.runden} Runden) · ${t.audio} mit Aufnahme · ${t.web} Web-Antworten${t.nur_text ? T` · ${t.nur_text} nur Pebble-Text` : ''}</p></details>`;
+    };
+    // Wörter je Aufnahme (letzte Tage): Balken über die volle Breite von Min bis Max, Strich bei Ø.
+    // Lage als data-pos; setzeWortlage setzt sie per JS (die CSP erlaubt keine style-Attribute).
+    const woerter = (w) => {
+      if (!w) return '';
+      const zahl = (v) => Math.round(v).toLocaleString(LOCALE), span = w.max - w.min;
+      const pos = span ? ((w.schnitt - w.min) / span) * 100 : 50;
+      return T`<div class="wortblock"><div class="zeile"><strong>${esc(tx('Wörter je Aufnahme'))}</strong><span class="leise">${esc(tx('{0} Tage · {1} Transkripte', w.tage, w.anzahl))}</span></div>
+        <div class="wortskala" role="img" aria-label="${esc(tx('Wörter je Aufnahme: Min {0}, Ø {1}, Max {2}', zahl(w.min), zahl(w.schnitt), zahl(w.max)))}">
+          <span class="wortschnitt" data-pos="${pos}">${esc(tx('Ø {0}', zahl(w.schnitt)))}</span>
+          <span class="wortbalken"><i data-pos="${pos}"></i></span>
+          <span class="wortgrenzen"><span>${esc(tx('Min {0}', zahl(w.min)))}</span><span>${esc(tx('Max {0}', zahl(w.max)))}</span></span></div></div>`;
     };
     // Speicher: zugeklappt je Ablage Name, belegt und Balken; aufgeklappt Pfad und frei/gesamt.
     const balken = (p) => T`<meter class="balken${p.knapp ? ' knapp' : ''}" min="0" max="${p.gesamt}" value="${p.gesamt - p.frei}" aria-label="${esc(tx('{0} von {1} belegt', groesse(p.gesamt - p.frei), groesse(p.gesamt)))}"></meter>`;
@@ -2298,7 +2317,9 @@ async function zeigeStatus() {
       <h2>${esc(tx('Kalender-Abo'))}</h2>
       <a class="karte" href="/status/kalender"><strong>${esc(tx('Termine in Google, Apple oder Outlook abonnieren'))}</strong><br><span class="leise">${esc(tx('Link und Anleitung'))}</span></a>
       <div class="leiste"><button class="btn gefahr" data-a="abmelden">Abmelden</button></div>
-      ${spendenLink ? T`<a class="karte spendenkarte" href="${esc(spendenLink)}" target="_blank" rel="noopener">${spendenSymbol}<span><strong>${esc(tx('Gefällt dir die App?'))}</strong><br><span class="leise">${esc(tx('Sie ist kostenlos und quelloffen. Wer mag, unterstützt die Entwicklung mit einer kleinen Spende auf Ko-fi.'))}</span></span></a>` : ''}`;
+      ${spendenLink ? T`<section class="spendenbereich"><p><strong>${esc(tx('Gefällt dir die App?'))}</strong> <span class="leise">${esc(tx('Sie ist kostenlos und quelloffen. Wer mag, unterstützt die Entwicklung mit einer kleinen Spende auf Ko-fi.'))}</span></p>
+        ${spendenKnopf()}</section>` : ''}`;
+    setzeWortlage(seite);
   };
   aktuell.neuLaden = laden;
   seite.onclick = async (ev) => {
@@ -2564,6 +2585,12 @@ function ringBalkenHtml() {
   if (!r || r.fehler) return '';
   return T`<a class="ringbalken ${stufeKlasse(r.prozent)}" href="/status/ring"><span class="ringtext"><span>${esc(tx('Nutzung'))}</span><span>${esc(stunden(r.sekunden))}</span></span><span class="balken"><i data-anteil="${Math.min(100, r.prozent)}"></i></span></a>`;
 }
+// Strich und Beschriftung im Wortbalken an ihre Stelle (Prozent aus data-pos); Beschriftung bleibt im Rahmen.
+const setzeWortlage = (wurzel) => wurzel.querySelectorAll('.wortskala [data-pos]').forEach((el) => {
+  const p = Math.max(0, Math.min(100, Number(el.dataset.pos)));
+  el.style.left = `${p}%`;
+  if (el.tagName !== 'I') el.style.transform = `translateX(-${p}%)`; // am Rand bündig statt überstehend
+});
 const setzeBalken = (wurzel) => wurzel.querySelectorAll('.balken i[data-anteil]').forEach((el) => { el.style.width = `${Math.max(0, Math.min(100, Number(el.dataset.anteil)))}%`; });
 
 async function zeigeRing() {
@@ -3513,7 +3540,7 @@ function maleMenue() {
   nav.innerHTML = T`<div class="menuekopf"><span class="marke">Sprachnotizen</span><button type="button" class="btn klein rund" data-menue-zu aria-label="Menü schließen">×</button></div>
     ${teile.map((t) => T`<div class="menuegruppe">${link('menuehaupt', { ...t, an: bereich === t.id })}${t.unter.map((u) => link('menueunter', u)).join('')}</div>`).join('')}
     <div class="menuegruppe"><button type="button" class="menueunter abmelden" data-menue-abmelden><span>Abmelden</span></button></div>
-    <div class="menuefuss">${ringBalkenHtml()}${spendenLink ? T`<a class="spendenlink" href="${esc(spendenLink)}" target="_blank" rel="noopener">${spendenSymbol}<span>${esc(tx('Entwicklung unterstützen'))}</span></a>` : ''}<div class="menuefusszeile">${appVersion ? T`<a href="/status/update">Version ${esc(versionNr(appVersion))}${appKanal ? ` · ${esc(tx(appKanal))}` : ''}</a>` : '<span></span>'}<a class="themeknopf" href="/status/darstellung" title="Theme" aria-label="Theme"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 3a9 9 0 0 0 0 18z" fill="currentColor"/></svg></a></div></div>`;
+    <div class="menuefuss">${ringBalkenHtml()}${spendenLink ? spendenKnopf() : ''}<div class="menuefusszeile">${appVersion ? T`<a href="/status/update">Version ${esc(versionNr(appVersion))}${appKanal ? ` · ${esc(tx(appKanal))}` : ''}</a>` : '<span></span>'}<a class="themeknopf" href="/status/darstellung" title="Theme" aria-label="Theme"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 3a9 9 0 0 0 0 18z" fill="currentColor"/></svg></a></div></div>`;
   setzeBalken(nav);
   const punkt = menueKnopf.querySelector('.punkt');
   punkt.hidden = !neueVersion && !offeneVorschlaege && !audioFehler;
@@ -3548,7 +3575,9 @@ const vorschlagZahl = () => (offeneVorschlaege ? ` (${offeneVorschlaege})` : '')
 let neueVersion = '', papierkorbZahl = 0, audioFehler = 0, appVersion = lokal('app-version'), appKanal = lokal('app-kanal');
 // Spenden-Link (Ko-fi) aus FUNDING.yml der Update-Quelle; leer = kein Knopf. Nur unaufdringlich: Menüfuß und ganz unten auf Status.
 let spendenLink = lokal('spenden-link', '');
-const spendenSymbol = '<svg class="herz" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20.5s-7.5-4.6-7.5-10.1A4.3 4.3 0 0 1 12 7.6a4.3 4.3 0 0 1 7.5 2.8c0 5.5-7.5 10.1-7.5 10.1z" fill="currentColor"/></svg>';
+// Knopf im Stil des Ko-fi-Widgets, ohne dessen Skript (fremder Code liefe sonst mit den Rechten der App).
+// Tippen öffnet das Ko-fi-Widget (iframe) in einem Fenster; der Link selbst bleibt als Ausweg (neuer Tab).
+const spendenKnopf = () => T`<a class="kofiknopf" href="${esc(spendenLink)}" target="_blank" rel="noopener" data-kofi><img src="/kofi-cup.png" alt="" width="24" height="19">${esc(tx('Unterstütze mich'))}</a>`;
 const updateSymbol = T('<svg class="updatesymbol" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="11" fill="currentColor"/><path d="M12 17V7m-4.5 4.5L12 7l4.5 4.5" fill="none" stroke="var(--flaeche)" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>');
 // Versionsnummer ohne Kanal-Endung: der Kanal steht als Badge daneben, Builds unterscheidet das Datum.
 const versionNr = (v) => String(v || '').replace(/-(stable|beta|nightly)(\.\d+)?$/, '');
@@ -3566,13 +3595,39 @@ const versionHtml = (v, kanal) => {
   return T`${k ? T`<span class="badge neutral">${esc(tx(k))}</span> ` : ''}<span class="versionnr">${esc(versionNr(v))}</span>${z ? T` <span class="leise">${esc(z)}</span>` : ''}`;
 };
 // Änderungen einer Version als Blatt (Update-Seite, Karte „App aktualisiert“).
-function zeigeAenderungen(titel, text, alleUrl) {
+function zeigeKofi() {
+  document.querySelector('dialog.kofiblatt')?.remove();
+  const d = document.createElement('dialog');
+  d.className = 'mehrblatt kofiblatt';
+  d.tabIndex = -1;
+  d.innerHTML = T`<div class="griff" aria-hidden="true"></div>
+    <iframe class="kofiframe" src="${esc(spendenLink)}/?hidefeed=true&amp;widget=true&amp;embed=true&amp;preview=true" height="712" title="Ko-fi"></iframe>
+    <div class="leiste"><a class="btn" href="${esc(spendenLink)}" target="_blank" rel="noopener">${esc(tx('In neuem Tab öffnen'))}</a><button class="btn" data-zu="1">${esc(tx('Schließen'))}</button></div>`;
+  d.onclick = (ev) => { if (ev.target === d || ev.target.closest('[data-zu]')) d.close(); };
+  d.onclose = () => d.remove();
+  document.body.append(d);
+  d.showModal();
+  d.focus();
+}
+document.addEventListener('click', (ev) => {
+  const a = ev.target.closest('a[data-kofi]');
+  if (!a || !spendenLink || ev.ctrlKey || ev.metaKey || ev.shiftKey) return;
+  ev.preventDefault();
+  if (menue.open && menue.matches(':modal')) menue.close();
+  zeigeKofi();
+});
+
+// abschnitte (optional): mehrere Versionen [{version, datum, text}], neueste oben – statt text.
+function zeigeAenderungen(titel, text, alleUrl, abschnitte) {
   document.querySelector('dialog.logblatt')?.remove();
   const d = document.createElement('dialog');
   d.className = 'mehrblatt logblatt';
   d.tabIndex = -1;
+  const inhalt = abschnitte?.length
+    ? abschnitte.map((a) => T`<h3 class="versionskopf">${esc(a.version)}${a.datum ? T` <span class="leise">${esc(a.datum)}</span>` : ''}</h3>${aenderungenHtml(a.text)}`).join('')
+    : text ? aenderungenHtml(text) : T('<p class="leise">Keine Änderungsliste zu dieser Version.</p>');
   d.innerHTML = T`<div class="griff" aria-hidden="true"></div><h2>${esc(titel)}</h2>
-    ${text ? aenderungenHtml(text) : T('<p class="leise">Keine Änderungsliste zu dieser Version.</p>')}
+    ${inhalt}
     ${alleUrl ? T`<p><a href="${esc(alleUrl)}" target="_blank" rel="noopener">Alle Änderungen auf GitHub</a></p>` : ''}
     <div class="leiste"><button class="btn" data-zu="1">Schließen</button></div>`;
   d.onclick = (ev) => { if (ev.target === d || ev.target.closest('[data-zu]')) d.close(); };
@@ -3580,6 +3635,7 @@ function zeigeAenderungen(titel, text, alleUrl) {
   document.body.append(d);
   d.showModal();
   d.focus();
+  d.scrollTop = 0; // showModal fokussiert sonst den Link ganz unten und scrollt dorthin
 }
 
 // Neue Version seit der letzten Bestätigung (z. B. automatisches Update): Karte über jeder Seite, bis sie bestätigt ist.
@@ -3597,8 +3653,9 @@ function zeigeVersionskarte() {
   karte.querySelector('[data-version-log]').onclick = async (ev) => {
     ev.currentTarget.disabled = true;
     try {
-      const u = await api('/api/update');
-      zeigeAenderungen(`${versionNr(appVersion)}${appKanal ? ` · ${tx(appKanal)}` : ''}`, u.aktuell_aenderungen, u.alle_aenderungen);
+      // Alle Änderungen seit der zuletzt bestätigten Version, auch über übersprungene Zwischenstände hinweg.
+      const u = await api(`/api/update?seit=${encodeURIComponent(altV)}`);
+      zeigeAenderungen(`${versionNr(altV)} → ${versionNr(appVersion)}`, u.aktuell_aenderungen, u.alle_aenderungen, u.seit_aenderungen);
     } catch (f) { melde(f.message); }
     ev.currentTarget.disabled = false;
   };

@@ -250,7 +250,7 @@ a.badge { text-decoration: none; }
 /* Fragen der KI */
 .badge.frage { color: var(--planung); }
 .fragezeile { display: flex; align-items: center; justify-content: space-between; gap: .5rem; margin-top: .55rem; padding-top: .55rem; border-top: 1px solid var(--linie); }
-.zaehler { display: inline-block; min-width: 1.35rem; padding: 0 .35rem; border-radius: 999px; background: var(--planung); color: #fff; font-size: .78rem; line-height: 1.35rem; font-variant-numeric: tabular-nums; }
+.zaehler { display: inline-block; text-align: center; min-width: 1.35rem; padding: 0 .35rem; border-radius: 999px; background: var(--planung); color: #fff; font-size: .78rem; line-height: 1.35rem; font-variant-numeric: tabular-nums; }
 .btn-group .btn.aktiv .zaehler { background: var(--akzent-text); color: var(--akzent); }
 .btn-group.unter .btn { padding-left: .3rem; padding-right: .3rem; white-space: nowrap; }
 .btn.rund { border-radius: 999px; min-width: 2.2rem; padding: .25rem .5rem; }
@@ -327,7 +327,10 @@ details.einklapp > summary { color: var(--leise); font-size: .9rem; cursor: poin
 details.technik { border-top: 1px solid var(--linie); margin-top: 1.1rem; padding-top: .3rem; }
 .block.quelle { border: 1px solid var(--linie); border-radius: var(--radius); background: var(--flaeche); padding: 0 .9rem .7rem; margin-top: 1.3rem; }
 .beschreibung { white-space: pre-wrap; overflow-wrap: anywhere; margin-bottom: .5rem; }
-.kartenzeit { font-size: .82rem; white-space: nowrap; }
+.kartenzeit { font-size: .82rem; white-space: nowrap; flex: none; }
+/* Verlaufskarte: Zeit bleibt rechts oben, umbrechen dürfen nur die Badges links. */
+a.karte > .zeile:first-child { flex-wrap: nowrap; align-items: flex-start; }
+a.karte > .zeile:first-child > span:first-child { min-width: 0; }
 #tagfilter .btn.aktiv { border-color: var(--akzent); color: var(--akzent); }
 /* Verlauf: Tags und Auswählen als gleiche Knöpfe in einer Zeile */
 
@@ -401,8 +404,8 @@ button.terminzeile { border: 0; border-left: 4px solid var(--schlecht); color: v
 .wisch-box svg { width: 1.6rem; height: 1.6rem; flex-shrink: 0; transition: transform .15s ease; }
 .wisch-box.bereit svg { transform: scale(1.3); }
 .wisch.weg { overflow: hidden; }
-.karte.erledigt { opacity: .55; }
-.karte.erledigt .titel { text-decoration: line-through; }
+.karte.erledigt { opacity: .55; padding-top: .45rem; padding-bottom: .45rem; }
+.karte.erledigt .titel { font-weight: 400; }
 .toast { display: flex; align-items: center; gap: .8rem; width: max-content; }
 .toast[hidden] { display: none; }
 .toast span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
@@ -658,6 +661,13 @@ dialog.logblatt h2 { margin-top: 0; }
 .legende { list-style: none; margin: 0; padding: 0; flex: 1; min-width: 0; display: flex; flex-direction: column; gap: .35rem; }
 .legende li { display: flex; align-items: center; gap: .5rem; }
 .legende strong { margin-left: auto; }
+.wortblock { margin: .8rem 0 .4rem; padding-top: .6rem; border-top: 1px solid var(--linie); }
+.wortskala { position: relative; margin-top: .3rem; }
+.wortblock > * { max-width: 32rem; margin-left: auto; margin-right: auto; }
+.wortschnitt { position: relative; display: inline-block; font-size: .85rem; font-weight: 600; white-space: nowrap; }
+.wortbalken { position: relative; display: block; height: .75rem; margin: .2rem 0 .3rem; border-radius: .4rem; background: color-mix(in srgb, var(--diktat) 45%, transparent); }
+.wortbalken i { position: absolute; top: -.25rem; width: 4px; height: 1.25rem; margin-left: -2px; border-radius: 2px; background: var(--diktat); }
+.wortgrenzen { display: flex; justify-content: space-between; font-size: .8rem; color: var(--leise); }
 .punkt-farbe { width: .7rem; height: .7rem; border-radius: 50%; flex: none; }
 .pfadzeile { display: flex; justify-content: space-between; align-items: baseline; gap: .75rem; font-size: .85rem; }
 .pfadzeile .pfad { overflow-wrap: anywhere; min-width: 0; }
@@ -677,8 +687,11 @@ dialog.logblatt h2 { margin-top: 0; }
 .btn.symbol svg { width: 1.15rem; height: 1.15rem; }
 .versionzeile1 { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
 code.kopierbar { display: block; margin: .15rem 0 .4rem; overflow-wrap: anywhere; user-select: all; }
-/* Spenden: unaufdringlich, nur Menüfuß und ganz unten auf Status */
-.spendenlink { display: flex; align-items: center; gap: .4rem; }
-.spendenlink .herz, .spendenkarte .herz { width: 1rem; height: 1rem; flex: none; color: var(--leise); }
-.spendenkarte { display: flex; align-items: flex-start; gap: .6rem; margin-top: 2rem; color: inherit; text-decoration: none; }
-.spendenkarte .herz { margin-top: .15rem; }
+/* Spenden: unaufdringlich, nur Menüfuß und ganz unten auf Status; Knopf im Stil des Ko-fi-Widgets */
+.kofiknopf { display: inline-flex; align-items: center; justify-content: center; gap: .5rem; padding: .45rem 1rem; border-radius: 999px;
+  background: #323842; color: #fff !important; font-weight: 600; font-size: .9rem; text-decoration: none; justify-self: start; }
+.kofiknopf img { width: 1.4rem; height: auto; flex: none; background: #fff; border-radius: 50%; padding: .15rem; box-sizing: content-box; }
+.spendenbereich { margin-top: 2rem; }
+.kofiframe { display: block; width: 100%; max-height: 70vh; border: none; border-radius: var(--radius); padding: 4px; background: #f9f9f9; box-sizing: border-box; }
+.logblatt .versionskopf { margin: 1.2rem 0 .2rem; padding-top: .6rem; border-top: 1px solid var(--linie); font-size: 1.05rem; }
+.logblatt .versionskopf:first-of-type { border-top: 0; padding-top: 0; margin-top: .4rem; }
