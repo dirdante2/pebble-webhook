@@ -7,6 +7,11 @@ Version numbers X.Y.Z:
 - **Y** – a new feature (e.g. appointments, multiple languages, theme choice with day/night mode).
 - **Z** – all other UI changes and small bug fixes; safe to install or roll back at any time.
 
+## [1.33.7] - 2026-11-22
+
+### Fixed
+- Menu update icon follows the chosen channel again (not the channel of the running version): with stable chosen it shows a newer stable even when a nightly is installed.
+
 ## [1.33.6] - 2026-11-22
 
 ### New

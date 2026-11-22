@@ -196,13 +196,9 @@ func (a *App) installedChannel() string {
 	return "lokal"
 }
 
-// AvailableUpdate: empfohlene Version des Kanals aus der letzten Prüfung, ohne GitHub zu fragen ("" = keine).
-// Nur im Kanal der laufenden Version (ein eigener Build gehört zum gewählten Kanal); ein anderer gewählter
-// Kanal meldet kein Update. Neuer heißt später veröffentlicht, nicht höhere Nummer.
+// AvailableUpdate: neueste Version des gewählten Kanals aus der letzten Prüfung, sofern sie später als die
+// laufende veröffentlicht wurde (Nummer egal); ohne GitHub zu fragen ("" = keine).
 func (a *App) AvailableUpdate() string {
-	if ch := a.installedChannel(); ch != "lokal" && ch != a.updateChannel() {
-		return ""
-	}
 	a.updates.mu.Lock()
 	releases := a.updates.releases
 	a.updates.mu.Unlock()
