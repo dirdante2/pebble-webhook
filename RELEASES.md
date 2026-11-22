@@ -4,6 +4,15 @@ Summarised notes for **beta** and **stable** releases. Each section lists only w
 
 A tag `vX.Y.Z` (stable) or `vX.Y.Z-beta.N` (beta) needs a section `## [X.Y.Z]` or `## [X.Y.Z-beta.N]` here; the release workflow uses it as the release notes.
 
+## [1.33.4] - 2026-11-22
+
+### Updates
+- Every channel has a moving release `stable`, `beta` or `nightly` with its newest build; the installer takes it with `--channel`. Install command: `curl -fsSL https://raw.githubusercontent.com/dirdante2/pebble-webhook/main/install.sh | sudo bash -s -- --channel stable` – beta or nightly afterwards in the web app.
+- Versions are shown as X.Y.Z with a fixed channel badge (stable, beta, nightly); nightlies show their build time. Release titles read "X.Y.Z stable|beta|nightly".
+- Newer means published later within the channel, whatever the number – also for own builds.
+- The update icon in the menu appears only when the channel of the running version has a newer release.
+- After the app was updated, a card on top of every page shows old → new version with a large confirm button until it is confirmed (per device).
+
 ## [1.32.0] - 2026-11-22
 
 ### Offline and traffic
