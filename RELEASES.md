@@ -4,10 +4,14 @@ Summarised notes for **beta** and **stable** releases. Each section lists only w
 
 A tag `vX.Y.Z-stable` (stable; before 1.33.5 `vX.Y.Z`) or `vX.Y.Z-beta.N` (beta) needs a section `## [X.Y.Z]` or `## [X.Y.Z-beta.N]` here; the release workflow uses it as the release notes.
 
-## [1.33.5] - 2026-11-22
+## [1.33.9] - 2026-11-22
 
 ### Updates
-- Stable tags now name their channel: `v1.33.5-stable` instead of `v1.33.5`; beta and nightly tags already did. Older stable tags are still recognised by the app and the installer.
+- Stable tags name their channel: `v1.33.9-stable` (beta `-beta.N`, nightly `-nightly.…`); older stable tags are still recognised.
+- Update page: a "New version available" card above "Installed" shows the newest version of the chosen channel with changes and install button.
+- The menu update icon follows the chosen channel; newer means published later, whatever the number.
+- Backups have their own menu item below Updates (`/status/backups`).
+- The "App updated" card is confirmed once for all devices.
 
 ## [1.33.4] - 2026-11-22
 
