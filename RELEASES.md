@@ -4,6 +4,60 @@ Summarised notes for **beta** and **stable** releases. Each section lists only w
 
 A tag `vX.Y.Z` (stable) or `vX.Y.Z-beta.N` (beta) needs a section `## [X.Y.Z]` or `## [X.Y.Z-beta.N]` here; the release workflow uses it as the release notes.
 
+## [1.32.0] - 2026-11-22
+
+### Offline and traffic
+- The app shell (script, styles, icons) is cached per version and starts without the network; a new version loads once in the background and takes over on the next page change.
+- All views show the stored state at once and then refresh; the app opens without waiting for the server.
+- Unchanged data costs only a "304" without body (ETag); everything else is gzip-compressed. Recordings load only when played.
+
+### Backups
+- Every backup is one archive in `BACKUP_DIR` (default `/srv/pebble-backup`) with database, settings, start values, version and channel – optionally the recordings.
+- Scheduled full backup: daily, weekly or monthly at a chosen time with retention in days (default daily 03:00, 30 days, without recordings).
+- Restoring brings back data and settings and installs the version the backup was made with. Backups can be downloaded.
+- Backups list with channel, version, date, reason and size; number and total space on top. Leftovers and old releases are cleaned up automatically.
+
+### Updates
+- Update page rebuilt: installed version with channel on top, channels as button group, last versions per channel, change lists on demand.
+- Automatic update once a day at a chosen time (default 04:00), with a backup first.
+- After installing, the service must answer within 30 s; otherwise program and database go back to the previous state. A damaged database stops the start.
+- Downloaded releases stay on the server for switching back without a new download.
+
+### Recordings
+- Recordings are kept until their entry is deleted for good from the trash; empty recordings are deleted after 1 hour, failed entries never automatically.
+- Stored by kind (`diktat/`, `planung/`); recordings without entry (e.g. after a restore) are listed on the status page with a red badge and can be imported again – notes first, then plannings in one round without questions.
+
+### Status page
+- Entries card (recordings with average size and length, in progress, failed) that opens to a ring chart of notes, appointments and plannings.
+- Storage card for data, recordings and backups with size, bar, path and free/total.
+
+## [1.32.0-beta.1] - 2026-11-22
+
+### Offline and traffic
+- The app shell (script, styles, icons) is cached per version and starts without the network; a new version loads once in the background and takes over on the next page change.
+- All views show the stored state at once and then refresh; the app opens without waiting for the server.
+- Unchanged data costs only a "304" without body (ETag); everything else is gzip-compressed. Recordings load only when played.
+
+### Backups
+- Every backup is one archive in `BACKUP_DIR` (default `/srv/pebble-backup`) with database, settings, start values, version and channel – optionally the recordings.
+- Scheduled full backup: daily, weekly or monthly at a chosen time with retention in days (default daily 03:00, 30 days, without recordings).
+- Restoring brings back data and settings and installs the version the backup was made with. Backups can be downloaded.
+- Backups list with channel, version, date, reason and size; number and total space on top. Leftovers and old releases are cleaned up automatically.
+
+### Updates
+- Update page rebuilt: installed version with channel on top, channels as button group, last versions per channel, change lists on demand.
+- Automatic update once a day at a chosen time (default 04:00), with a backup first.
+- After installing, the service must answer within 30 s; otherwise program and database go back to the previous state. A damaged database stops the start.
+- Downloaded releases stay on the server for switching back without a new download.
+
+### Recordings
+- Recordings are kept until their entry is deleted for good from the trash; empty recordings are deleted after 1 hour, failed entries never automatically.
+- Stored by kind (`diktat/`, `planung/`); recordings without entry (e.g. after a restore) are listed on the status page with a red badge and can be imported again – notes first, then plannings in one round without questions.
+
+### Status page
+- Entries card (recordings with average size and length, in progress, failed) that opens to a ring chart of notes, appointments and plannings.
+- Storage card for data, recordings and backups with size, bar, path and free/total.
+
 ## [1.27.4-beta.1] - 2026-11-22
 
 First public beta.
