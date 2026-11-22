@@ -2238,7 +2238,7 @@ async function zeigeStatus() {
     };
     // Speicher: zugeklappt je Ablage Name, belegt und Balken; aufgeklappt Pfad und frei/gesamt.
     const balken = (p) => T`<meter class="balken${p.knapp ? ' knapp' : ''}" min="0" max="${p.gesamt}" value="${p.gesamt - p.frei}" aria-label="${esc(tx('{0} von {1} belegt', groesse(p.gesamt - p.frei), groesse(p.gesamt)))}"></meter>`;
-    const speicher = (liste) => T`<details class="karte speicherkarte"><summary>${liste.map((p) => T`<span class="speicherzeile"><span class="zeile"><strong>${esc(tx(p.name))}</strong>${p.fehler ? T`<span class="schlecht">nicht lesbar</span>` : T`<span>${groesse(p.belegt)}</span>`}</span>
+    const speicher = (liste) => T`<details class="karte speicherkarte"><summary><span class="zeile kartentitel"><strong>Speicher</strong><span class="eingangszahl">${groesse(liste.reduce((n, p) => n + (p.belegt || 0), 0))}</span></span>${liste.map((p) => T`<span class="speicherzeile"><span class="zeile"><span>${esc(tx(p.name))}</span>${p.fehler ? T`<span class="schlecht">nicht lesbar</span>` : T`<span>${groesse(p.belegt)}</span>`}</span>
         ${p.fehler ? '' : balken(p)}${p.knapp ? T('<span class="hinweis schlecht">Knapp – neue Aufnahmen werden abgewiesen.</span>') : ''}</span>`).join('')}</summary>
       <div class="speicherdetails">${liste.map((p) => T`<div><strong>${esc(tx(p.name))}</strong>
         <div class="pfadzeile leise"><span class="pfad">${esc(p.pfad)}</span>${p.fehler ? '' : T`<span class="frei">frei ${groesse(p.frei)} von ${groesse(p.gesamt)}</span>`}</div>

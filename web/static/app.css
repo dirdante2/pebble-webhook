@@ -600,8 +600,9 @@ dialog.logblatt h2 { margin-top: 0; }
 .speicherkarte summary::-webkit-details-marker { display: none; }
 .speicherzeile { display: block; }
 .speicherzeile .balken { margin-bottom: 0; }
-.speicherkarte summary .speicherzeile:first-child .zeile strong::after { content: " ▸"; color: var(--leise); font-weight: 400; }
-.speicherkarte[open] summary .speicherzeile:first-child .zeile strong::after { content: " ▾"; }
+.speicherkarte .kartentitel strong::after { content: " ▸"; color: var(--leise); font-weight: 400; }
+.speicherkarte[open] .kartentitel strong::after { content: " ▾"; }
+.speicherkarte .eingangszahl { font-size: 1.5rem; font-weight: 700; line-height: 1; }
 .speicherdetails { display: flex; flex-direction: column; gap: .6rem; margin-top: .8rem; padding-top: .6rem; border-top: 1px solid var(--linie); }
 .speicherdetails .pfadzeile { margin-top: .1rem; }
 .eingangskarte summary { list-style: none; cursor: pointer; color: var(--text); display: flex; flex-direction: column; gap: .15rem; }

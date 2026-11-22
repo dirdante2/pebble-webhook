@@ -7,6 +7,11 @@ Version numbers X.Y.Z:
 - **Y** – a new feature (e.g. appointments, multiple languages, theme choice with day/night mode).
 - **Z** – all other UI changes and small bug fixes; safe to install or roll back at any time.
 
+## [1.31.12] - 2026-11-22
+
+### Changed
+- Status page: the storage card has a title "Storage" with the total size used, like the entries card.
+
 ## [1.31.11] - 2026-11-22
 
 ### Changed
