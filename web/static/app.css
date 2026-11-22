@@ -595,6 +595,13 @@ dialog.logblatt h2 { margin-top: 0; }
 .btn.aktiv .kanalneu .updatesymbol { color: var(--akzent-text); }
 .backupzeile { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: .75rem; }
 .backupinfo { display: flex; flex-direction: column; gap: .15rem; min-width: 0; }
+.eingangskarte .eingangszahl { font-size: 1.5rem; font-weight: 700; line-height: 1; }
+.zahlkacheln { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .4rem; margin-top: .6rem; }
+.zahlkachel { display: flex; align-items: baseline; gap: .5rem; padding: .45rem .65rem; border-radius: .5rem; background: var(--bg); border: 1px solid var(--linie); min-width: 0; }
+.zahlkachel strong { font-size: 1.15rem; line-height: 1.2; min-width: 1.6rem; }
+.zahlkachel span { font-size: .8rem; color: var(--leise); }
+.zahlkachel.warn strong { color: var(--warn); }
+.zahlkachel.schlecht strong { color: var(--schlecht); }
 .pfadzeile { display: flex; justify-content: space-between; align-items: baseline; gap: .75rem; font-size: .85rem; }
 .pfadzeile .pfad { overflow-wrap: anywhere; min-width: 0; }
 .pfadzeile .frei { white-space: nowrap; text-align: right; }

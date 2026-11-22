@@ -2215,10 +2215,17 @@ async function zeigeStatus() {
     if (aktuell?.name !== 'status') return;
     const abo = await pushAbo().catch(() => null);
     const pushDa = 'PushManager' in window;
+    const eingaenge = (s) => {
+      const t = s.auftraege_teile || {}, d = s.audio_dateien || {};
+      const kachel = (n, name, art = '') => T`<div class="zahlkachel${art}"><strong>${n}</strong><span>${esc(name)}</span></div>`;
+      return T`<div class="karte eingangskarte"><div class="zeile"><strong>Eingänge</strong><span class="eingangszahl">${s.auftraege}</span></div>
+        ${d.anzahl ? T`<div class="leise">${d.anzahl} Aufnahmen${d.schnitt_groesse ? T` · Ø ${groesse(d.schnitt_groesse)}` : ''}${d.schnitt_sekunden ? T` · Ø ${dauer(d.schnitt_sekunden)} · zusammen ${dauer(d.gesamt_sekunden)}` : ''}</div>` : ''}
+        <div class="zahlkacheln">${kachel(t.notizen ?? 0, tx('Notizen'))}${kachel(t.runden ?? 0, tx('Planungsrunden'))}${kachel(t.web ?? 0, tx('Web-Antworten'))}${kachel(t.nur_text ?? 0, tx('nur Pebble-Text'))}
+          ${kachel(s.warteschlange, tx('in Arbeit'), s.warteschlange ? ' warn' : '')}${kachel(s.fehlgeschlagen, tx('fehlgeschlagen'), s.fehlgeschlagen ? ' schlecht' : '')}</div></div>`;
+    };
     const speicher = (p) => T`<div class="karte speicherkarte"><div class="zeile"><strong>${esc(tx(p.name))}</strong>${p.fehler ? '' : T`<span>${groesse(p.belegt)}</span>`}</div>
       <div class="pfadzeile leise"><span class="pfad">${esc(p.pfad)}</span>${p.fehler ? '' : T`<span class="frei">frei ${groesse(p.frei)} von ${groesse(p.gesamt)}</span>`}</div>
       ${p.fehler ? T`<div class="hinweis schlecht">nicht lesbar: ${esc(p.fehler)}</div>` : T`<meter class="balken${p.knapp ? ' knapp' : ''}" min="0" max="${p.gesamt}" value="${p.gesamt - p.frei}" aria-label="${esc(tx('{0} von {1} belegt', groesse(p.gesamt - p.frei), groesse(p.gesamt)))}"></meter>
-        ${p.dateien ? T`<div class="leise">${p.dateien.anzahl} Dateien${p.dateien.schnitt_groesse ? T` · Ø ${groesse(p.dateien.schnitt_groesse)}` : ''}${p.dateien.schnitt_sekunden ? T` · Ø ${dauer(p.dateien.schnitt_sekunden)} · zusammen ${dauer(p.dateien.gesamt_sekunden)}` : ''}</div>` : ''}
         ${p.knapp ? T('<div class="hinweis schlecht">Knapp – neue Aufnahmen werden abgewiesen.</div>') : ''}`}</div>`;
     const joplin = !s.joplin.aktiv ? tx('ausgeschaltet') : s.joplin.fehler ? T`<strong>Fehler:</strong> ${esc(s.joplin.fehler)}` : T`erreichbar${s.joplin.offene_planungen ? T`, ${s.joplin.offene_planungen} Planung(en) noch nicht übertragen` : ''}`;
     const updateKarte = neueVersion ? T`<a class="karte updatekarte" href="/status/update">${updateSymbol}<span><strong>Update ${esc(neueVersion)} verfügbar</strong><br><span class="leise">Änderungen ansehen und installieren</span></span></a>` : '';
@@ -2231,11 +2238,7 @@ async function zeigeStatus() {
         ${s.audio_unbekannt.length > 1 ? T('<div class="leiste"><button class="btn haupt" data-import-alle="1">Alle importieren</button></div>') : ''}` : ''}
       ${s.joplin.aktiv ? T`<dl><dt>Joplin</dt><dd>${joplin}</dd></dl>` : ''}
       ${s.joplin.aktiv ? T('<div class="leiste"><button class="btn klein" data-a="pruefen">Joplin jetzt prüfen</button></div>') : ''}
-      <h2>Einträge</h2>
-      <div class="karte speicherkarte"><div class="zeile"><strong>Eingänge</strong><span>${s.auftraege}</span></div>
-        ${s.auftraege_teile ? T`<div class="leise">${s.auftraege_teile.notizen} Notizen · ${s.auftraege_teile.runden} Planungsrunden</div>
-        <div class="leise">${s.auftraege_teile.audio} mit Aufnahme · ${s.auftraege_teile.web} Text-Antworten aus der Web-App${s.auftraege_teile.nur_text ? T` · ${s.auftraege_teile.nur_text} nur Text der Pebble-App` : ''}</div>` : ''}
-        <div class="leise">${s.warteschlange} in Arbeit · ${s.fehlgeschlagen} fehlgeschlagen</div></div>
+      ${eingaenge(s)}
       <h2>Speicher</h2>
       ${(s.speicher || []).map(speicher).join('')}
       ${s.probleme.length ? T`<h2>Aufträge mit Fehlern</h2>${s.fehlgeschlagen ? T('<div class="leiste"><button class="btn gefahr" data-a="fehler-weg">Alle fehlerhaften löschen</button></div>') : ''}${s.probleme.map(karte).join('')}` : ''}

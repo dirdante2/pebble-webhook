@@ -890,7 +890,7 @@ func (s *Store) DeleteJob(id string) error {
 }
 
 type Counts struct {
-	Total, Open, Failed int
+	Total, Open, Failed  int
 	Audio, Web, TextOnly int // mit Aufnahme; Text-Antworten aus der Web-App; nur Text der Pebble-App
 	Notes, Rounds        int // Notizen; Planungsrunden
 }

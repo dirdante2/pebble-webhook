@@ -7,6 +7,11 @@ Version numbers X.Y.Z:
 - **Y** – a new feature (e.g. appointments, multiple languages, theme choice with day/night mode).
 - **Z** – all other UI changes and small bug fixes; safe to install or roll back at any time.
 
+## [1.31.9] - 2026-11-22
+
+### Changed
+- Status page: the entries card shows the recordings (number, average size and length, total length) at the top and the counts as small tiles; in progress and failed are coloured when not zero.
+
 ## [1.31.8] - 2026-11-22
 
 ### Changed
