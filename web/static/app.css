@@ -160,6 +160,9 @@ table.werte th:first-child, table.werte td:first-child { text-align: left; }
 .zustand svg { width: 1.05rem; height: 1.05rem; flex: none; }
 .zustand.offen { color: var(--warn); } .zustand.zu { color: var(--gut); }
 .versionzeile.aktuell { border-color: var(--gut); border-width: 2px; }
+.versionzeile.neuekarte { border-color: var(--warn); border-width: 2px; }
+.neuekarte .versionkopf { flex-direction: column; gap: 0; }
+.neuekarte .updatesymbol { width: 1rem; height: 1rem; vertical-align: -.15rem; color: var(--warn); }
 
 /* Tags */
 .tags { display: flex; flex-wrap: wrap; gap: .35rem; margin: .45rem 0 0; align-items: center; }
