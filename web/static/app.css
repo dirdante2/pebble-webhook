@@ -595,7 +595,9 @@ dialog.logblatt h2 { margin-top: 0; }
 .btn.aktiv .kanalneu .updatesymbol { color: var(--akzent-text); }
 .backupzeile { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: .75rem; }
 .backupinfo { display: flex; flex-direction: column; gap: .15rem; min-width: 0; }
-.speicherkarte .pfad { overflow-wrap: anywhere; font-size: .85rem; }
+.pfadzeile { display: flex; justify-content: space-between; align-items: baseline; gap: .75rem; font-size: .85rem; }
+.pfadzeile .pfad { overflow-wrap: anywhere; min-width: 0; }
+.pfadzeile .frei { white-space: nowrap; text-align: right; }
 .balken { display: block; width: 100%; height: .45rem; margin: .4rem 0 .25rem; border: 0; border-radius: .3rem; background: var(--linie); overflow: hidden; appearance: none; -webkit-appearance: none; }
 .balken::-webkit-meter-bar { background: var(--linie); border: 0; border-radius: .3rem; height: .45rem; }
 .balken::-webkit-meter-optimum-value, .balken::-webkit-meter-suboptimum-value, .balken::-webkit-meter-even-less-good-value { background: var(--akzent); border-radius: .3rem; }

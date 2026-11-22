@@ -2216,9 +2216,9 @@ async function zeigeStatus() {
     const abo = await pushAbo().catch(() => null);
     const pushDa = 'PushManager' in window;
     const speicher = (p) => T`<div class="karte speicherkarte"><div class="zeile"><strong>${esc(tx(p.name))}</strong>${p.fehler ? '' : T`<span>${groesse(p.belegt)}</span>`}</div>
-      <div class="leise pfad">${esc(p.pfad)}</div>
+      <div class="pfadzeile leise"><span class="pfad">${esc(p.pfad)}</span>${p.fehler ? '' : T`<span class="frei">frei ${groesse(p.frei)} von ${groesse(p.gesamt)}</span>`}</div>
       ${p.fehler ? T`<div class="hinweis schlecht">nicht lesbar: ${esc(p.fehler)}</div>` : T`<meter class="balken${p.knapp ? ' knapp' : ''}" min="0" max="${p.gesamt}" value="${p.gesamt - p.frei}" aria-label="${esc(tx('{0} von {1} belegt', groesse(p.gesamt - p.frei), groesse(p.gesamt)))}"></meter>
-        <div class="leise">frei ${groesse(p.frei)} von ${groesse(p.gesamt)}${p.knapp ? T(' – <strong>knapp, neue Aufnahmen werden abgewiesen</strong>') : ''}</div>`}</div>`;
+        ${p.knapp ? T('<div class="hinweis schlecht">Knapp – neue Aufnahmen werden abgewiesen.</div>') : ''}`}</div>`;
     const joplin = !s.joplin.aktiv ? tx('ausgeschaltet') : s.joplin.fehler ? T`<strong>Fehler:</strong> ${esc(s.joplin.fehler)}` : T`erreichbar${s.joplin.offene_planungen ? T`, ${s.joplin.offene_planungen} Planung(en) noch nicht übertragen` : ''}`;
     const updateKarte = neueVersion ? T`<a class="karte updatekarte" href="/status/update">${updateSymbol}<span><strong>Update ${esc(neueVersion)} verfügbar</strong><br><span class="leise">Änderungen ansehen und installieren</span></span></a>` : '';
     seite.innerHTML = T`${statusReiter('status')}<h1>Status</h1>${updateKarte}
@@ -2232,7 +2232,6 @@ async function zeigeStatus() {
         ${s.joplin.aktiv ? T`<dt>Joplin</dt><dd>${joplin}</dd>` : ''}</dl>
       ${s.joplin.aktiv ? T('<div class="leiste"><button class="btn klein" data-a="pruefen">Joplin jetzt prüfen</button></div>') : ''}
       <h2>Speicher</h2>
-      <p class="leise">Je Ablage: von der App belegt (rechts), darunter das Dateisystem.</p>
       ${(s.speicher || []).map(speicher).join('')}
       ${s.probleme.length ? T`<h2>Aufträge mit Fehlern</h2>${s.fehlgeschlagen ? T('<div class="leiste"><button class="btn gefahr" data-a="fehler-weg">Alle fehlerhaften löschen</button></div>') : ''}${s.probleme.map(karte).join('')}` : ''}
       <h2>Benachrichtigungen</h2>
