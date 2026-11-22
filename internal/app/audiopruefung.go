@@ -1,0 +1,157 @@
+package app
+
+import (
+	"io/fs"
+	"net/http"
+	"os"
+	"path/filepath"
+	"regexp"
+	"sort"
+	"strings"
+	"sync"
+	"time"
+
+	"pebble-webhook/internal/store"
+)
+
+// Audiodateien ohne Eintrag: nach dem Wiederherstellen eines älteren Backups (oder von Hand kopiert) liegen in
+// AUDIO_DIR Aufnahmen, die die Datenbank nicht kennt. Die Prüfung vergleicht nur Pfad und Dateiname (= Id des
+// Auftrags) mit der Datenbank, ohne die Dateien zu lesen: beim Start, täglich und auf der Statusseite.
+// „Importieren“ legt je Datei einen neuen Eintrag an (Eingang = Zeitpunkt der Datei), der wie eine neue
+// Aufnahme transkribiert und von der KI ausgewertet wird.
+
+type orphanAudio struct {
+	Path  string `json:"datei"` // relativ zu AUDIO_DIR
+	Size  int64  `json:"groesse"`
+	MTime int64  `json:"zeit"`
+}
+
+var (
+	orphanMu   sync.Mutex
+	orphanList []orphanAudio
+	jobIDRe    = regexp.MustCompile(`^[0-9a-f]{32}$`)
+)
+
+// audioMimeOf: MIME-Typ zur Dateiendung (Gegenstück zu audioExt).
+func audioMimeOf(name string) string {
+	switch strings.ToLower(filepath.Ext(name)) {
+	case ".webm":
+		return "audio/webm"
+	case ".ogg":
+		return "audio/ogg"
+	case ".wav":
+		return "audio/wav"
+	case ".mp3":
+		return "audio/mpeg"
+	case ".m4a":
+		return "audio/mp4"
+	}
+	return ""
+}
+
+// scanAudio sucht Aufnahmen ohne Eintrag und merkt sich das Ergebnis (orphans liest es).
+func (a *App) scanAudio() []orphanAudio {
+	paths, ids, err := a.DB.AudioRefs()
+	if err != nil {
+		logf("Audio-Prüfung: %v", err)
+		return a.orphans()
+	}
+	found := []orphanAudio{}
+	recent := time.Now().Add(-time.Minute) // gerade gespeichert, Eintrag folgt gleich
+	filepath.WalkDir(a.Cfg.AudioDir, func(p string, d fs.DirEntry, err error) error {
+		if err != nil || !d.Type().IsRegular() || audioMimeOf(p) == "" {
+			return nil
+		}
+		base := strings.TrimSuffix(d.Name(), filepath.Ext(d.Name()))
+		if paths[p] || ids[base] {
+			return nil
+		}
+		fi, err := d.Info()
+		if err != nil || fi.ModTime().After(recent) {
+			return nil
+		}
+		rel, err := filepath.Rel(a.Cfg.AudioDir, p)
+		if err != nil {
+			return nil
+		}
+		found = append(found, orphanAudio{Path: filepath.ToSlash(rel), Size: fi.Size(), MTime: fi.ModTime().UnixMilli()})
+		return nil
+	})
+	sort.Slice(found, func(i, k int) bool { return found[i].MTime < found[k].MTime })
+	orphanMu.Lock()
+	changed := len(found) != len(orphanList)
+	orphanList = found
+	orphanMu.Unlock()
+	if changed && len(found) > 0 {
+		logf("Audio-Prüfung: %d Aufnahme(n) ohne Eintrag", len(found))
+	}
+	return found
+}
+
+func (a *App) orphans() []orphanAudio {
+	orphanMu.Lock()
+	defer orphanMu.Unlock()
+	return append([]orphanAudio(nil), orphanList...)
+}
+
+// importAudio legt für eine Aufnahme ohne Eintrag einen neuen Eintrag an; die Datei bleibt, wo sie ist.
+func (a *App) importAudio(o orphanAudio) error {
+	path := filepath.Join(a.Cfg.AudioDir, filepath.FromSlash(o.Path))
+	fi, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	base := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+	_, ids, err := a.DB.AudioRefs()
+	if err != nil {
+		return err
+	}
+	id := store.NewID()
+	if jobIDRe.MatchString(base) && !ids[base] {
+		id = base // ursprüngliche Id aus dem Dateinamen
+	}
+	at := fi.ModTime().UnixMilli()
+	j := &store.Job{ID: id, DeliveryID: "import-" + id, Source: "import", Trigger: "import", Mode: "diktat",
+		ReceivedAt: at, RecordedAt: at, AudioPath: path, AudioMime: audioMimeOf(path), State: store.StateNew}
+	if _, err := a.DB.InsertJob(j); err != nil {
+		return err
+	}
+	logf("Audio-Import: %s → Eintrag %s", o.Path, id)
+	a.changed(j.ID)
+	return nil
+}
+
+// handleAudioOrphans: Aufnahmen ohne Eintrag (prüft neu).
+func (a *App) handleAudioOrphans(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, 200, map[string]any{"dateien": a.scanAudio()})
+}
+
+// handleAudioImport importiert eine Datei ({datei}) oder alle ({alle: true}).
+func (a *App) handleAudioImport(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Datei string `json:"datei"`
+		Alle  bool   `json:"alle"`
+	}
+	if readJSON(r, &in) != nil || (in.Datei == "" && !in.Alle) {
+		writeErr(w, 400, "ungueltig", "Datei fehlt")
+		return
+	}
+	n := 0
+	for _, o := range a.scanAudio() {
+		if !in.Alle && o.Path != in.Datei {
+			continue
+		}
+		if err := a.importAudio(o); err != nil {
+			logf("Audio-Import: %s: %v", o.Path, err)
+			writeErr(w, 500, "speicher", "Import fehlgeschlagen")
+			return
+		}
+		n++
+	}
+	if n == 0 {
+		writeErr(w, 404, "fehlt", "Datei nicht gefunden")
+		return
+	}
+	a.Wake()
+	writeJSON(w, 200, map[string]any{"importiert": n, "dateien": a.scanAudio()})
+}

@@ -870,7 +870,9 @@ func (s *Store) Since(from int64) ([]*Job, error) {
 
 // ExpiredAudio liefert Aufträge, deren Audio älter als der Stichtag ist und noch liegt.
 func (s *Store) ExpiredAudio(cutoff int64) ([]*Job, error) {
-	return s.queryJobs(`SELECT `+jobCols+` FROM jobs WHERE audio_path != '' AND audio_deleted_at = 0 AND received_at < ?`, cutoff)
+	// Nur fertige oder endgültig fehlgeschlagene: eine nachträglich importierte alte Aufnahme wird erst verarbeitet.
+	return s.queryJobs(`SELECT `+jobCols+` FROM jobs WHERE audio_path != '' AND audio_deleted_at = 0 AND received_at < ?
+		AND (state = ? OR failed = 1)`, cutoff, StateDone)
 }
 
 // JobsAsking liefert fertige Notizen, an denen noch Rückfragen der KI offen sind.
@@ -1975,4 +1977,25 @@ func (s *Store) DeleteGroup(name string) (conflict string, err error) {
 func (s *Store) Snapshot(path string) error {
 	_, err := s.DB.Exec(`VACUUM INTO ?`, path)
 	return err
+}
+
+// AudioRefs: Aufnahme-Pfade und Ids aller Aufträge (auch im Papierkorb) – für die Suche nach Audiodateien ohne Eintrag.
+func (s *Store) AudioRefs() (paths, ids map[string]bool, err error) {
+	rows, err := s.DB.Query(`SELECT id, audio_path FROM jobs`)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer rows.Close()
+	paths, ids = map[string]bool{}, map[string]bool{}
+	for rows.Next() {
+		var id, p string
+		if err := rows.Scan(&id, &p); err != nil {
+			return nil, nil, err
+		}
+		ids[id] = true
+		if p != "" {
+			paths[p] = true
+		}
+	}
+	return paths, ids, rows.Err()
 }

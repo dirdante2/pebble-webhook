@@ -7,6 +7,15 @@ Version numbers X.Y.Z:
 - **Y** – a new feature (e.g. appointments, multiple languages, theme choice with day/night mode).
 - **Z** – all other UI changes and small bug fixes; safe to install or roll back at any time.
 
+## [1.30.0] - 2026-11-22
+
+### New
+- Recordings without entry: on start, daily and when the status page opens, the app compares the files in the audio folder with the database (path and file name, no reading of the files). Unknown recordings – e.g. after restoring an older backup – are listed on the status page as errors, with a red counter at *Status* in the menu and a red dot on the menu button.
+- *Import* (one or all) creates a new entry per recording with the file time as received time; it is transcribed and evaluated by the AI like a new recording.
+
+### Changed
+- Recordings are deleted after the retention time only once their entry is done or has failed for good.
+
 ## [1.29.0] - 2026-11-22
 
 ### New

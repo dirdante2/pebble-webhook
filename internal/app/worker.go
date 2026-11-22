@@ -429,6 +429,7 @@ func (a *App) AutoClose() {
 func (a *App) Cleanup() {
 	a.trashExpired()
 	a.cleanBackups()
+	a.scanAudio()
 	cutoff := time.Now().AddDate(0, 0, -a.Cfg.AudioRetentionDays).UnixMilli()
 	jobs, err := a.DB.ExpiredAudio(cutoff)
 	if err != nil {

@@ -91,6 +91,8 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("POST /api/update/auto", s(a.handleUpdateAuto))
 	mux.HandleFunc("POST /api/update/kanal", s(a.handleUpdateChannel))
 	mux.HandleFunc("POST /api/backups", s(a.handleBackupCreate))
+	mux.HandleFunc("GET /api/audio-unbekannt", s(a.handleAudioOrphans))
+	mux.HandleFunc("POST /api/audio-unbekannt/import", s(a.handleAudioImport))
 	mux.HandleFunc("GET /api/backups/{name}", s(a.handleBackupDownload))
 	mux.HandleFunc("GET /api/pebble", s(a.handlePebbleSetup))
 	mux.HandleFunc("GET /api/kosten", s(a.handleCosts))

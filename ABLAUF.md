@@ -251,6 +251,7 @@ Token-Routen (alles andere bleibt bei der Passkey-Sitzung, kein Löschen): `GET 
 2. Geplant (`BackupSchedule`, minütlich): fällig nach `BACKUP_SCHEDULE` (täglich / montags / am 1.) ab `BACKUP_TIME`, einmal am Tag (kv `backup-letzt`) → `VACUUM INTO` → Archiv → Bereinigung (plan/manuell nach `BACKUP_RETENTION_DAYS`, update nach 30 Tagen, jüngstes bleibt).
 3. „Jetzt sichern“ → `POST /api/backups` (Aufnahmen nach `BACKUP_AUDIO`); „Herunterladen“ → `GET /api/backups/{name}`.
 4. „Wiederherstellen“ → `POST /api/update/zurueck` → `update-request` „restore <name> <repo>“ → Installer: Archiv als Nutzer pebble entpacken (keine Links), Version aus `meta.json`: gleich der laufenden → Programm bleibt; Kanal stable/beta/nightly → diese Version laden; lokal → Programm bleibt (Hinweis im Status). Dann wie Update: jetzigen Stand sichern, DB (+ Aufnahmen) einspielen, Programm ersetzen, Health-Check.
+5. Aufnahmen ohne Eintrag (seit 1.30.0): beim Start, täglich (`Cleanup`) und bei `GET /api/status` Dateien in `AUDIO_DIR` gegen `jobs.audio_path` bzw. Id im Dateinamen prüfen (nur Pfad/Name, Dateien jünger als 1 min übersprungen) → Liste auf der Statusseite, Zähler `audio_unbekannt` in `GET /api/zaehler` (roter Zähler an „Status“, roter Punkt am Menüknopf) → „Importieren“ / „Alle importieren“ → `POST /api/audio-unbekannt/import` `{datei}` bzw. `{alle: true}` → neuer Auftrag (Quelle import, Modus diktat, Id aus dem Dateinamen wenn frei, Eingang = Dateizeit, Datei bleibt liegen) → Worker transkribiert und wertet aus.
 
 ## Termin verschieben (seit 1.25.0)
 

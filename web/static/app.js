@@ -1389,7 +1389,7 @@ function eintragHtml(e, offline) {
   if (e.modus === 'diktat' && fertig && !e.analyse) html += T('<p class="leise">Keine Auswertung vorhanden.</p>');
 
   if (p?.runden?.length > 1) {
-    html += T`<h2>Runden</h2>${p.runden.map((r) => T`<a class="karte" href="/eintrag/${r.id}"><div class="zeile"><span class="leise">Runde ${r.nr} · ${zeit(r.zeit)} · ${r.quelle === 'web' ? tx('Web-App') : tx('Pebble')}</span>
+    html += T`<h2>Runden</h2>${p.runden.map((r) => T`<a class="karte" href="/eintrag/${r.id}"><div class="zeile"><span class="leise">Runde ${r.nr} · ${zeit(r.zeit)} · ${r.quelle === 'web' ? tx('Web-App') : r.quelle === 'import' ? tx('Import') : tx('Pebble')}</span>
       ${r.id === e.id ? T('<span class="badge neutral">diese</span>') : T`<span class="badge ${esc(r.status)}">${esc(STATUS[r.status] || r.status)}</span>`}</div><div class="vorschau">${esc(r.transkript)}</div></a>`).join('')}`;
   }
 
@@ -1611,7 +1611,7 @@ function planungHtml(p, offline) {
     else if (r.audio === 'abgelaufen') audio = T('<p class="leise">Aufnahme abgelaufen.</p>');
     html += T`<div class="karte version${r.aktuell ? ' aktuell' : ''}">
       <div class="zeile"><strong>Runde ${r.nr}</strong>${marke}</div>
-      <div class="leise">${zeit(r.zeit)} · ${r.quelle === 'web' ? tx('Web-App') : tx('Pebble')}${meta.length ? ` · ${esc(meta.join(' · '))}` : ''}</div>
+      <div class="leise">${zeit(r.zeit)} · ${r.quelle === 'web' ? tx('Web-App') : r.quelle === 'import' ? tx('Import') : tx('Pebble')}${meta.length ? ` · ${esc(meta.join(' · '))}` : ''}</div>
       ${r.transkript ? T`<blockquote>${esc(r.transkript)}</blockquote>` : T('<p class="leise">Noch kein Transkript.</p>')}${audio}
       ${offline ? '' : T`<div class="leiste">${r.letzte && offen && (r.status === 'fertig' || r.status === 'fehler') ? T`<a class="btn klein" href="/eintrag/${r.id}/umhaengen">Diese Runde umhängen</a>` : ''}<button class="btn klein gefahr" data-akt="loeschen" data-id="${r.id}">Runde löschen</button></div>`}
       ${r.plan && !r.aktuell ? T`<details><summary>Stand nach Runde ${r.nr} ansehen</summary>${planHtml(r.plan)}</details>` : ''}</div>`;
@@ -2220,6 +2220,11 @@ async function zeigeStatus() {
     const updateKarte = neueVersion ? T`<a class="karte updatekarte" href="/status/update">${updateSymbol}<span><strong>Update ${esc(neueVersion)} verfügbar</strong><br><span class="leise">Änderungen ansehen und installieren</span></span></a>` : '';
     seite.innerHTML = T`${statusReiter('status')}<h1>Status</h1>${updateKarte}
       ${s.fehlgeschlagen ? T`<div class="hinweis schlecht">${s.fehlgeschlagen} Auftrag/Aufträge dauerhaft fehlgeschlagen.</div>` : T('<div class="hinweis gut">Keine fehlgeschlagenen Aufträge.</div>')}
+      ${(s.audio_unbekannt || []).length ? T`<h2>Aufnahmen ohne Eintrag <span class="zaehler fehler">${s.audio_unbekannt.length}</span></h2>
+        <div class="hinweis schlecht">Im Audio-Ordner liegen Aufnahmen, die die Datenbank nicht kennt – z. B. nach dem Wiederherstellen eines älteren Backups. Importieren legt je Aufnahme einen neuen Eintrag an (Eingang = Zeitpunkt der Datei); er wird neu transkribiert und von der KI ausgewertet.</div>
+        ${s.audio_unbekannt.map((f) => T`<div class="karte"><div class="zeile"><span><span class="badge fehler">ohne Eintrag</span> ${zeit(f.zeit)}</span><button class="btn klein" data-import="${esc(f.datei)}">Importieren</button></div>
+          <div class="leise">${esc(f.datei)} · ${groesse(f.groesse)}</div></div>`).join('')}
+        ${s.audio_unbekannt.length > 1 ? T('<div class="leiste"><button class="btn haupt" data-import-alle="1">Alle importieren</button></div>') : ''}` : ''}
       <dl><dt>Aufträge</dt><dd>${s.auftraege} gesamt, ${s.warteschlange} in Arbeit</dd>
         <dt>Speicher Audio</dt><dd>${platz(s.speicher_audio)}</dd><dt>Speicher Daten</dt><dd>${platz(s.speicher_daten)}</dd>
         ${s.joplin.aktiv ? T`<dt>Joplin</dt><dd>${joplin}</dd>` : ''}</dl>
@@ -2247,6 +2252,14 @@ async function zeigeStatus() {
       if (b.dataset.app) {
         if (!confirm(tx('App trennen? Sie verliert sofort den Zugriff und muss neu freigegeben werden.'))) return;
         await api(T`/api/oauth/apps/${b.dataset.app}`, { method: 'DELETE' });
+        return laden();
+      }
+      if (b.dataset.import || b.dataset.importAlle) {
+        b.disabled = true;
+        const r = await api('/api/audio-unbekannt/import', { method: 'POST', body: b.dataset.importAlle ? { alle: true } : { datei: b.dataset.import } });
+        melde(tx('{0} Aufnahme(n) importiert – werden ausgewertet', r.importiert));
+        verlaufStand = null;
+        await ladeZaehler();
         return laden();
       }
       if (b.dataset.geraet) {
@@ -3208,7 +3221,7 @@ function maleMenue() {
     { id: 'verlauf', name: tx('Verlauf'), href: '/', setze: ['verlauf-art', 'alles'], unter: ARTEN.map(([a, n]) => ({ name: a === 'termin' ? tx('Termine') : n, href: '/', setze: ['verlauf-art', a], an: name === 'verlauf' && art === a, extra: (a === 'fragen' ? '' : neuZahl(neuZahlen[a])) + zahl(zahlen[a] ?? 0, a !== 'fragen') })) },
     { id: 'listen', name: tx('Listen'), href: '/listen', unter: gruppen.map(([g, offen, neu]) => ({ name: gruppenTitel(g), href: gruppenPfad(g), an: !!gruppe && gruppe.toLowerCase() === g.toLowerCase(), extra: neuZahl(neu) + zahl(offen, true) })) },
     { id: 'status', name: tx('Einstellungen'), href: '/status', unter: [
-      { name: tx('Status'), href: '/status', an: ['status', 'pebble', 'joplin', 'einstellungen', 'einstellungBearbeiten', 'geraetNeu', 'darstellung'].includes(name) },
+      { name: tx('Status'), href: '/status', an: ['status', 'pebble', 'joplin', 'einstellungen', 'einstellungBearbeiten', 'geraetNeu', 'darstellung'].includes(name), extra: audioFehler ? T` <span class="zaehler fehler" title="${tx('{0} Aufnahmen ohne Eintrag', audioFehler)}">${audioFehler}</span>` : '' },
       { name: tx('Updates'), href: '/status/update', an: name === 'update', extra: neueVersion ? ` ${updateSymbol}` : '' },
       { name: tx('Gedächtnis'), href: '/status/gedaechtnis', an: name === 'gedaechtnis' || name === 'gedaechtnisBearbeiten', extra: zahl(offeneVorschlaege) },
       { name: tx('Tags'), href: '/status/tags', an: name === 'tagsVerwalten', extra: zahl(tagZahl, true) },
@@ -3224,9 +3237,10 @@ function maleMenue() {
     <div class="menuegruppe"><button type="button" class="menueunter abmelden" data-menue-abmelden><span>Abmelden</span></button></div>
     <div class="menuefuss"><div class="menuefusszeile">${appVersion ? T`<a href="/status/update">Version ${esc(appVersion)}</a>` : '<span></span>'}<a class="themeknopf" href="/status/darstellung" title="Theme" aria-label="Theme"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 3a9 9 0 0 0 0 18z" fill="currentColor"/></svg></a></div></div>`;
   const punkt = menueKnopf.querySelector('.punkt');
-  punkt.hidden = !neueVersion && !offeneVorschlaege;
-  punkt.classList.toggle('vorschlag', !neueVersion);
-  menueKnopf.title = neueVersion ? T`Update ${neueVersion} verfügbar` : offeneVorschlaege ? T`${offeneVorschlaege} Gedächtnis-Vorschläge` : '';
+  punkt.hidden = !neueVersion && !offeneVorschlaege && !audioFehler;
+  punkt.classList.toggle('vorschlag', !neueVersion && !audioFehler);
+  punkt.classList.toggle('fehler', !!audioFehler);
+  menueKnopf.title = audioFehler ? tx('{0} Aufnahmen ohne Eintrag', audioFehler) : neueVersion ? T`Update ${neueVersion} verfügbar` : offeneVorschlaege ? T`${offeneVorschlaege} Gedächtnis-Vorschläge` : '';
 }
 menueKnopf.onclick = () => { maleMenue(); menue.showModal(); };
 // Breite Bildschirme: Menü fest links sichtbar (nicht modal), ohne Menüknopf; schmal: Klappmenü.
@@ -3252,7 +3266,7 @@ menue.addEventListener('click', async (e) => {
 let offeneVorschlaege = 0;
 const vorschlagZahl = () => (offeneVorschlaege ? ` (${offeneVorschlaege})` : '');
 // Neue Version (Hintergrund-Prüfung alle 4 h): Punkt am Menüknopf, Pfeil an „Updates“, Hinweiskarte auf der Statusseite.
-let neueVersion = '', papierkorbZahl = 0, appVersion = lokal('app-version');
+let neueVersion = '', papierkorbZahl = 0, audioFehler = 0, appVersion = lokal('app-version');
 const updateSymbol = T('<svg class="updatesymbol" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="11" fill="currentColor"/><path d="M12 17V7m-4.5 4.5L12 7l4.5 4.5" fill="none" stroke="var(--flaeche)" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>');
 async function ladeZaehler() {
   try {
@@ -3260,6 +3274,7 @@ async function ladeZaehler() {
     offeneVorschlaege = z.vorschlaege || 0;
     neueVersion = z.update || '';
     papierkorbZahl = z.papierkorb || 0;
+    audioFehler = z.audio_unbekannt || 0;
     joplinAktiv = !!z.joplin;
     try { localStorage.setItem('joplin-aktiv', joplinAktiv ? '1' : '0'); } catch { /* nur Anzeige */ }
     if (z.version) { appVersion = z.version; try { localStorage.setItem('app-version', appVersion); } catch { /* nur Anzeige */ } }
