@@ -2297,7 +2297,8 @@ async function zeigeStatus() {
         <div class="leise">verbunden ${zeit(x.angelegt)}${x.zuletzt ? T` · zuletzt genutzt ${zeit(x.zuletzt)}` : ''}</div></div>`).join('') : T('<p class="leise">Keine. Claude, ChatGPT & Co. verbinden sich über die Adresse <code>/mcp</code> dieses Dienstes und fragen hier nach Freigabe.</p>')}
       <h2>${esc(tx('Kalender-Abo'))}</h2>
       <a class="karte" href="/status/kalender"><strong>${esc(tx('Termine in Google, Apple oder Outlook abonnieren'))}</strong><br><span class="leise">${esc(tx('Link und Anleitung'))}</span></a>
-      <div class="leiste"><button class="btn gefahr" data-a="abmelden">Abmelden</button></div>`;
+      <div class="leiste"><button class="btn gefahr" data-a="abmelden">Abmelden</button></div>
+      ${spendenLink ? T`<a class="karte spendenkarte" href="${esc(spendenLink)}" target="_blank" rel="noopener">${spendenSymbol}<span><strong>${esc(tx('Gefällt dir die App?'))}</strong><br><span class="leise">${esc(tx('Sie ist kostenlos und quelloffen. Wer mag, unterstützt die Entwicklung mit einer kleinen Spende auf Ko-fi.'))}</span></span></a>` : ''}`;
   };
   aktuell.neuLaden = laden;
   seite.onclick = async (ev) => {
@@ -3512,7 +3513,7 @@ function maleMenue() {
   nav.innerHTML = T`<div class="menuekopf"><span class="marke">Sprachnotizen</span><button type="button" class="btn klein rund" data-menue-zu aria-label="Menü schließen">×</button></div>
     ${teile.map((t) => T`<div class="menuegruppe">${link('menuehaupt', { ...t, an: bereich === t.id })}${t.unter.map((u) => link('menueunter', u)).join('')}</div>`).join('')}
     <div class="menuegruppe"><button type="button" class="menueunter abmelden" data-menue-abmelden><span>Abmelden</span></button></div>
-    <div class="menuefuss">${ringBalkenHtml()}<div class="menuefusszeile">${appVersion ? T`<a href="/status/update">Version ${esc(versionNr(appVersion))}${appKanal ? ` · ${esc(tx(appKanal))}` : ''}</a>` : '<span></span>'}<a class="themeknopf" href="/status/darstellung" title="Theme" aria-label="Theme"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 3a9 9 0 0 0 0 18z" fill="currentColor"/></svg></a></div></div>`;
+    <div class="menuefuss">${ringBalkenHtml()}${spendenLink ? T`<a class="spendenlink" href="${esc(spendenLink)}" target="_blank" rel="noopener">${spendenSymbol}<span>${esc(tx('Entwicklung unterstützen'))}</span></a>` : ''}<div class="menuefusszeile">${appVersion ? T`<a href="/status/update">Version ${esc(versionNr(appVersion))}${appKanal ? ` · ${esc(tx(appKanal))}` : ''}</a>` : '<span></span>'}<a class="themeknopf" href="/status/darstellung" title="Theme" aria-label="Theme"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 3a9 9 0 0 0 0 18z" fill="currentColor"/></svg></a></div></div>`;
   setzeBalken(nav);
   const punkt = menueKnopf.querySelector('.punkt');
   punkt.hidden = !neueVersion && !offeneVorschlaege && !audioFehler;
@@ -3545,6 +3546,9 @@ let offeneVorschlaege = 0;
 const vorschlagZahl = () => (offeneVorschlaege ? ` (${offeneVorschlaege})` : '');
 // Neue Version (Hintergrund-Prüfung alle 4 h): Punkt am Menüknopf, Pfeil an „Updates“, Hinweiskarte auf der Statusseite.
 let neueVersion = '', papierkorbZahl = 0, audioFehler = 0, appVersion = lokal('app-version'), appKanal = lokal('app-kanal');
+// Spenden-Link (Ko-fi) aus FUNDING.yml der Update-Quelle; leer = kein Knopf. Nur unaufdringlich: Menüfuß und ganz unten auf Status.
+let spendenLink = lokal('spenden-link', '');
+const spendenSymbol = '<svg class="herz" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20.5s-7.5-4.6-7.5-10.1A4.3 4.3 0 0 1 12 7.6a4.3 4.3 0 0 1 7.5 2.8c0 5.5-7.5 10.1-7.5 10.1z" fill="currentColor"/></svg>';
 const updateSymbol = T('<svg class="updatesymbol" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="11" fill="currentColor"/><path d="M12 17V7m-4.5 4.5L12 7l4.5 4.5" fill="none" stroke="var(--flaeche)" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>');
 // Versionsnummer ohne Kanal-Endung: der Kanal steht als Badge daneben, Builds unterscheidet das Datum.
 const versionNr = (v) => String(v || '').replace(/-(stable|beta|nightly)(\.\d+)?$/, '');
@@ -3622,6 +3626,8 @@ async function ladeZaehler() {
     if (z.version_bestaetigt) { versionBestaetigt = z.version_bestaetigt; try { localStorage.setItem('version-bestaetigt', versionBestaetigt); } catch { /* nur Anzeige */ } }
     ringInfo = z.ring || null;
     try { localStorage.setItem('ring-info', JSON.stringify(ringInfo)); } catch { /* nur Anzeige */ }
+    spendenLink = /^https:\/\/ko-fi\.com\/[A-Za-z0-9_]+$/.test(z.spenden || '') ? z.spenden : '';
+    try { localStorage.setItem('spenden-link', spendenLink); } catch { /* nur Anzeige */ }
     zeigeVersionskarte();
     zeigeRingkarte();
   } catch (f) {

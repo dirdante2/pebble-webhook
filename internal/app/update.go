@@ -273,6 +273,7 @@ func (a *App) CheckUpdates(ctx context.Context) {
 	}
 	t := time.NewTimer(time.Minute)
 	defer t.Stop()
+	var donateAt time.Time // Spenden-Link: beim ersten Lauf, dann alle updateInterval
 	for {
 		select {
 		case <-ctx.Done():
@@ -280,6 +281,10 @@ func (a *App) CheckUpdates(ctx context.Context) {
 		case <-t.C:
 		}
 		a.fetchReleases(ctx, false) // gespeicherten Stand laden
+		if time.Since(donateAt) >= updateInterval {
+			donateAt = time.Now()
+			a.refreshDonate(ctx)
+		}
 		a.updates.mu.Lock()
 		due := time.Since(a.updates.at) >= updateInterval || a.updates.repo != a.Cfg.UpdateRepo
 		a.updates.mu.Unlock()

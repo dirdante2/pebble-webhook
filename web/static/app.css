@@ -677,3 +677,8 @@ dialog.logblatt h2 { margin-top: 0; }
 .btn.symbol svg { width: 1.15rem; height: 1.15rem; }
 .versionzeile1 { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
 code.kopierbar { display: block; margin: .15rem 0 .4rem; overflow-wrap: anywhere; user-select: all; }
+/* Spenden: unaufdringlich, nur Menüfuß und ganz unten auf Status */
+.spendenlink { display: flex; align-items: center; gap: .4rem; }
+.spendenlink .herz, .spendenkarte .herz { width: 1rem; height: 1rem; flex: none; color: var(--leise); }
+.spendenkarte { display: flex; align-items: flex-start; gap: .6rem; margin-top: 2rem; color: inherit; text-decoration: none; }
+.spendenkarte .herz { margin-top: .15rem; }

@@ -9,6 +9,11 @@ Version numbers X.Y.Z:
 
 Own builds show X.Y.Z.A: **A** is a local build counter (one per deployed change, starting at 1 for every new X.Y.Z); it never appears in Git or releases, so one version can collect several changes.
 
+## [1.36.0] - 2026-11-22
+
+### New
+- Donations: a small "Support development" link at the bottom of the menu and a card at the very end of the status page lead to Ko-fi. The link comes from `.github/FUNDING.yml` of the update source (entry `ko_fi`), fetched with the update check; without it nothing is shown.
+
 ## [1.35.1] - 2026-11-22
 
 ### Changed
