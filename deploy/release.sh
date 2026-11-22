@@ -10,9 +10,9 @@ case "$CH" in nightly|beta|stable) ;; *) echo "Kanal: nightly, beta oder stable"
 V="$(tr -d '[:space:]' < VERSION)"
 [[ "$V" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "VERSION ist nicht X.Y.Z: „$V“" >&2; exit 1; }
 git diff --quiet HEAD -- VERSION || { echo "VERSION ist nicht committet" >&2; exit 1; }
-git fetch -q origin main --tags
+git fetch -q origin main # ohne --tags: die wandernden Tags stable/beta/nightly ändern sich auf GitHub
 [ "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" ] || { echo "HEAD ist nicht der gepushte Stand von main – erst pushen" >&2; exit 1; }
-git rev-parse -q --verify "refs/tags/v$V-$CH" >/dev/null && { echo "v$V-$CH gibt es schon – für einen neuen Build VERSION anheben" >&2; exit 1; }
+[ -n "$(git ls-remote --tags origin "refs/tags/v$V-$CH")" ] && { echo "v$V-$CH gibt es schon – für einen neuen Build VERSION anheben" >&2; exit 1; }
 case "$CH" in
     stable) grep -q "^## \[$V\]" RELEASES.md || { echo "RELEASES.md: Abschnitt „## [$V]“ fehlt" >&2; exit 1; } ;;
     beta) grep -q "^## \[$V-beta\]" RELEASES.md || { echo "RELEASES.md: Abschnitt „## [$V-beta]“ fehlt" >&2; exit 1; } ;;
