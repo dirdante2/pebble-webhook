@@ -105,8 +105,10 @@ textarea { min-height: 9rem; resize: vertical; }
 .versionskarte[hidden] { display: none; }
 .versionszeile { display: flex; gap: .7rem; align-items: flex-start; }
 .versionszeile .updatesymbol { width: 1.8rem; height: 1.8rem; flex: none; color: var(--gut); }
-.versionswechsel { font-variant-numeric: tabular-nums; overflow-wrap: anywhere; margin: .15rem 0 .3rem; }
-.versionskarte .btn.gross { width: 100%; padding: .85rem 1rem; font-size: 1.05rem; }
+.versionswechsel { display: flex; flex-wrap: wrap; align-items: center; gap: .2rem .35rem; font-size: .88rem; font-variant-numeric: tabular-nums; margin: .25rem 0 0; }
+.versionswechsel > span { white-space: nowrap; }
+.versionsknoepfe { display: flex; gap: .5rem; }
+.versionsknoepfe .btn { flex: 1 1 0; min-width: 0; padding: .45rem .4rem; font-size: .9rem; line-height: 1.2; }
 .linkknopf { background: none; border: 0; padding: 0; font: inherit; color: var(--akzent); text-decoration: underline; cursor: pointer; text-align: left; }
 .ringkarte { border-left-color: var(--warn); }
 .ringkarte p { margin: .3rem 0; }
@@ -411,6 +413,21 @@ button.terminzeile { border: 0; border-left: 4px solid var(--schlecht); color: v
 .toast span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .toast .btn { flex-shrink: 0; background: transparent; color: var(--bg); border-color: var(--bg); }
 @media (prefers-reduced-motion: reduce) { .wisch > .karte, .wisch-box, .wisch-box svg { transition: none; } }
+/* Umschalter „nur offene“ rechts neben den Reitern; Wisch-Hinweis unter der Liste */
+.filterzeile { display: flex; gap: .4rem; align-items: stretch; margin-bottom: 1rem; }
+.filterzeile > .btn-group.unter { flex: 1; min-width: 0; margin-bottom: 0; }
+.offenknopf { flex-shrink: 0; align-self: flex-start; min-height: 2.3rem; width: 2.75rem; padding: 0; }
+.offenknopf svg { width: 1.25rem; height: 1.25rem; }
+.offenknopf.aktiv { background: var(--akzent); border-color: var(--akzent); color: var(--akzent-text); }
+.wisch-hinweis { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: .4rem .9rem; margin: 1.2rem 0 .5rem; color: var(--leise); font-size: .85rem; }
+.wisch-hinweis[hidden] { display: none; }
+.leer.klein { padding: 1rem 0; }
+.leiste.aufraeumen { margin: 1rem 0 0; }
+.leiste.aufraeumen .btn { flex: 1 1 100%; }
+.wisch-hinweis > span { display: inline-flex; align-items: center; gap: .3rem; }
+.wisch-hinweis svg { width: 1rem; height: 1rem; }
+.wisch-hinweis .gut { color: var(--gut); display: inline-flex; }
+.wisch-hinweis .schlecht { color: var(--schlecht); display: inline-flex; }
 
 /* Listen (Nutzervorgabe 21.11.2026): #Nummer rechtsbündig, Punkte flach, eckig, über die ganze Breite */
 .lpzeile { display: flex; align-items: baseline; gap: .5rem; }

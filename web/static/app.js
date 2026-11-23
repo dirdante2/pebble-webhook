@@ -332,6 +332,7 @@ const routen = [
   [/^\/status\/update$/, 'update', () => zeigeUpdate('')],
   [/^\/status\/backups$/, 'backups', () => zeigeUpdate('backups')],
   [/^\/status\/update\/backups$/, 'backups', () => geheZu('/status/backups', true)],
+  [/^\/status\/backups\/hochladen$/, 'backupHochladen', zeigeBackupHochladen],
   [/^\/status\/einstellungen\/bearbeiten$/, 'einstellungenBearbeiten', () => geheZu('/status/einstellungen', true)],
   [/^\/status\/einstellungen\/([A-Z_]+)$/, 'einstellungBearbeiten', zeigeEinstellungBearbeiten],
   [/^\/einrichten$/, 'einrichten', zeigeEinrichten],
@@ -349,6 +350,8 @@ function geheZu(pfad, ersetzen = false) {
 let verlaufStand = null;
 // Liste, aus der die gerade offene Notiz oder Planung aufgerufen wurde (Pfad), sonst null.
 let herkunft = null;
+// Suche, aus der die offene Notiz oder Planung kommt (Suchtext), sonst null; suchStand = geladene Treffer und Scrollstand.
+let sucheHerkunft = null, suchStand = null;
 const DETAIL = ['eintrag', 'planung', 'tags', 'antwort', 'umhaengen', 'einsortieren'];
 
 async function zeige() {
@@ -359,15 +362,19 @@ async function zeige() {
   if (aufraeumen) { aufraeumen(); aufraeumen = null; }
   const vorher = aktuell?.name, vorherArg = aktuell?.arg;
   if (vorher === 'verlauf' && verlaufStand) verlaufStand.scroll = window.scrollY;
+  if (vorher === 'suche' && suchStand) suchStand.scroll = window.scrollY;
   const pfad = location.pathname;
   for (const [muster, name, fn] of routen) {
     const m = pfad.match(muster);
     if (!m) continue;
     aktuell = { name, arg: m[1] };
-    if (name === 'verlauf') aktuell.zurueck = DETAIL.includes(vorher);
+    if (name === 'verlauf' || name === 'suche') aktuell.zurueck = DETAIL.includes(vorher);
+    // Aus der Suche geöffnet: Brotkrumen zurück zur Suche, Suchwörter auf der Detailseite markiert.
+    if (name === 'eintrag' || name === 'planung') { if (vorher === 'suche') sucheHerkunft = suchStand?.q || null; else if (!DETAIL.includes(vorher)) sucheHerkunft = null; } else if (!DETAIL.includes(name)) sucheHerkunft = null;
     // Unterseiten (Tags, Antwort …) und der Wechsel Runde → Planung behalten die Herkunft.
-    if (name === 'eintrag' || name === 'planung') { if (vorher === 'liste') herkunft = T`/liste/${vorherArg}`; else if (vorher === 'listen') herkunft = vorherArg ? T`/listen/gruppe/${vorherArg}` : '/listen'; else if (!DETAIL.includes(vorher)) herkunft = null; }
-    if (name !== 'verlauf') window.scrollTo(0, 0);
+    if (name === 'eintrag' || name === 'planung') { if (vorher === 'suche') herkunft = null; else if (vorher === 'liste') herkunft = T`/liste/${vorherArg}`; else if (vorher === 'listen') herkunft = vorherArg ? T`/listen/gruppe/${vorherArg}` : '/listen'; else if (!DETAIL.includes(vorher)) herkunft = null; }
+    if (name !== 'verlauf' && !(name === 'suche' && aktuell.zurueck)) window.scrollTo(0, 0);
+    sucheMarkieren(name === 'eintrag' || name === 'planung' ? sucheHerkunft : null);
     const offen = name === 'anmelden' || name === 'einrichten' || name === 'ersteinrichtung';
     menueKnopf.hidden = offen;
     if (menue.open && menue.matches(':modal')) menue.close();
@@ -453,6 +460,38 @@ function standText(e) {
   return e.erledigt ? ['erledigt', 'fertig'] : ['offen', 'neutral'];
 }
 
+// Suchwörter auf einer Detailseite markieren (aus der Suche geöffnet). Die Seite zeichnet sich bei Änderungen neu:
+// ein Beobachter markiert danach erneut. q = null schaltet ab.
+let markBeobachter = null;
+function sucheMarkieren(q) {
+  markBeobachter?.disconnect();
+  markBeobachter = null;
+  const woerter = (q || '').split(/\s+/).filter((w) => w.length >= 2).sort((a, b) => b.length - a.length);
+  if (!woerter.length) return;
+  const muster = new RegExp(`(${woerter.map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})`, 'gi');
+  const probe = new RegExp(muster.source, 'i'); // ohne g: test() ohne Zustand
+  const markieren = () => {
+    markBeobachter.disconnect();
+    const gang = document.createTreeWalker(seite, NodeFilter.SHOW_TEXT, {
+      acceptNode: (n) => (n.parentElement.closest('mark, button, script, style, textarea, select, .krumen, svg') || !probe.test(n.data) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT),
+    });
+    const knoten = [];
+    for (let n = gang.nextNode(); n; n = gang.nextNode()) knoten.push(n);
+    for (const n of knoten) {
+      const teil = document.createDocumentFragment();
+      for (const [i, s] of n.data.split(muster).entries()) {
+        if (!s) continue;
+        if (i % 2) { const m = document.createElement('mark'); m.textContent = s; teil.append(m); } else teil.append(s);
+      }
+      n.replaceWith(teil);
+    }
+    markBeobachter.observe(seite, { childList: true, subtree: true });
+  };
+  let geplant = false;
+  markBeobachter = new MutationObserver(() => { if (!geplant) { geplant = true; requestAnimationFrame(() => { geplant = false; if (markBeobachter) markieren(); }); } });
+  markBeobachter.observe(seite, { childList: true, subtree: true });
+}
+
 async function zeigeSuche() {
   const q = new URLSearchParams(location.search).get('q') || '';
   if (document.activeElement !== suchFeld) suchFeld.value = q;
@@ -461,26 +500,65 @@ async function zeigeSuche() {
     seite.innerHTML = T('<h1>Suche</h1><p class="leise">Mindestens zwei Zeichen eingeben. Gesucht wird in Titel, Wortlaut, Auswertung und Tags aller Notizen, Termine und Planungen; alle Wörter müssen vorkommen. „#46“ findet die Nummer.</p>');
     return;
   }
-  seite.innerHTML = T('<p class="leer">Sucht …</p>');
+  // Zurück von einem Treffer: geladene Seiten und Scrollstand wiederherstellen statt neu zu suchen.
+  const stand = aktuell.zurueck && suchStand?.q === q ? suchStand : null;
+  if (!stand) seite.innerHTML = T('<p class="leer">Sucht …</p>');
+  // Online gesucht, neueste zuerst; ältere Treffer kommen seitenweise beim Scrollen.
+  const holen = (vor, stufe) => api(T`/api/suche?q=${encodeURIComponent(q)}${vor ? T`&vor=${vor}&stufe=${stufe || 1}` : ''}`);
   let d;
   try {
-    d = await api(T`/api/suche?q=${encodeURIComponent(q)}`);
+    d = stand ? { ...stand.d, treffer: stand.treffer } : await holen(0);
   } catch (f) {
     seite.innerHTML = T`<p class="leer">${f instanceof NetzFehler ? tx('Suche nur mit Verbindung.') : esc(f.message)}</p>`;
     return;
   }
-  if (aktuell?.name !== 'suche' || (new URLSearchParams(location.search).get('q') || '') !== q) return;
+  const gilt = () => aktuell?.name === 'suche' && (new URLSearchParams(location.search).get('q') || '') === q;
+  if (!gilt()) return;
   const zeile = (e) => {
     const [stand, klasse] = standText(e);
     const art = e.termin ? terminArt(e.termin) : MODUS[e.modus] || e.modus;
-    const f = e.fundstelle || {};
+    // Je Suchwort seine Fundstelle (Titel steht schon markiert oben).
+    const funde = (e.fundstellen || (e.fundstelle ? [e.fundstelle] : [])).filter((f) => f.text && f.feld !== 'Titel');
     return T`<a class="treffer" href="${e.typ === 'planung' ? '/planung/' : '/eintrag/'}${e.id}">
       <div class="trefferkopf"><span class="treffertitel">${markiere(e.titel || tx('Ohne Titel'), q)}</span>${e.nr ? T`<span class="nr">#${e.nr}</span>` : ''}</div>
       <div class="trefferinfo"><span class="badge ${e.termin ? 'termin' : esc(e.modus)}">${esc(art)}</span><span class="badge ${klasse}">${esc(stand)}</span><span class="leise">${kurz(e.aufgenommen)}</span></div>
-      ${f.text && f.feld !== 'Titel' ? T`<div class="fund"><span class="leise">${esc(tx(f.feld))}:</span> ${markiere(f.text, q)}</div>` : ''}</a>`;
+      ${funde.map((f) => T`<div class="fund">${f.feld === 'Wortlaut' ? '' : T`<span class="leise">${esc(tx(f.feld))}:</span> `}${markiere(f.text, q)}</div>`).join('')}</a>`;
   };
-  seite.innerHTML = T`<h1>Suche</h1><p class="leise">${d.anzahl ? T`${d.anzahl} ${d.anzahl === 1 ? tx('Treffer') : tx('Treffer')} für „${esc(q)}“${d.anzahl > d.treffer.length ? T`, die ersten ${d.treffer.length}` : ''}` : T`Nichts gefunden für „${esc(q)}“.`}</p>
-    <div class="trefferliste">${d.treffer.map(zeile).join('')}</div>`;
+  if (!d.treffer.length) {
+    seite.innerHTML = T`<h1>Suche</h1><p class="leise">Nichts gefunden für „${esc(q)}“.</p>`;
+    return;
+  }
+  seite.innerHTML = T`<h1>Suche</h1><p class="leise" id="trefferzahl"></p><div class="trefferliste" id="trefferliste"></div><div id="treffermehr"></div>`;
+  const liste = document.getElementById('trefferliste'), mehrBox = document.getElementById('treffermehr'), zahl = document.getElementById('trefferzahl');
+  let anzahl = 0, laedt = false;
+  suchStand = { q, treffer: [], d: null, scroll: 0 };
+  const anhaengen = (x) => {
+    d = x;
+    anzahl += x.treffer.length;
+    suchStand.treffer.push(...x.treffer);
+    suchStand.d = { mehr: x.mehr, vor_naechste: x.vor_naechste, stufe: x.stufe };
+    liste.insertAdjacentHTML('beforeend', x.treffer.map(zeile).join(''));
+    zahl.textContent = tx('{0} Treffer für „{1}“, neueste zuerst', `${anzahl}${x.mehr ? '+' : ''}`, q);
+    mehrBox.innerHTML = x.mehr ? T('<p class="leer klein">Lädt …</p>') : '';
+  };
+  const weiter = async () => {
+    if (laedt || !d.mehr || !gilt()) return;
+    laedt = true;
+    try {
+      const x = await holen(d.vor_naechste, d.stufe);
+      if (gilt()) anhaengen(x);
+    } catch (f) {
+      if (!(f instanceof NetzFehler)) throw f;
+    } finally {
+      laedt = false;
+    }
+    if (d.mehr && mehrBox.getBoundingClientRect().top < window.innerHeight + 400) weiter();
+  };
+  anhaengen(d);
+  if (stand) window.scrollTo(0, stand.scroll);
+  const beobachter = new IntersectionObserver((es) => { if (es.some((x) => x.isIntersecting)) weiter(); }, { rootMargin: '400px' });
+  beobachter.observe(mehrBox);
+  aufraeumen = () => beobachter.disconnect();
 }
 
 // ---------- Verlauf ----------
@@ -572,14 +650,14 @@ for (const t of ['pointerdown', 'keydown']) document.addEventListener(t, () => b
 // Neu: seit zuletzt gesehen eingegangen und noch nicht aufgerufen (ein geöffneter Eintrag ist nie neu).
 const istNeu = (e) => e.eingegangen >= besuche.grenze() && !e.gelesen;
 
-// Standardansicht des Verlaufs: Neues und die letzten 24 Stunden (mindestens die jüngsten Einträge, Anzahl laut Server),
-// nach Eingang sortiert; Älteres erst über „Alle anzeigen“. Die Grenze liefert der Server, sie gilt auch für den Zwischenspeicher.
-const verlaufGrenze = {
-  wert() { try { const g = Number(localStorage.getItem('verlauf-grenze')); return Number.isFinite(g) && localStorage.getItem('verlauf-grenze') !== null ? g : Date.now() - 24 * 3600 * 1000; } catch { return Date.now() - 24 * 3600 * 1000; } },
-  setze(g) { try { localStorage.setItem('verlauf-grenze', String(g)); } catch { /* nur Zwischenspeicher */ } },
-};
-const frisch = (e) => e.eingegangen >= verlaufGrenze.wert();
-const sichtbar = (e) => frisch(e) || istNeu(e);
+// Tagesgruppe einer Karte im Verlauf: „Heute“, „Gestern“, sonst Wochentag mit Datum (fremdes Jahr mit Jahreszahl).
+function tagGruppe(ms) {
+  const d = new Date(ms), h = new Date();
+  const tage = Math.round((new Date(h.toDateString()) - new Date(d.toDateString())) / 86400000);
+  if (tage === 0) return tx('Heute');
+  if (tage === 1) return tx('Gestern');
+  return d.toLocaleDateString(LOCALE, { weekday: 'long', day: '2-digit', month: '2-digit', ...(d.getFullYear() !== h.getFullYear() ? { year: 'numeric' } : {}) });
+}
 
 // ---------- Wischen im Verlauf: rechts = erledigt, links = löschen, mit „Rückgängig“ ----------
 
@@ -587,6 +665,9 @@ const sichtbar = (e) => frisch(e) || istNeu(e);
 const istErledigt = (e) => !!(e.typ === 'planung' ? e.planung_status === 'geschlossen' : e.termin ? e.termin.bestaetigt : e.erledigt);
 const ICON_HAKEN = T('<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg>');
 const ICON_MUELL = T('<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9.5 7V4.5h5V7M6.5 7l1 13h9l1-13M10 11v5.5M14 11v5.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>');
+const ICON_NUR_OFFEN = T('<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 4l16 16" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>');
+const ICON_PFEIL_LINKS = T('<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 12H5M10 7l-5 5 5 5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>');
+const ICON_PFEIL_RECHTS = T('<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M14 7l5 5-5 5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>');
 const ICON_OEFFNEN = T('<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4.5 12a7.5 7.5 0 1 0 2.2-5.3M4.5 4v4h4" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>');
 // Rechts: offener Eintrag → Haken (erledigt), erledigter → Pfeil (wieder offen).
 const wischKarte = (e) => T`<div class="wisch" data-wid="${e.id}">${istErledigt(e) ? T`<div class="wisch-box gut auf" aria-hidden="true">${ICON_OEFFNEN}</div>` : T`<div class="wisch-box gut" aria-hidden="true">${ICON_HAKEN}</div>`}<div class="wisch-box schlecht" aria-hidden="true">${ICON_MUELL}</div>${karte(e)}</div>`;
@@ -740,12 +821,18 @@ async function setzeErledigt(id, erledigt) {
   else zeige();
 }
 
-function listeHtml(eintraege, alleZeigen) {
-  const neu = eintraege.filter(istNeu), rest = eintraege.filter((e) => !istNeu(e));
-  const gruppen = [[tx('Neu'), neu], [tx('Zuletzt'), rest.filter(frisch)]];
-  if (alleZeigen) gruppen.push([tx('Älter'), eintraege.filter((e) => !sichtbar(e))]);
-  const html = gruppen.filter(([, liste]) => liste.length).map(([name, liste]) => T`<div class="tag">${name}</div>${liste.map(wischKarte).join('')}`).join('');
-  return html || T('<p class="leer">Keine Einträge vorhanden.</p>');
+// Neu oben, danach je Tag eine Gruppe (Einträge kommen neueste zuerst).
+// fortsetzung: Tagesgruppe, die schon über den angehängten Karten steht (Nachladen) – ihr Kopf entfällt.
+function listeHtml(eintraege, fortsetzung) {
+  const gruppen = [[tx('Neu'), eintraege.filter(istNeu)]];
+  for (const e of eintraege) {
+    if (istNeu(e)) continue;
+    const name = tagGruppe(e.eingegangen);
+    if (gruppen[gruppen.length - 1][0] === name) gruppen[gruppen.length - 1][1].push(e);
+    else gruppen.push([name, [e]]);
+  }
+  const html = gruppen.filter(([, liste]) => liste.length).map(([name, liste], i) => T`${i === 0 && name === fortsetzung ? '' : T`<div class="tag">${name}</div>`}${liste.map(wischKarte).join('')}`).join('');
+  return html || (fortsetzung ? '' : T('<p class="leer">Keine Einträge vorhanden.</p>'));
 }
 
 async function zeigeAusgang() {
@@ -797,11 +884,20 @@ function gewaehlteTags() {
 async function zeigeVerlauf() {
   let art = localStorage.getItem('verlauf-art');
   if (!ARTEN.some(([a]) => a === art)) art = 'alles';
-  seite.innerHTML = T`<div id="ausgang"></div><nav class="btn-group unter reiter4" id="filter" aria-label="Verlauf filtern"></nav>
+  // Umschalter für alle Reiter: nur offene (Vorgabe) oder auch erledigte Einträge.
+  const nurOffen = localStorage.getItem('verlauf-offen') !== '0';
+  const offenText = nurOffen ? tx('Nur offene – Erledigte einblenden') : tx('Alle – Erledigte ausblenden');
+  seite.innerHTML = T`<div id="ausgang"></div><div class="filterzeile"><nav class="btn-group unter reiter4" id="filter" aria-label="Verlauf filtern"></nav>
+    <button class="btn offenknopf${nurOffen ? ' aktiv' : ''}" id="offenknopf" aria-pressed="${nurOffen}" title="${offenText}" aria-label="${offenText}">${ICON_NUR_OFFEN}</button></div>
     <div id="tagleiste" class="tagleiste" hidden></div>
     <div id="termine"></div>
     <div id="liste"><p class="leer">Lädt …</p></div><div id="mehr" class="mitte"></div>
+    <div id="wischhinweis" class="wisch-hinweis" hidden><span>${ICON_PFEIL_LINKS}<span class="schlecht">${ICON_MUELL}</span>Löschen</span><span aria-hidden="true">·</span><span>Erledigt<span class="gut">${ICON_HAKEN}</span>${ICON_PFEIL_RECHTS}</span></div>
     <div id="wahlleiste" class="wahlleiste" hidden></div>`;
+  document.getElementById('offenknopf').onclick = () => {
+    localStorage.setItem('verlauf-offen', nurOffen ? '0' : '1');
+    zeigeVerlauf();
+  };
   const liste = document.getElementById('liste');
   aufraeumen = () => seite.classList.remove('auswahl');
   const tags = art === 'fragen' ? [] : gewaehlteTags();
@@ -880,9 +976,11 @@ async function zeigeVerlauf() {
     const dialog = document.createElement('dialog');
     dialog.className = 'tagdialog';
     const maleDialog = () => {
-      const passend = kombis.filter((k) => [...wahlTags].every((t) => k.includes(t)));
-      const anzahl = (n) => (wahlTags.size ? passend.filter((k) => k.includes(n)).length : gesamt(n));
-      dialog.innerHTML = T`<h2>Nach Tags filtern</h2><p class="leise">${wahlTags.size ? T`${passend.length} ${passend.length === 1 ? tx('Eintrag trägt') : tx('Einträge tragen')} alle gewählten Tags.` : tx('Gezeigt werden Einträge mit allen gewählten Tags.')}</p>
+      // kombis: [{tags, anzahl}] (früher eine Liste je Eintrag – im Zwischenspeicher kann noch die alte Form liegen).
+      const passend = kombis.map((k) => (Array.isArray(k) ? { tags: k, anzahl: 1 } : k)).filter((k) => [...wahlTags].every((t) => k.tags.includes(t)));
+      const summe = (l) => l.reduce((z, k) => z + k.anzahl, 0);
+      const anzahl = (n) => (wahlTags.size ? summe(passend.filter((k) => k.tags.includes(n))) : gesamt(n));
+      dialog.innerHTML = T`<h2>Nach Tags filtern</h2><p class="leise">${wahlTags.size ? T`${summe(passend)} ${summe(passend) === 1 ? tx('Eintrag trägt') : tx('Einträge tragen')} alle gewählten Tags.` : tx('Gezeigt werden Einträge mit allen gewählten Tags.')}</p>
         <div class="tags wahl">${namen.map((n) => {
           const an = wahlTags.has(n), z = anzahl(n), aus = !an && wahlTags.size > 0 && z === 0;
           return T`<button class="tagchip wahl${an ? ' an' : ''}${aus ? ' aus' : ''}" data-tag="${esc(n)}" aria-pressed="${an}"${aus ? ' disabled' : ''}>${esc(n)} <span class="zahl">${z}</span></button>`;
@@ -916,14 +1014,15 @@ async function zeigeVerlauf() {
   // Zwischenspeicher aus einer früheren Fassung (eine Zeile je Runde) verwerfen.
   for (const e of await alle('verlauf')) if (!e.typ) await loesche('verlauf', e.id);
   // Zurück von einer Detailseite mit gleichem Filter: Liste samt nachgeladenen Seiten und Scrollposition wiederherstellen.
-  const stand = aktuell.zurueck && verlaufStand && verlaufStand.art === art && verlaufStand.tags === tags.join('\n') ? verlaufStand : null;
-  let alleZeigen = stand ? stand.alle : false;
+  const stand = aktuell.zurueck && verlaufStand && verlaufStand.art === art && verlaufStand.offen === nurOffen && verlaufStand.tags === tags.join('\n') ? verlaufStand : null;
   // Die Fragen-Ansicht zeigt jede offene Rückfrage, auch an alten Planungen.
-  const gezeigt = (e) => alleZeigen || art === 'fragen' || (art === 'termin' ? !e.termin?.bestaetigt : sichtbar(e));
-  let eintraege = stand ? stand.eintraege.filter(gezeigt) : (await alle('verlauf')).filter((e) => passt(e, art, tags) && gezeigt(e)).sort((a, b) => b.eingegangen - a.eingegangen);
+  const gezeigt = (e) => !nurOffen || art === 'fragen' || !istErledigt(e);
+  // Bis der Server antwortet: der Zwischenspeicher, gekappt auf die jüngsten Einträge.
+  let eintraege = stand ? stand.eintraege.filter(gezeigt) : (await alle('verlauf')).filter((e) => passt(e, art, tags) && gezeigt(e)).sort((a, b) => b.eingegangen - a.eingegangen).slice(0, 60);
+  // mehrBekannt: der Server hat ältere Seiten; cursor = vor= für die nächste (Zeitpunkt des letzten geladenen Eintrags).
   let mehrBekannt = stand ? stand.mehr : false;
-  let aeltere = stand ? stand.aeltere : 0;
-  const merke = () => { verlaufStand = { art, tags: tags.join('\n'), eintraege, mehr: mehrBekannt, alle: alleZeigen, aeltere, scroll: window.scrollY }; };
+  let cursor = stand ? stand.cursor : 0;
+  const merke = () => { verlaufStand = { art, offen: nurOffen, tags: tags.join('\n'), eintraege, mehr: mehrBekannt, cursor, scroll: window.scrollY }; };
   filter.onclick = (ev) => {
     const b = ev.target.closest('button[data-art]');
     if (!b || b.dataset.art === art) return;
@@ -933,7 +1032,7 @@ async function zeigeVerlauf() {
   };
   // seit: zuletzt gesehen, damit der Server auch Neues älter als 24 Stunden liefert.
   const seit = () => (Number.isFinite(besuche.grenze()) ? T`seit=${besuche.grenze()}` : '');
-  const abfrage = () => [art === 'alles' ? '' : T`art=${art}`, ...tags.map((t) => T`tag=${encodeURIComponent(t)}`), alleZeigen ? 'alle=1' : seit()].filter(Boolean).join('&');
+  const abfrage = () => [art === 'alles' ? '' : T`art=${art}`, ...tags.map((t) => T`tag=${encodeURIComponent(t)}`), seit(), nurOffen && art !== 'fragen' ? 'offen=1' : ''].filter(Boolean).join('&');
 
   // Mehrfachauswahl (langes Drücken auf eine Karte): wahl = Menge der Schlüssel „typ:id“, null = Auswahl aus.
   let wahl = null;
@@ -954,8 +1053,10 @@ async function zeigeVerlauf() {
       <button class="btn klein" data-w="aus">Abbrechen</button>`;
   };
   const male = () => {
-    const sicht = eintraege.filter((x) => ausstehend.get(x.id) !== null).map((x) => ausstehend.get(x.id) || x);
-    liste.innerHTML = art === 'termin' ? terminListeHtml(sicht) : listeHtml(sicht, alleZeigen || art === 'fragen');
+    // Nur offene: ein gerade erledigter Eintrag fällt sofort heraus („Rückgängig“ holt ihn zurück).
+    const sicht = eintraege.filter((x) => ausstehend.get(x.id) !== null).map((x) => ausstehend.get(x.id) || x).filter((x) => !nurOffen || art === 'fragen' || !istErledigt(x));
+    liste.innerHTML = !sicht.length && nurOffen && art !== 'fragen' ? T('<p class="leer">Keine offenen Einträge.</p>') : art === 'termin' ? terminListeHtml(sicht) : listeHtml(sicht);
+    document.getElementById('wischhinweis').hidden = !liste.querySelector('.wisch');
     maleWahl();
   };
   // Langes Drücken (0,5 s ohne Bewegung) startet die Auswahl mit dieser Karte; der folgende Klick öffnet sie nicht.
@@ -1093,27 +1194,43 @@ async function zeigeVerlauf() {
     }
   };
 
-  const mehrKnopf = (mehr) => {
-    const box = document.getElementById('mehr');
-    const zeigeAlle = !alleZeigen && aeltere > 0;
-    box.innerHTML = `${mehr ? T('<button class="btn" data-m="mehr">Ältere laden</button>') : ''}${zeigeAlle ? T` <button class="btn" data-m="alle">${art === 'termin' ? T`Erledigte anzeigen (${aeltere})` : T`Alle anzeigen (${aeltere} ältere)`}</button>` : ''}`;
-    box.onclick = async (ev) => {
-      const b = ev.target.closest('button[data-m]');
-      if (!b) return;
-      b.disabled = true;
-      if (b.dataset.m === 'alle') {
-        alleZeigen = true;
-        await laden();
-        return;
-      }
-      const d = await api(T`/api/verlauf?vor=${eintraege[eintraege.length - 1].eingegangen}&${abfrage()}`);
-      eintraege = eintraege.concat(d.eintraege);
+  // Endlos nachladen: sobald das Listenende in Sicht kommt, die nächsten 50 vom Server.
+  const mehrBox = document.getElementById('mehr');
+  let laedtMehr = false;
+  const mehrKnopf = (mehr) => { mehrBox.innerHTML = mehr ? T('<p class="leer klein">Lädt …</p>') : ''; };
+  const nachladen = async () => {
+    if (laedtMehr || !mehrBekannt || !cursor || aktuell?.name !== 'verlauf') return;
+    laedtMehr = true;
+    try {
+      const d = await api(T`/api/verlauf?vor=${cursor}&${abfrage()}`);
+      if (aktuell?.name !== 'verlauf') return;
+      const da = new Set(eintraege.map((e) => e.id));
+      const neue = d.eintraege.filter((e) => !da.has(e.id));
+      // Nur die neuen Karten anhängen statt die ganze (lange) Liste neu zu zeichnen; Termine sortieren anders → ganz.
+      const letzte = [...eintraege].reverse().find((e) => !istNeu(e) && ausstehend.get(e.id) !== null && (!nurOffen || art === 'fragen' || !istErledigt(ausstehend.get(e.id) || e)));
+      eintraege = eintraege.concat(neue);
+      for (const e of d.eintraege) await lege('verlauf', e);
       mehrBekannt = d.mehr;
-      male();
-      mehrKnopf(d.mehr);
+      cursor = d.vor_naechste || 0;
+      if (art === 'termin' || !letzte || !liste.querySelector('.wisch')) male();
+      else {
+        liste.insertAdjacentHTML('beforeend', listeHtml(neue.filter((x) => !nurOffen || art === 'fragen' || !istErledigt(x)), tagGruppe(letzte.eingegangen)));
+        maleWahl();
+      }
+      mehrKnopf(mehrBekannt);
       merke();
-    };
+    } catch (f) {
+      if (!(f instanceof NetzFehler)) throw f;
+    } finally {
+      laedtMehr = false;
+    }
+    // Passt die neue Seite ganz in den Bildschirm, gleich weiter.
+    if (mehrBekannt && mehrBox.getBoundingClientRect().top < window.innerHeight + 400) nachladen();
   };
+  const beobachter = new IntersectionObserver((es) => { if (es.some((x) => x.isIntersecting)) nachladen(); }, { rootMargin: '400px' });
+  beobachter.observe(mehrBox);
+  const altesAufraeumen = aufraeumen;
+  aufraeumen = () => { beobachter.disconnect(); altesAufraeumen(); };
   if (eintraege.length) male();
   if (stand) {
     mehrKnopf(stand.mehr);
@@ -1123,7 +1240,6 @@ async function zeigeVerlauf() {
     try {
       const d = await api(T`/api/verlauf?${abfrage()}`);
       if (d.besuch_pause_minuten) besuche.pause(d.besuch_pause_minuten);
-      if (typeof d.grenze === 'number' && !alleZeigen && art !== 'fragen' && art !== 'termin') verlaufGrenze.setze(d.grenze);
       if (aktuell?.name !== 'verlauf') return;
       const termine = { naechster: d.naechster_termin || null, verpasst: d.termine_verpasst || 0, in24h: d.termine_24h || 0 };
       localStorage.setItem('verlauf-termine', JSON.stringify(termine));
@@ -1134,25 +1250,25 @@ async function zeigeVerlauf() {
       if (d.neu) localStorage.setItem('verlauf-neu', JSON.stringify(d.neu));
       maleMenue();
       maleFilter(zahlen);
-      aeltere = d.aeltere || 0;
       // Zwischenspeicher = erste Seite des Servers; ältere bleiben, Entferntes fällt heraus.
-      // In der Standardansicht liefert der Server nur Neues und die letzten 24 Stunden: der Rest bleibt liegen.
       const alt = (await alle('verlauf')).filter((e) => passt(e, art, tags) && gezeigt(e));
-      const grenze = d.eintraege.length ? d.eintraege[d.eintraege.length - 1].eingegangen : 0;
+      const grenze = d.vor_naechste || (d.eintraege.length ? d.eintraege[d.eintraege.length - 1].eingegangen : 0);
       const neu = new Set(d.eintraege.map((e) => e.id));
       for (const e of alt) if (!neu.has(e.id) && (e.eingegangen >= grenze || !d.mehr)) await loesche('verlauf', e.id);
       for (const e of d.eintraege) await lege('verlauf', e);
-      holeDetails(d.eintraege);
+      holeDetails(d.eintraege.slice(0, 30)); // Details für offline nur der jüngsten, nicht eines ganzen Rückstands
       if (aktuell?.name !== 'verlauf') return;
       // Erste Seite frisch vom Server; bereits nachgeladene ältere Einträge bleiben stehen.
-      const aeltereSeiten = d.mehr ? eintraege.filter((e) => !neu.has(e.id) && e.eingegangen < grenze) : [];
-      if (!aeltereSeiten.length) mehrBekannt = d.mehr;
+      // Nur wirklich nachgeladene Seiten (cursor gesetzt), nicht der Zwischenspeicher vom Start.
+      const aeltereSeiten = d.mehr && cursor ? eintraege.filter((e) => !neu.has(e.id) && e.eingegangen < grenze) : [];
+      if (!aeltereSeiten.length) { mehrBekannt = d.mehr; cursor = d.vor_naechste || 0; }
       eintraege = d.eintraege.concat(aeltereSeiten);
       const y = window.scrollY;
       male();
       mehrKnopf(mehrBekannt);
       window.scrollTo(0, y);
       merke();
+      if (mehrBekannt && mehrBox.getBoundingClientRect().top < window.innerHeight + 400) nachladen();
     } catch (e) {
       if (e instanceof NetzFehler && !eintraege.length) liste.innerHTML = T('<p class="leer">Offline – noch nichts zwischengespeichert.</p>');
       else if (!(e instanceof NetzFehler)) throw e;
@@ -1202,6 +1318,7 @@ const listenKrumen = (l, ...rest) => krumen([[tx('Listen'), '/listen'], [gruppen
 // Zurück zum Verlauf stellt Filter, Liste und Scrollstand wieder her (verlaufStand).
 const zurueckHtml = (x) => {
   const nr = x.nr ? `#${x.nr}` : tx('Eintrag');
+  if (sucheHerkunft) return krumen([[tx('Suche „{0}“', sucheHerkunft), T`/suche?q=${encodeURIComponent(sucheHerkunft)}`], [nr]]);
   if (herkunft && x.liste) return listenKrumen(x.liste, [nr]);
   if (herkunft) return krumen([[tx('Listen'), '/listen'], [nr]]);
   return krumen([[tx('Verlauf'), '/'], [nr]]);
@@ -1931,7 +2048,8 @@ async function oeffneFragen(planung, typ = 'planung') {
 // Alle Listen, oder als Unterseite /listen/gruppe/<name> nur eine Gruppe ('-' = ohne Gruppe).
 async function zeigeListen(filter) {
   seite.innerHTML = T('<p class="leer">Lädt …</p>');
-  let d = null, vergangeneZeigen = false;
+  // alle: Punkte sämtlicher Listen, erst geholt, wenn „Vergangene“ aufgeklappt wird (die Übersicht lädt nur aktive Punkte).
+  let d = null, vergangeneZeigen = false, alle = null;
   // Ausgeklappt: unter jeder aktiven Liste ihre offenen (und kürzlich abgehakten) Punkte; je Gerät gemerkt.
   let ausgeklappt = false;
   try { ausgeklappt = localStorage.getItem('listen-ausgeklappt') === '1'; } catch { /* Standard: eingeklappt */ }
@@ -1948,7 +2066,7 @@ async function zeigeListen(filter) {
     };
     // Vergangene Listen sehen aus wie die aktiven: ausgeklappt mit allen (erledigten) Punkten.
     const mitAllenPunkten = (l) => {
-      const sichtbar = ausgeklappt ? (l.punkte || []) : [];
+      const sichtbar = ausgeklappt ? (alle?.get(l.id) || l.punkte || []) : [];
       return zeile(l) + (sichtbar.length ? T`<div class="lpgruppe">${sichtbar.map(punktHtml).join('')}</div>` : '');
     };
     // Je Gruppe ihre Listen; Listen ohne Gruppe unter „Ohne Gruppe“. Gruppen und Listen nach dem jüngsten Punkt, neueste oben.
@@ -1986,7 +2104,7 @@ async function zeigeListen(filter) {
         ${vergangeneZeigen ? T`<h2>Vergangen</h2>${gruppiert(vergangen, mitAllenPunkten)}` : ''}` : ''}`;
   };
   const laden = async (vorab) => {
-    try { d = await apiAbgelegt('/api/listen?punkte=1', vorab); } catch (f) {
+    try { d = await apiAbgelegt('/api/listen?punkte=aktiv', vorab); } catch (f) {
       if (vorab) return;
       if (f instanceof NetzFehler) { if (!d && aktuell?.name === 'listen') seite.innerHTML = T('<p class="leer">Offline – die Listen sind noch nicht gespeichert.</p>'); return; }
       throw f;
@@ -2008,7 +2126,18 @@ async function zeigeListen(filter) {
   seite.onclick = async (ev) => {
     const b = ev.target.closest('button');
     if (!b || !d) return;
-    if (b.dataset.vergangen) { vergangeneZeigen = !vergangeneZeigen; male(); return; }
+    if (b.dataset.vergangen) {
+      vergangeneZeigen = !vergangeneZeigen;
+      male();
+      if (vergangeneZeigen && !alle) {
+        try {
+          const voll = await api('/api/listen?punkte=1');
+          alle = new Map(voll.listen.map((x) => [x.id, x.punkte || []]));
+          male();
+        } catch (f) { if (!(f instanceof NetzFehler)) melde(f.message); }
+      }
+      return;
+    }
     if (b.dataset.ausklappen) {
       ausgeklappt = !ausgeklappt;
       try { localStorage.setItem('listen-ausgeklappt', ausgeklappt ? '1' : '0'); } catch { /* nur Komfort */ }
@@ -2037,7 +2166,7 @@ async function zeigeListen(filter) {
 // Haken in den gespeicherten Antworten nachführen: Liste und Übersicht stimmen auch offline.
 async function merkeHakenAbgelegt(listeId, punkt) {
   await aendereAbgelegt(T`/api/listen/${listeId}`, (l) => ({ ...l, punkte: l.punkte.map((x) => (x.id === punkt.id ? { ...x, erledigt: punkt.erledigt } : x)) }));
-  await aendereAbgelegt('/api/listen?punkte=1', (d) => ({ ...d, listen: d.listen.map((x) => (x.id === listeId
+  await aendereAbgelegt('/api/listen?punkte=aktiv', (d) => ({ ...d, listen: d.listen.map((x) => (x.id === listeId
     ? { ...x, offen: x.offen + (punkt.erledigt ? -1 : 1), erledigt_am: punkt.erledigt ? Math.max(x.erledigt_am || 0, punkt.erledigt) : x.erledigt_am,
       punkte: x.punkte?.map((y) => (y.id === punkt.id ? { ...y, erledigt: punkt.erledigt } : y)) }
     : x)) }));
@@ -2283,11 +2412,16 @@ async function zeigeStatus() {
     };
     // Speicher: zugeklappt je Ablage Name, belegt und Balken; aufgeklappt Pfad und frei/gesamt.
     const balken = (p) => T`<meter class="balken${p.knapp ? ' knapp' : ''}" min="0" max="${p.gesamt}" value="${p.gesamt - p.frei}" aria-label="${esc(tx('{0} von {1} belegt', groesse(p.gesamt - p.frei), groesse(p.gesamt)))}"></meter>`;
-    const speicher = (liste) => T`<details class="karte speicherkarte"><summary><span class="zeile kartentitel"><strong>Speicher</strong><span class="eingangszahl">${groesse(liste.reduce((n, p) => n + (p.belegt || 0), 0))}</span></span>${liste.map((p) => T`<span class="speicherzeile"><span class="zeile"><span>${esc(tx(p.name))}</span>${p.fehler ? T`<span class="schlecht">nicht lesbar</span>` : T`<span>${groesse(p.belegt)}</span>`}</span>
+    // Aufräumen am Ende, je ein Knopf: Backups älter als 7 Tage (das jüngste bleibt) und App-Versionen außer der laufenden.
+    // Beide Knöpfe stehen immer da; ohne Löschbares ausgegraut mit Grund (sonst sucht man den fehlenden Knopf).
+    const aufraeumen = (x) => (x ? T`<div class="leiste aufraeumen">
+      ${x.backups ? T`<button class="btn gefahr" data-aufraeumen="backups" data-n="${x.backups}" data-groesse="${x.backups_groesse}">${tx('{0} alte Backups löschen', x.backups)} · ${groesse(x.backups_groesse)}</button>` : T`<button class="btn" disabled>${tx('Keine Backups älter als 7 Tage')}</button>`}
+      ${x.versionen ? T`<button class="btn gefahr" data-aufraeumen="versionen" data-n="${x.versionen}" data-groesse="${x.versionen_groesse}">${tx('{0} alte App-Versionen löschen', x.versionen)} · ${groesse(x.versionen_groesse)}</button>` : T`<button class="btn" disabled>${tx('Keine alten App-Versionen')}</button>`}</div>` : '');
+    const speicher = (liste, x) => T`<details class="karte speicherkarte"><summary><span class="zeile kartentitel"><strong>Speicher</strong><span class="eingangszahl">${groesse(liste.reduce((n, p) => n + (p.belegt || 0), 0))}</span></span>${liste.map((p) => T`<span class="speicherzeile"><span class="zeile"><span>${esc(tx(p.name))}</span>${p.fehler ? T`<span class="schlecht">nicht lesbar</span>` : T`<span>${groesse(p.belegt)}</span>`}</span>
         ${p.fehler ? '' : balken(p)}${p.knapp ? T('<span class="hinweis schlecht">Knapp – neue Aufnahmen werden abgewiesen.</span>') : ''}</span>`).join('')}</summary>
       <div class="speicherdetails">${liste.map((p) => T`<div><strong>${esc(tx(p.name))}</strong>
         <div class="pfadzeile leise"><span class="pfad">${esc(p.pfad)}</span>${p.fehler ? '' : T`<span class="frei">frei ${groesse(p.frei)} von ${groesse(p.gesamt)}</span>`}</div>
-        ${p.fehler ? T`<div class="hinweis schlecht">nicht lesbar: ${esc(p.fehler)}</div>` : ''}</div>`).join('')}</div></details>`;
+        ${p.fehler ? T`<div class="hinweis schlecht">nicht lesbar: ${esc(p.fehler)}</div>` : ''}</div>`).join('')}${aufraeumen(x)}</div></details>`;
     const joplin = !s.joplin.aktiv ? tx('ausgeschaltet') : s.joplin.fehler ? T`<strong>Fehler:</strong> ${esc(s.joplin.fehler)}` : T`erreichbar${s.joplin.offene_planungen ? T`, ${s.joplin.offene_planungen} Planung(en) noch nicht übertragen` : ''}`;
     const updateKarte = neueVersion ? T`<a class="karte updatekarte" href="/status/update">${updateSymbol}<span><strong>Update ${esc(versionNr(neueVersion))} verfügbar</strong><br><span class="leise">Änderungen ansehen und installieren</span></span></a>` : '';
     seite.innerHTML = T`${statusReiter('status')}<h1>Status</h1>${updateKarte}
@@ -2300,7 +2434,7 @@ async function zeigeStatus() {
       ${s.joplin.aktiv ? T`<dl><dt>Joplin</dt><dd>${joplin}</dd></dl>` : ''}
       ${s.joplin.aktiv ? T('<div class="leiste"><button class="btn klein" data-a="pruefen">Joplin jetzt prüfen</button></div>') : ''}
       ${eingaenge(s)}
-      ${(s.speicher || []).length ? speicher(s.speicher) : ''}
+      ${(s.speicher || []).length ? speicher(s.speicher, s.aufraeumen) : ''}
       ${s.probleme.length ? T`<h2>Aufträge mit Fehlern</h2>${s.fehlgeschlagen ? T('<div class="leiste"><button class="btn gefahr" data-a="fehler-weg">Alle fehlerhaften löschen</button></div>') : ''}${s.probleme.map(karte).join('')}` : ''}
       <h2>Benachrichtigungen</h2>
       ${!pushDa ? T('<p class="leise">Dieser Browser unterstützt keine Benachrichtigungen. Auf dem iPhone die App erst zum Home-Bildschirm hinzufügen.</p>')
@@ -2342,6 +2476,15 @@ async function zeigeStatus() {
       if (b.dataset.geraet) {
         if (!confirm(tx('Gerät entfernen? Es kann sich danach nicht mehr anmelden.'))) return;
         await api(T`/api/geraete/${b.dataset.geraet}`, { method: 'DELETE' });
+        return laden();
+      }
+      if (b.dataset.aufraeumen) {
+        const backups = b.dataset.aufraeumen === 'backups', n = b.dataset.n, gr = groesse(Number(b.dataset.groesse));
+        if (!confirm(backups ? tx('{0} Backups älter als 7 Tage löschen ({1})? Die Backups der letzten 7 Tage und das jüngste bleiben.', n, gr)
+          : tx('{0} zwischengespeicherte App-Versionen löschen ({1})? Die laufende Version bleibt; ältere lassen sich bei Bedarf neu laden.', n, gr))) return;
+        b.disabled = true;
+        const d = await api(T`/api/speicher/aufraeumen?was=${b.dataset.aufraeumen}`, { method: 'POST' });
+        melde(backups ? tx('{0} Backups gelöscht', d.backups) : tx('{0} App-Versionen gelöscht', d.versionen));
         return laden();
       }
       switch (b.dataset.a) {
@@ -3016,7 +3159,7 @@ async function zeigeUpdate(teil) {
       ${liste.length ? (alle ? liste : liste.slice(0, 3)).map(zeile).join('') : u.fehler ? '' : T('<p class="leise">In diesem Kanal gibt es noch keine Version.</p>')}
       ${!alle && liste.length > 3 ? T`<div class="leiste"><button class="btn" data-mehr-versionen="1">Mehr (${liste.length - 3})</button></div>` : ''}
       ${liste.length && !liste.some((r) => r.neu) ? T('<p class="leise">Keine neuere Version als die installierte in diesem Kanal.</p>') : ''}
-      ${u.installierbar ? T('<p class="leise">Vor jedem Wechsel werden Datenbank, Einstellungen, Version und Kanal gesichert.</p>') : T('<div class="hinweis">Installieren aus der App braucht die Installation per <code>install.sh</code>; sonst das Skript mit <code>--version</code> ausführen.</div>')}
+      ${u.installierbar ? T('<p class="leise">Vor jedem Wechsel werden Datenbank, Einstellungen, Version und Kanal gesichert. Zurück auf eine ältere Version nur ohne Datenbank-Änderung dazwischen, sonst über ein Backup.</p>') : T('<div class="hinweis">Installieren aus der App braucht die Installation per <code>install.sh</code>; sonst das Skript mit <code>--version</code> ausführen.</div>')}
       <h2>Automatisches Update</h2>
       <nav class="btn-group unter" aria-label="Automatisches Update">${[[true, tx('An')], [false, tx('Aus')]].map(([an, n]) => T`<button class="btn${u.auto === an ? ' aktiv' : ''}" data-auto="${an ? '1' : '0'}" aria-pressed="${u.auto === an}">${n}</button>`).join('')}</nav>
       <p class="leise">${u.auto ? esc(tx('Täglich um {0} die neueste Version aus {1} installieren, wenn sie neuer ist (vorher Backup).', u.auto_zeit, u.kanal)) : tx('Aus – Updates nur von Hand.')}
@@ -3038,7 +3181,7 @@ async function zeigeUpdate(teil) {
         ${konf(tx('Ordner'), esc(b.ordner || ''), '')}</div>
       <p class="leise">${b.plan === 'aus' ? tx('Aus – Backups nur von Hand und vor Updates.') : tx('Backups vor Updates bleiben 30 Tage.')} ${tx('Den Ordner legt der Startwert BACKUP_DIR in /etc/pebble-webhook/env fest; danach install.sh erneut ausführen.')}</p>
       ${letzt ? (letzt[2] === 'ok' ? T`<p class="leise">${esc(tx('Letzter Lauf: {0}', letzt[1]))}</p>` : T`<div class="hinweis schlecht">${esc(tx('Letztes geplantes Backup fehlgeschlagen ({0}): {1}', letzt[1], letzt[3]))}</div>`) : ''}
-      <div class="leiste"><button class="btn haupt" data-sichern="1">Jetzt sichern</button></div>
+      <div class="leiste"><button class="btn haupt" data-sichern="1">Jetzt sichern</button>${u.installierbar ? T('<a class="btn" href="/status/backups/hochladen">Backup hochladen</a>') : ''}</div>
       <h2>Backups</h2>
       ${(u.backups || []).length ? T`<p class="backupsumme"><strong>${u.backups.length}</strong> Backups · <strong>${groesse(u.backups.reduce((n, st) => n + (st.groesse || 0), 0))}</strong> belegt</p>` : ''}
       <p class="leise">Jedes Backup enthält Datenbank mit allen Einstellungen, Version und Kanal. Wiederherstellen spielt die Daten ein und installiert die Version aus dem Backup; was seitdem dazukam, fehlt danach. Der jetzige Stand wird vorher gesichert.</p>
@@ -3107,6 +3250,55 @@ async function zeigeUpdate(teil) {
     }
   };
   await laden(false);
+}
+
+// ---------- Backup hochladen: eine heruntergeladene Backup-Datei einspielen ----------
+// Eigene Seite (keine Eingabefelder auf der Backup-Übersicht). Der Server nimmt nur genau die Form des Downloads an
+// und spielt sie danach sofort ein, samt der Version aus dem Backup.
+async function zeigeBackupHochladen() {
+  seite.innerHTML = T`${krumen([[tx('Backups'), '/status/backups'], [tx('Hochladen')]])}<h1>Backup hochladen</h1>
+    <p class="leise">Nur eine unveränderte Datei aus „Herunterladen“ (pebble-….tar.gz). Sie wird geprüft, abgelegt und sofort eingespielt: Daten und Einstellungen werden ersetzt, die Version aus dem Backup wird installiert. Der jetzige Stand wird vorher gesichert.</p>
+    <form id="hochladen" class="karte"><label for="backupdatei">Backup-Datei</label>
+      <input type="file" id="backupdatei" accept=".tar.gz,.gz,application/gzip" required>
+      <p class="leise" id="hochladenstand" aria-live="polite"></p>
+      <div class="leiste"><a class="btn" href="/status/backups">Abbrechen</a><button class="btn haupt" type="submit" disabled>Hochladen und einspielen</button></div></form>`;
+  const form = document.getElementById('hochladen'), feld = document.getElementById('backupdatei');
+  const knopf = form.querySelector('button[type=submit]'), stand = document.getElementById('hochladenstand');
+  const muster = /^pebble-[0-9A-Za-z.+-]+-(stable|beta|nightly|lokal)-\d{8}-\d{6}-(update|plan|manuell)(-audio)?\.tar\.gz$/;
+  feld.onchange = () => {
+    const d = feld.files[0];
+    const ok = !!d && muster.test(d.name);
+    knopf.disabled = !ok;
+    stand.textContent = d ? (ok ? tx('{0} · {1}', d.name, groesse(d.size)) : tx('Der Dateiname passt nicht zu einem Backup dieser App.')) : '';
+  };
+  form.onsubmit = (ev) => {
+    ev.preventDefault();
+    const d = feld.files[0];
+    if (!d || !confirm(tx('Backup {0} einspielen? Daten und Einstellungen werden ersetzt; was seitdem dazukam, fehlt danach. Der jetzige Stand wird vorher gesichert.', d.name))) return;
+    knopf.disabled = true;
+    feld.disabled = true;
+    // XHR statt fetch: zeigt den Fortschritt beim Hochladen.
+    const x = new XMLHttpRequest();
+    x.open('POST', T`/api/backups/hochladen?name=${encodeURIComponent(d.name)}`);
+    x.setRequestHeader('X-App', '1');
+    x.setRequestHeader('X-Sprache', SPRACHE);
+    x.upload.onprogress = (e) => { if (e.lengthComputable) stand.textContent = tx('Lädt hoch … {0} %', Math.round((e.loaded / e.total) * 100)); };
+    x.onload = () => {
+      let antwort = null;
+      try { antwort = JSON.parse(x.responseText); } catch { /* leer */ }
+      if (x.status === 200) {
+        melde(tx('Backup hochgeladen – Wiederherstellen angestoßen'));
+        geheZu('/status/backups');
+        return;
+      }
+      stand.textContent = antwort?.fehler || tx('Fehler {0}', x.status);
+      knopf.disabled = false;
+      feld.disabled = false;
+    };
+    x.onerror = () => { stand.textContent = tx('Keine Verbindung'); knopf.disabled = false; feld.disabled = false; };
+    stand.textContent = tx('Lädt hoch …');
+    x.send(d);
+  };
 }
 
 // ---------- Papierkorb: gelöschte Einträge und Planungen, wiederherstellbar bis zur Endlöschung ----------
@@ -3502,7 +3694,7 @@ async function zeigeEinrichten() {
 // ---------- Menü (Hamburger links): drei Hauptseiten, darunter ihre Unterseiten ----------
 
 // Seite → Bereich im Menü.
-const BEREICH = { kalender: 'status', ring: 'status', ringTauschen: 'status', ringBearbeiten: 'status', joplin: 'status', einstellungBearbeiten: 'status', darstellung: 'status', geraetNeu: 'status', tagsVerwalten: 'status', kosten: 'status', papierkorb: 'status', update: 'status', backups: 'status', einstellungen: 'status', einstellungenBearbeiten: 'status', pebble: 'status', gedaechtnis: 'status', gedaechtnisBearbeiten: 'status', liste: 'listen', verschieben: 'listen', listeBearbeiten: 'listen', gruppeBearbeiten: 'listen', eintrag: 'verlauf', planung: 'verlauf', tags: 'verlauf', antwort: 'verlauf', umhaengen: 'verlauf', wortlaut: 'verlauf', einsortieren: 'verlauf', suche: 'verlauf' };
+const BEREICH = { backupHochladen: 'status', kalender: 'status', ring: 'status', ringTauschen: 'status', ringBearbeiten: 'status', joplin: 'status', einstellungBearbeiten: 'status', darstellung: 'status', geraetNeu: 'status', tagsVerwalten: 'status', kosten: 'status', papierkorb: 'status', update: 'status', backups: 'status', einstellungen: 'status', einstellungenBearbeiten: 'status', pebble: 'status', gedaechtnis: 'status', gedaechtnisBearbeiten: 'status', liste: 'listen', verschieben: 'listen', listeBearbeiten: 'listen', gruppeBearbeiten: 'listen', eintrag: 'verlauf', planung: 'verlauf', tags: 'verlauf', antwort: 'verlauf', umhaengen: 'verlauf', wortlaut: 'verlauf', einsortieren: 'verlauf', suche: 'verlauf' };
 const lokal = (k, v = '') => { try { return localStorage.getItem(k) ?? v; } catch { return v; } };
 function maleMenue() {
   const name = aktuell?.name || '';
@@ -3648,8 +3840,9 @@ function zeigeVersionskarte() {
   karte.hidden = !appVersion || !versionBestaetigt || versionBestaetigt === jetzt;
   if (karte.hidden) return;
   const [altV, altK] = versionBestaetigt.split('|');
-  karte.innerHTML = T`<div class="versionszeile">${updateSymbol}<div><strong>${tx('App aktualisiert')}</strong><div class="versionswechsel"><div>${versionHtml(altV, altK)}</div><div>→ ${versionHtml(appVersion, appKanal)}</div></div><button type="button" class="linkknopf" data-version-log>${tx('Änderungen ansehen')}</button></div></div>
-    <button type="button" class="btn haupt gross" data-version-ok>${tx('Bestätigen')}</button>`;
+  // Alte und neue Version nebeneinander, darunter zwei gleich große Knöpfe nebeneinander.
+  karte.innerHTML = T`<div class="versionszeile">${updateSymbol}<div><strong>${tx('App aktualisiert')}</strong><div class="versionswechsel"><span>${versionHtml(altV, altK)}</span><span aria-hidden="true">→</span><span>${versionHtml(appVersion, appKanal)}</span></div></div></div>
+    <div class="versionsknoepfe"><button type="button" class="btn" data-version-log>${tx('Änderungen ansehen')}</button><button type="button" class="btn haupt" data-version-ok>${tx('Bestätigen')}</button></div>`;
   karte.querySelector('[data-version-log]').onclick = async (ev) => {
     ev.currentTarget.disabled = true;
     try {

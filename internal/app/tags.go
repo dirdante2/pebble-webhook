@@ -173,7 +173,7 @@ func (a *App) handleTags(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, "speicher", "Datenbankfehler")
 		return
 	}
-	// kombis: Tags je Eintrag – die Web-App zählt damit beim Auswählen, was zu den gewählten Tags noch passt.
+	// kombis: Tag-Zusammenstellungen mit ihrer Zahl an Einträgen – die Web-App zählt damit beim Auswählen, was zu den gewählten Tags noch passt.
 	writeJSON(w, 200, map[string]any{"tags": out, "kombis": sets})
 }
 

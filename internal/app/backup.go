@@ -285,6 +285,76 @@ func (a *App) cleanBackups() {
 	}
 }
 
+// cleanupKeep: Backups dieses Alters bleiben beim Aufräumen immer stehen (Nutzervorgabe 23.11.2026).
+const cleanupKeep = 7 * 24 * time.Hour
+
+// cleanupPlan: was „Aufräumen“ löschen würde – Backups älter als 7 Tage (das jüngste bleibt immer) und alle
+// zwischengespeicherten App-Versionen außer der laufenden.
+func (a *App) cleanupPlan() (backups, releases []string, backupBytes, releaseBytes int64) {
+	newest := true
+	for _, b := range a.backups() {
+		if !b.Legacy && newest {
+			newest = false
+			continue
+		}
+		if time.Since(time.UnixMilli(b.At)) < cleanupKeep {
+			continue
+		}
+		path := filepath.Join(a.Cfg.BackupDir, b.Name)
+		if b.Legacy {
+			path = filepath.Join(a.Cfg.DataDir, "backup", b.Name)
+		}
+		backups = append(backups, path)
+		backupBytes += b.Size
+	}
+	running := strings.Fields(a.Version + " ")[0]
+	cache := filepath.Join(a.Cfg.DataDir, "releases")
+	entries, _ := os.ReadDir(cache)
+	for _, e := range entries {
+		if !e.IsDir() || e.Name() == running {
+			continue
+		}
+		p := filepath.Join(cache, e.Name())
+		releases = append(releases, p)
+		releaseBytes += dirSize(p)
+	}
+	return
+}
+
+// handleCleanup: POST /api/speicher/aufraeumen?was=backups|versionen – löscht den Teil, den cleanupPlan nennt
+// (Status → Speicher, je ein Knopf).
+func (a *App) handleCleanup(w http.ResponseWriter, r *http.Request) {
+	backupMu.Lock()
+	defer backupMu.Unlock()
+	backups, releases, bb, rb := a.cleanupPlan()
+	switch r.URL.Query().Get("was") {
+	case "backups":
+		releases, rb = nil, 0
+	case "versionen":
+		backups, bb = nil, 0
+	default:
+		writeErr(w, 400, "ungueltig", "was=backups oder was=versionen")
+		return
+	}
+	nb, nr := 0, 0
+	for _, p := range backups {
+		if err := os.RemoveAll(p); err != nil {
+			logf("Aufräumen: %s: %v", p, err)
+			continue
+		}
+		nb++
+	}
+	for _, p := range releases {
+		if err := os.RemoveAll(p); err != nil {
+			logf("Aufräumen: %s: %v", p, err)
+			continue
+		}
+		nr++
+	}
+	logf("Aufräumen: %d Backups (%d KB), %d App-Versionen (%d KB) gelöscht", nb, bb/1024, nr, rb/1024)
+	writeJSON(w, 200, map[string]any{"backups": nb, "versionen": nr, "frei": bb + rb})
+}
+
 const backupLastKey = "backup-letzt" // „2026-11-22 03:00 ok <name>“ oder „… fehler <meldung>“
 
 // backupPlan: Einstellungen und letzter Lauf für die Backup-Ansicht.
@@ -394,14 +464,23 @@ func (a *App) handleUpdateRestore(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 404, "fehlt", "Backup nicht gefunden oder unvollständig")
 		return
 	}
+	if err := a.requestRestore(in.Name); err != nil {
+		writeErr(w, 500, "speicher", err.Error())
+		return
+	}
+	writeJSON(w, 200, map[string]any{"ok": true})
+}
+
+// requestRestore stößt das Einspielen eines Backups über den Updater an (install.sh: Daten ersetzen, Version aus dem
+// Backup installieren).
+func (a *App) requestRestore(name string) error {
 	repo := a.Cfg.UpdateRepo
 	if repo == "" {
 		repo = "-"
 	}
-	os.WriteFile(filepath.Join(a.Cfg.DataDir, "update-status"), []byte("requested restore "+in.Name+"\n"), 0o640)
-	if err := os.WriteFile(filepath.Join(a.Cfg.DataDir, "update-request"), []byte("restore "+in.Name+" "+repo+"\n"), 0o640); err != nil {
-		writeErr(w, 500, "speicher", "Anfrage nicht schreibbar")
-		return
+	os.WriteFile(filepath.Join(a.Cfg.DataDir, "update-status"), []byte("requested restore "+name+"\n"), 0o640)
+	if err := os.WriteFile(filepath.Join(a.Cfg.DataDir, "update-request"), []byte("restore "+name+" "+repo+"\n"), 0o640); err != nil {
+		return i18n.Errorf("Anfrage nicht schreibbar")
 	}
-	writeJSON(w, 200, map[string]any{"ok": true})
+	return nil
 }

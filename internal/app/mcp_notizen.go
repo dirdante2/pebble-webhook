@@ -105,7 +105,7 @@ func (a *App) mcpSearch(q string) string {
 	a.handleSearch(rec, httptest.NewRequest("GET", "/api/suche?q="+url.QueryEscape(q), nil))
 	var out struct {
 		Treffer []map[string]any `json:"treffer"`
-		Anzahl  int              `json:"anzahl"`
+		Mehr    bool             `json:"mehr"`
 	}
 	if rec.Code != 200 || json.Unmarshal(rec.Body.Bytes(), &out) != nil {
 		return i18n.T("Suche fehlgeschlagen")
@@ -114,8 +114,13 @@ func (a *App) mcpSearch(q string) string {
 		return i18n.Tf("Keine Treffer für „%s“ (mindestens 2 Zeichen).", q)
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, i18n.T("%d Treffer für „%s“"), out.Anzahl, q)
-	if out.Anzahl > 30 {
+	// Die Suche liefert seitenweise (50, neueste zuerst); mehr = es gibt ältere Treffer.
+	n := strconv.Itoa(len(out.Treffer))
+	if out.Mehr {
+		n += "+"
+	}
+	fmt.Fprintf(&b, i18n.T("%s Treffer für „%s“"), n, q)
+	if len(out.Treffer) > 30 {
 		b.WriteString(i18n.T(" (die ersten 30)"))
 	}
 	b.WriteString(":\n")
@@ -131,8 +136,12 @@ func (a *App) mcpSearch(q string) string {
 			art = "termin"
 		}
 		fmt.Fprintf(&b, "- #%v [%s] %v", t["nr"], art, t["titel"])
-		if f, ok := t["fundstelle"].(map[string]any); ok && f["feld"] != "Titel" {
-			fmt.Fprintf(&b, " — %v: %v", f["feld"], f["text"])
+		if fs, ok := t["fundstellen"].([]any); ok {
+			for _, x := range fs {
+				if f, ok := x.(map[string]any); ok && f["feld"] != "Titel" {
+					fmt.Fprintf(&b, " — %v: %v", f["feld"], f["text"])
+				}
+			}
 		}
 		b.WriteString("\n")
 	}

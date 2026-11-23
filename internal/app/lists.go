@@ -803,32 +803,44 @@ func (a *App) handleLists(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, "speicher", "Datenbankfehler")
 		return
 	}
-	// punkte=1 liefert die Punkte gleich mit (Auswertung und Skill sparen sich einen Abruf je Liste).
-	withItems := r.URL.Query().Get("punkte") == "1"
-	unread, err := a.DB.UnreadRefs()
-	if err != nil {
-		writeErr(w, 500, "speicher", "Datenbankfehler")
-		return
-	}
-	refs, err := a.itemRefs()
-	if err != nil {
-		writeErr(w, 500, "speicher", "Datenbankfehler")
-		return
+	// punkte=1 liefert die Punkte gleich mit (Auswertung und Skill sparen sich einen Abruf je Liste);
+	// punkte=aktiv nur offene und kürzlich erledigte (Listenübersicht der Web-App, klein auch bei großem Bestand).
+	// Alle Punkte kommen in einer Abfrage, nicht eine je Liste.
+	withItems := r.URL.Query().Get("punkte")
+	byList := map[string][]map[string]any{}
+	if withItems == "1" || withItems == "aktiv" {
+		unread, err := a.DB.UnreadRefs()
+		if err != nil {
+			writeErr(w, 500, "speicher", "Datenbankfehler")
+			return
+		}
+		refs, err := a.itemRefs()
+		if err != nil {
+			writeErr(w, 500, "speicher", "Datenbankfehler")
+			return
+		}
+		var after int64
+		if withItems == "aktiv" {
+			after = a.pastBefore()
+		}
+		items, err := a.DB.ItemsActive(after)
+		if err != nil {
+			writeErr(w, 500, "speicher", "Datenbankfehler")
+			return
+		}
+		for _, it := range items {
+			m := withRead(itemJSON(it), it, unread)
+			m["ref"] = refs[it.ID]
+			byList[it.ListID] = append(byList[it.ListID], m)
+		}
 	}
 	out := make([]map[string]any, 0, len(lists))
 	for _, l := range lists {
 		m := listJSON(l)
-		if withItems {
-			items, err := a.DB.ListItems(l.ID)
-			if err != nil {
-				writeErr(w, 500, "speicher", "Datenbankfehler")
-				return
-			}
-			list := make([]map[string]any, 0, len(items))
-			for _, it := range items {
-				m := withRead(itemJSON(it), it, unread)
-				m["ref"] = refs[it.ID]
-				list = append(list, m)
+		if withItems == "1" || withItems == "aktiv" {
+			list := byList[l.ID]
+			if list == nil {
+				list = []map[string]any{}
 			}
 			m["punkte"] = list
 		}

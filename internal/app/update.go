@@ -84,8 +84,9 @@ const updateInterval = 4 * time.Hour
 // Eigene Builds tragen X.Y.Z.A: A ist ein lokaler Build-Zähler (deploy.sh, nie in Git oder Releases).
 var semverRe = regexp.MustCompile(`^v?(\d+)\.(\d+)\.(\d+)(?:\.(\d+))?(?:-(stable|beta|nightly)(?:\.(\d+))?)?$`)
 
-// minRollback: ältere Versionen lesen die Einstellungen noch aus der env-Datei.
-var minRollback = version{1, 14, 0, 2, 0, 0}
+// minRollback: ältere Versionen kennen den Schema-Stand der Datenbank nicht (PRAGMA user_version, seit 2.0.0) –
+// der Installer lehnt sie ab, sobald die Datenbank einen Stand trägt. Zurück dorthin nur über ein Backup.
+var minRollback = version{2, 0, 0, 0, 0, 0}
 
 // version ist sortierbar: Basis, dann Rang (nightly < beta < stable), dann Nummer der Vorabversion, dann der
 // lokale Build-Zähler A.
@@ -554,7 +555,7 @@ func (a *App) handleUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	out := map[string]any{"aktuell": current, "quelle": a.Cfg.UpdateRepo, "kanal": a.updateChannel(), "kanaele": []string{"stable", "beta", "nightly"},
 		"installierbar": updateInstallable(), "status": a.updateStatus(), "versionen": []channelRelease{},
-		"mindestens": "1.14.0", "backups": a.backups(), "backup": a.backupPlan(), "auto": a.autoUpdateOn(), "auto_zeit": a.Cfg.AutoUpdateTime, "auto_letzt": func() string { v, _ := a.DB.Get(autoUpdateKey); return v }(), "aktuell_aenderungen": now, "alle_aenderungen": allNotes}
+		"mindestens": "2.0.0", "backups": a.backups(), "backup": a.backupPlan(), "auto": a.autoUpdateOn(), "auto_zeit": a.Cfg.AutoUpdateTime, "auto_letzt": func() string { v, _ := a.DB.Get(autoUpdateKey); return v }(), "aktuell_aenderungen": now, "alle_aenderungen": allNotes}
 	if seit := r.URL.Query().Get("seit"); seit != "" {
 		out["seit_aenderungen"] = notesSince(seit, current, a.updateChannel())
 	}
@@ -640,7 +641,7 @@ func (a *App) handleUpdateInstall(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if v, _, _ := parseVersion(in.Version); v.less(minRollback) {
-		writeErr(w, http.StatusConflict, "zu_alt", "Versionen vor 1.14.0 lesen die Einstellungen nicht aus der Datenbank")
+		writeErr(w, http.StatusConflict, "zu_alt", "Versionen vor 2.0.0 kennen den Datenbank-Stand nicht – zurück nur über ein Backup")
 		return
 	}
 	if a.Cfg.UpdateRepo == "" || !updateInstallable() {

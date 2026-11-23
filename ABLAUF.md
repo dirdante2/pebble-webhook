@@ -107,7 +107,7 @@ In der Web-App und in Joplin heißt die Art „Notiz“ (Nutzervorgabe 15.11.202
 2. Bei Diktat (Auswertung) und Planung (Recherche-Aufruf) bekommt die KI die Liste „Vorhandene Tags“ und liefert `tags` (Auswahl aus dem Vorrat) und `neue_tags` (höchstens 2 Vorschläge).
 3. Tags aus dem Vorrat werden sofort vergeben. Alles, was es noch nicht gibt, bleibt ein Vorschlag am Eintrag.
 4. Web-App: Vorschlag „Übernehmen“ (→ Tag, ab dann im Vorrat) oder „Verwerfen“ (`POST …/tags/vorschlag`); „Tags ändern“ öffnet eine eigene Seite (`POST …/tags` setzt die Liste).
-5. Verlauf: Trichter rechts in der Suchleiste (nur im Verlauf) → Dialog mit Mehrfachauswahl; jeder Tipp filtert sofort (`GET /api/verlauf?tag=a&tag=b`, UND, kombinierbar mit den Filterknöpfen). Zahlen und Ausgrauen rechnet die Web-App aus `kombis` von `GET /api/tags` (Tags je Eintrag): ausgegraut ist, was mit der Auswahl nie zusammen vorkommt. Aktiver Filter steht über der Liste mit „✕ Zurücksetzen“ (ohne Dialog). Zahl am Trichter = gewählte Tags.
+5. Verlauf: Trichter rechts in der Suchleiste (nur im Verlauf) → Dialog mit Mehrfachauswahl; jeder Tipp filtert sofort (`GET /api/verlauf?tag=a&tag=b`, UND, kombinierbar mit den Filterknöpfen). Zahlen und Ausgrauen rechnet die Web-App aus `kombis` von `GET /api/tags` (Tag-Zusammenstellungen mit Anzahl): ausgegraut ist, was mit der Auswahl nie zusammen vorkommt. Aktiver Filter steht über der Liste mit „✕ Zurücksetzen“ (ohne Dialog). Zahl am Trichter = gewählte Tags.
 6. Joplin: je Tag ein Schlagwort (Id aus dem Namen abgeleitet) und je Notiz eine Zuordnung; entfernte Tags lösen die Zuordnung. Geänderte Tags fertiger Einträge schiebt der Worker nach.
 7. Löschen (seit 21.11.2026): Einstellungen → Tags listet jeden Tag mit Zahl und letzter Verwendung; „Löschen“ → `DELETE /api/tags/{name}` nimmt ihn aus Tags und Vorschlägen aller Notizen und Planungen (auch im Papierkorb), setzt `joplin_dirty`; der Worker löst die Joplin-Zuordnungen.
 
@@ -246,13 +246,21 @@ Token-Routen (alles andere bleibt bei der Passkey-Sitzung, kein Löschen): `GET 
 
 ## Updates (seit 1.14.0)
 
-1. Hintergrund-Prüfung (`CheckUpdates`): 1 min nach dem Start, dann alle 4 h die Releases von `UPDATE_REPO`. Neue Version des aktiven Kanals → `GET /api/zaehler` liefert `update` → Pfeil-Symbol an „Status“ und Hinweiskarte auf der Statusseite → Klick öffnet Status → Updates (`GET /api/update`, aus dem Zwischenspeicher, „Jetzt prüfen“ = `?pruefen=1`): Versionen des aktiven Kanals (`UPDATE_CHANNEL`) samt stabilerer: stable nur stable, beta + stable, nightly alle drei (`channelsFor`); „neu“ = später veröffentlicht, aus fremdem Kanal zusätzlich höhere Nummer (außer eigener Build), Kanal per Auswahlliste → `POST /api/update/kanal` (sofort wirksam, ohne Neustart); „Ältere Version installieren“ bis 1.14.0 (ältere lesen die Einstellungen nicht aus der Datenbank). Reihenfolge: Basisversion, dann nightly < beta < stable, dann Nummer.
+1. Hintergrund-Prüfung (`CheckUpdates`): 1 min nach dem Start, dann alle 4 h die Releases von `UPDATE_REPO`. Neue Version des aktiven Kanals → `GET /api/zaehler` liefert `update` → Pfeil-Symbol an „Status“ und Hinweiskarte auf der Statusseite → Klick öffnet Status → Updates (`GET /api/update`, aus dem Zwischenspeicher, „Jetzt prüfen“ = `?pruefen=1`): Versionen des aktiven Kanals (`UPDATE_CHANNEL`) samt stabilerer: stable nur stable, beta + stable, nightly alle drei (`channelsFor`); „neu“ = später veröffentlicht, aus fremdem Kanal zusätzlich höhere Nummer (außer eigener Build), Kanal per Auswahlliste → `POST /api/update/kanal` (sofort wirksam, ohne Neustart); „Ältere Version installieren“ bis 2.0.0 (ältere kennen den Datenbank-Stand nicht). Reihenfolge: Basisversion, dann nightly < beta < stable, dann Nummer.
 2. „Installieren“ → `POST /api/update` → App schreibt `DATA_DIR/update-request` („owner/repo X.Y.Z[-beta.N|-nightly.N]“) und `update-status`.
 3. `pebble-webhook-update.path` → `install.sh --apply-request` als root: Anfrage prüfen (Muster), Dienst stoppen, laufenden Stand als Archiv nach `BACKUP_DIR` sichern (Art update, 30 Tage; Programm + DB zusätzlich nur für diesen Lauf in `$TMP`), Release laden (Vorrat `DATA_DIR/releases`), `SHA256SUMS` prüfen, Binary und Updater ersetzen, Dienst starten, 30 s `/healthz` – sonst Programm + DB zurück, `update-status` = `done X` bzw. `error: …`.
 4. Web-App fragt alle 2 s nach, bis die neue Version läuft.
 5. Ausrollen auf den eigenen Server: `deploy/deploy.sh` (verlangt Abschnitt in `CHANGELOG.md`, ruft `install.sh --binary`, sichert dabei ebenfalls die Datenbank).
 6. Veröffentlichen: Push auf main baut nichts. Danach aktiv `deploy/release.sh [nightly|beta|stable]` (Vorgabe nightly) → prüft VERSION = gepushter Stand, setzt und pusht genau einen Tag `vX.Y.Z-<kanal>` → GitHub Actions (`.github/workflows/release.yml`) prüft Tag = `VERSION`, baut, veröffentlicht, verschiebt den Kanal-Release; nightly: Notizen aus `CHANGELOG.md`, 10 neueste bleiben; beta/stable: Abschnitt in `RELEASES.md` Pflicht. Bei beta/stable keine nightly derselben Version – die Update-Seite bietet über Kanäle hinweg an.
 
+
+## Datenbank-Stand und Migrationen (seit 2.0.0)
+
+1. `PRAGMA user_version` = Schema-Stand der Datenbank; `store.SchemaVersion` = Stand, den das Programm kennt (`pebble-webhook schema [DATEI]` gibt beide aus).
+2. Start (`store.Open` → `migrate`): Stand 0 (jede Version vor 2.0.0) → `migrateBase` (alle Umbauten bis 2.0.0, idempotent) → 1; danach jeder Schritt aus `migrations` der Reihe nach in je einer Transaktion samt neuem Stand – auch über übersprungene Versionen. Neue Änderungen nur als neuer Schritt anhängen, nie alte ändern.
+3. Datenbank neuer als das Programm → Start verweigert („zurück nur über ein Backup“).
+4. Installer (`install.sh`, Schritt 1b, vor dem Stoppen): Stand der Datenbank (bei Wiederherstellen die aus dem Backup) gegen den Stand des Ziel-Programms (ohne `schema`-Befehl = 0); größer → `error: database schema …`, nichts geändert. Gleich oder kleiner → Wechsel (zurück also nur ohne DB-Änderung dazwischen).
+5. Wiederherstellen eines Backups bringt DB und passende Version zusammen zurück; Ältere Version in der App erst ab 2.0.0 (`minRollback`).
 
 ## Backups (seit 1.29.0)
 

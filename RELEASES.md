@@ -4,6 +4,32 @@ Summarised notes for **beta** and **stable** releases. Each section lists only w
 
 A tag `vX.Y.Z-stable` (stable; before 1.33.5 `vX.Y.Z`) or `vX.Y.Z-beta` (beta) needs a section `## [X.Y.Z]` or `## [X.Y.Z-beta]` here; the release workflow uses it as the release notes.
 
+## [2.0.0] - 2026-11-23
+
+### Database
+- Schema version: migrations run in order, also across skipped versions.
+- Going back only without database changes in between, otherwise via a backup; versions before 2.0.0 are no longer offered.
+
+### History
+- Toggle "only open ↔ all" for all tabs (default only open); swipe hint below the list.
+- One group per day; endless loading; counters include unloaded entries.
+- Done entries show only header and title; last 24 h only the time.
+- Number of planning rounds next to the type badge.
+
+### Search
+- On the server: all words must match, text/title before tags, newest first.
+- Match shown per word; words highlighted on the detail page.
+
+### Backups and status
+- Upload a backup and restore it directly.
+- Storage: database and app versions separate; delete old backups (older than 7 days) and old app versions.
+- Inputs: words per recording (last 30 days).
+
+### Other
+- "App updated" card lists all changes since the last confirmed version.
+- Ko-fi link in the menu and on the status page.
+- Faster with 10k+ entries.
+
 ## [1.35.1] - 2026-11-22
 
 ### Releases

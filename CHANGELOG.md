@@ -9,6 +9,28 @@ Version numbers X.Y.Z:
 
 Own builds show X.Y.Z.A: **A** is a local build counter (one per deployed change, starting at 1 for every new X.Y.Z); it never appears in Git or releases, so one version can collect several changes.
 
+## [2.0.0] - 2026-11-23
+
+### New
+- Database schema version: migrations run in order at start, also across skipped versions.
+- History: toggle "only open ↔ all" at the end of the tab bar, for all history tabs (default only open).
+- History: swipe hint below the list.
+- Search on the server: all words must match, text/title before tags, newest first, endless loading.
+- Search: match shown per word; search kept on back; words highlighted on the detail page.
+- Backups: upload an archive and restore it directly (only the exact download format).
+- Status → Storage: database and cached app versions separate; delete backups older than 7 days and old app versions.
+
+### Changed
+- Going back to an older version only without database changes in between, otherwise via a backup; versions before 2.0.0 are no longer offered.
+- History: one group per day under "Recent"; endless loading instead of "Show all"; counters include unloaded entries.
+- History loads new entries first, then 10, then 50 per scroll.
+- Update card: versions side by side; "View changes" and "Confirm" side by side.
+- Lists page loads open and recently done items; past ones on demand.
+- Faster with 10k+ entries: indexes, full-text search index, aggregated tags.
+
+### Fixed
+- Hiding done entries no longer shows more entries than showing all.
+
 ## [1.37.0] - 2026-11-22
 
 ### New

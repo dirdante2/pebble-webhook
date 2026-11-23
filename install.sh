@@ -174,6 +174,30 @@ case "$MODE" in
 esac
 "$TMP/pebble-webhook" version >/dev/null
 
+# --- 1b. database schema: going forward the program runs every migration step in order at start (also across
+#         skipped versions); going back only to a version that knows the database's schema (no database changes in
+#         between) – otherwise only by restoring a backup made with that version. Programs before the schema
+#         number (no "schema" command) count as 0. ---
+SCHEMA_DB=""
+if [ -n "${RESTORE_DATA:-}" ]; then SCHEMA_DB="$TMP/restore/pebble.db"
+elif [ "$MODE" != restore ] && [ -f "$DATA_DIR/pebble.db" ]; then SCHEMA_DB="$DATA_DIR/pebble.db"; fi
+if [ -n "$SCHEMA_DB" ] && id pebble >/dev/null 2>&1; then
+    APP_SCHEMA="$("$TMP/pebble-webhook" schema 2>/dev/null || true)"
+    [[ "$APP_SCHEMA" =~ ^[0-9]+$ ]] || APP_SCHEMA=0
+    DB_SCHEMA=""
+    for b in "$TMP/pebble-webhook" /usr/local/bin/pebble-webhook; do
+        [ -x "$b" ] || continue
+        DB_SCHEMA="$(runuser -u pebble -- "$b" schema "$SCHEMA_DB" 2>/dev/null || true)"
+        [[ "$DB_SCHEMA" =~ ^[0-9]+$ ]] && break
+        DB_SCHEMA=""
+    done
+    if [ -n "$DB_SCHEMA" ] && [ "$DB_SCHEMA" -gt "$APP_SCHEMA" ]; then
+        status "error: database schema $DB_SCHEMA is newer than ${VERSION:-this version} knows ($APP_SCHEMA) – going back only by restoring a backup"
+        exit 1
+    fi
+    echo "Database schema ${DB_SCHEMA:-?} → program knows $APP_SCHEMA"
+fi
+
 # --- 2. user, directories, start values ---
 id pebble >/dev/null 2>&1 || useradd --system --home-dir "$DATA_DIR" --shell /usr/sbin/nologin pebble
 install -d -o pebble -g pebble -m 0750 "$DATA_DIR" "$DATA_DIR/audio" "$BACKUP_DIR"

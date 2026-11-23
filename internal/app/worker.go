@@ -44,6 +44,10 @@ func (a *App) Run(ctx context.Context) {
 		a.remindDue()
 		a.trainIfDue(ctx)
 		a.learnObservations(ctx)
+		// Suchindex nachziehen (beim ersten Mal ganz – bei großem Bestand einige Sekunden), damit die Suche selbst kaum warten muss.
+		if err := a.DB.SearchSync(); err != nil {
+			logf("Suchindex: %v", err)
+		}
 		if time.Since(lastCleanup) > 24*time.Hour {
 			a.Cleanup()
 			lastCleanup = time.Now()

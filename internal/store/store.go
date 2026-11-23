@@ -9,6 +9,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -246,9 +249,85 @@ func Open(path string) (*Store, error) {
 		}
 		return nil, fmt.Errorf("Datenbank beschädigt (quick_check): %w", err)
 	}
-	if _, err := db.Exec(schema + ringSchema); err != nil {
+	if err := migrate(db); err != nil {
 		db.Close()
-		return nil, fmt.Errorf("Schema: %w", err)
+		return nil, err
+	}
+	return &Store{DB: db}, nil
+}
+
+// SchemaVersion: Stand der Datenbank, den dieses Programm kennt (PRAGMA user_version). Jede Änderung an Tabellen
+// oder Daten ist ein weiterer Schritt in migrations; Schritte werden nie geändert oder entfernt, nur angehängt.
+var SchemaVersion = len(migrations)
+
+// migrations: Eintrag i hebt die Datenbank von Stand i auf i+1 und läuft samt neuem Stand in einer Transaktion
+// (scheitert er, bleibt die Datenbank auf Stand i). Eintrag 0 bleibt leer: Stand 1 ist migrateBase.
+var migrations = []func(*sql.Tx) error{
+	nil, // Stand 1: migrateBase
+}
+
+// migrate bringt die Datenbank Schritt für Schritt auf SchemaVersion – auch über übersprungene Versionen hinweg.
+// Eine neuere Datenbank (nach Rückwechsel auf eine ältere Version) wird nicht angefasst: zurück nur über ein Backup.
+func migrate(db *sql.DB) error {
+	var v int
+	if err := db.QueryRow(`PRAGMA user_version`).Scan(&v); err != nil {
+		return fmt.Errorf("Schema: %w", err)
+	}
+	if v > SchemaVersion {
+		return fmt.Errorf("Datenbank hat Schema %d, diese Version kennt nur %d – zurück nur über ein Backup", v, SchemaVersion)
+	}
+	if v == 0 {
+		// Bestand bis 2.0.0: idempotent mit eigenen Transaktionen; bricht er ab, läuft er beim nächsten Start erneut.
+		if err := migrateBase(db); err != nil {
+			return err
+		}
+		if _, err := db.Exec(`PRAGMA user_version = 1`); err != nil {
+			return fmt.Errorf("Schema 1: %w", err)
+		}
+		v = 1
+	}
+	for ; v < SchemaVersion; v++ {
+		if err := migrateStep(db, v); err != nil {
+			return fmt.Errorf("Schema %d: %w", v+1, err)
+		}
+	}
+	return nil
+}
+
+func migrateStep(db *sql.DB, v int) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err := migrations[v](tx); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(fmt.Sprintf(`PRAGMA user_version = %d`, v+1)); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// DBSchema liest den Schema-Stand einer Datenbankdatei nur lesend (für den Installer: Wechsel nur, wenn das Ziel ihn kennt).
+func DBSchema(path string) (int, error) {
+	if _, err := os.Stat(path); err != nil {
+		return 0, err
+	}
+	db, err := sql.Open("sqlite", "file:"+path+"?mode=ro")
+	if err != nil {
+		return 0, err
+	}
+	defer db.Close()
+	var v int
+	err = db.QueryRow(`PRAGMA user_version`).Scan(&v)
+	return v, err
+}
+
+// migrateBase: Schema-Stand 1 – alle Tabellen, Spalten und Datenumbauten bis 2.0.0 (je Schritt idempotent).
+func migrateBase(db *sql.DB) error {
+	if _, err := db.Exec(schema + ringSchema); err != nil {
+		return fmt.Errorf("Schema: %w", err)
 	}
 	// Spalten, die nach der ersten Fassung dazukamen (bestehende Datenbanken).
 	for _, col := range []string{"jobs ADD COLUMN cost_transcribe_usd REAL", "jobs ADD COLUMN cost_aux_usd REAL",
@@ -267,19 +346,16 @@ func Open(path string) (*Store, error) {
 		"jobs ADD COLUMN deleted_at INTEGER NOT NULL DEFAULT 0", "plannings ADD COLUMN deleted_at INTEGER NOT NULL DEFAULT 0",
 		"list_items ADD COLUMN deleted_at INTEGER NOT NULL DEFAULT 0"} {
 		if _, err := db.Exec(`ALTER TABLE ` + col); err != nil && !strings.Contains(err.Error(), "duplicate column") {
-			db.Close()
-			return nil, fmt.Errorf("Schema: %w", err)
+			return fmt.Errorf("Schema: %w", err)
 		}
 	}
 	// Gelesen-Stand: Was beim Anlegen der Spalte schon da ist, gilt als gelesen.
 	if _, err := db.Exec(`ALTER TABLE jobs ADD COLUMN read_at INTEGER NOT NULL DEFAULT 0`); err == nil {
 		if _, err := db.Exec(`UPDATE jobs SET read_at = received_at`); err != nil {
-			db.Close()
-			return nil, fmt.Errorf("Schema: %w", err)
+			return fmt.Errorf("Schema: %w", err)
 		}
 	} else if !strings.Contains(err.Error(), "duplicate column") {
-		db.Close()
-		return nil, fmt.Errorf("Schema: %w", err)
+		return fmt.Errorf("Schema: %w", err)
 	}
 	// Erledigt-Stand je Notiz (21.11.2026): übernimmt bestätigte Termine (termin_ok_at, seitdem unbenutzt) und
 	// Notizen, deren Listenpunkte alle abgehakt sind.
@@ -291,23 +367,19 @@ func Open(path string) (*Store, error) {
 			 AND NOT EXISTS (SELECT 1 FROM list_items WHERE job_id = jobs.id AND done_at = 0)`,
 		} {
 			if _, err := db.Exec(q); err != nil {
-				db.Close()
-				return nil, fmt.Errorf("Schema: %w", err)
+				return fmt.Errorf("Schema: %w", err)
 			}
 		}
 	} else if !strings.Contains(err.Error(), "duplicate column") {
-		db.Close()
-		return nil, fmt.Errorf("Schema: %w", err)
+		return fmt.Errorf("Schema: %w", err)
 	}
 	// Einsortieren abgeschlossener Planungen: was beim Anlegen der Spalte schon geschlossen ist, gilt als beurteilt.
 	if _, err := db.Exec(`ALTER TABLE plannings ADD COLUMN sorted_at INTEGER NOT NULL DEFAULT 0`); err == nil {
 		if _, err := db.Exec(`UPDATE plannings SET sorted_at = updated_at WHERE status = 'geschlossen'`); err != nil {
-			db.Close()
-			return nil, fmt.Errorf("Schema: %w", err)
+			return fmt.Errorf("Schema: %w", err)
 		}
 	} else if !strings.Contains(err.Error(), "duplicate column") {
-		db.Close()
-		return nil, fmt.Errorf("Schema: %w", err)
+		return fmt.Errorf("Schema: %w", err)
 	}
 	// Altbestand: Dauerfehler ohne Zeitpunkt bekommen den der letzten Änderung; leere Transkriptionen werden als leer markiert.
 	for _, q := range []string{
@@ -316,68 +388,76 @@ func Open(path string) (*Store, error) {
 			AND (error LIKE '%Transkription ist leer%' OR error LIKE '%kein Transkript mitgeschickt%')`,
 	} {
 		if _, err := db.Exec(q); err != nil {
-			db.Close()
-			return nil, fmt.Errorf("Schema: %w", err)
+			return fmt.Errorf("Schema: %w", err)
 		}
 	}
 	// Fehlaufnahmen und Gelöschtes je Aufnahme (22.11.2026): dauerhaft in ring_recordings, weil leere Aufnahmen und
 	// Endgelöschtes aus jobs verschwinden. Beim Anlegen fehlt ein Eintrag nur nach dem Purge leerer Aufnahmen
 	// (der Papierkorb wurde vor den Ringen nie endgültig geleert) – solche Zeilen gelten als Fehlaufnahme.
 	if err := migrateRecordingFlags(db); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("Schema: Aufnahmen: %w", err)
+		return fmt.Errorf("Schema: Aufnahmen: %w", err)
 	}
 	if err := migrateLists(db); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("Schema: Listen: %w", err)
+		return fmt.Errorf("Schema: Listen: %w", err)
 	}
 	// Beschreibung je Liste (von der KI wöchentlich aus den jüngsten Punkten gepflegt).
 	for _, col := range []string{"lists ADD COLUMN description TEXT NOT NULL DEFAULT ''", "lists ADD COLUMN described_at INTEGER NOT NULL DEFAULT 0"} {
 		if _, err := db.Exec(`ALTER TABLE ` + col); err != nil && !strings.Contains(err.Error(), "duplicate column") {
-			db.Close()
-			return nil, fmt.Errorf("Schema: %w", err)
+			return fmt.Errorf("Schema: %w", err)
 		}
 	}
 	// Feste Nummer je Liste (L12): beim Anlegen der Spalte nach Alter vergeben.
 	if _, err := db.Exec(`ALTER TABLE lists ADD COLUMN nr INTEGER NOT NULL DEFAULT 0`); err == nil {
 		if _, err := db.Exec(`UPDATE lists SET nr = (SELECT COUNT(*) FROM lists o WHERE o.created_at < lists.created_at OR (o.created_at = lists.created_at AND o.id <= lists.id))`); err != nil {
-			db.Close()
-			return nil, fmt.Errorf("Schema: Listennummern: %w", err)
+			return fmt.Errorf("Schema: Listennummern: %w", err)
 		}
 	} else if !strings.Contains(err.Error(), "duplicate column") {
-		db.Close()
-		return nil, fmt.Errorf("Schema: %w", err)
+		return fmt.Errorf("Schema: %w", err)
 	}
 	// Jede Gruppe, die schon Listen hat, steht auch in list_groups.
 	if _, err := db.Exec(`INSERT OR IGNORE INTO list_groups (name) SELECT DISTINCT project FROM lists WHERE project != ''`); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("Schema: Gruppen: %w", err)
+		return fmt.Errorf("Schema: Gruppen: %w", err)
 	}
 	// Termine (21.11.2026): ganztägig nur noch, wenn ausdrücklich gesagt; bisherige ganztägige werden einmalig 07:00.
 	if _, err := db.Exec(`INSERT INTO kv (k, v) VALUES ('termine_7uhr', '1')`); err == nil {
 		if _, err := db.Exec(`UPDATE jobs SET termin_at = termin_at + 7*3600000, termin_ganztag = 0 WHERE termin_ganztag = 1`); err != nil {
-			db.Close()
-			return nil, fmt.Errorf("Schema: Termine: %w", err)
+			return fmt.Errorf("Schema: Termine: %w", err)
 		}
 	} else if !strings.Contains(err.Error(), "UNIQUE") {
-		db.Close()
-		return nil, fmt.Errorf("Schema: %w", err)
+		return fmt.Errorf("Schema: %w", err)
 	}
 	// Nachtrag: deren Erinnerung stand auf Mitternacht; sie gilt jetzt zum Termin (07:00).
 	if _, err := db.Exec(`INSERT INTO kv (k, v) VALUES ('termine_7uhr_erinnerung', '1')`); err == nil {
 		if _, err := db.Exec(`UPDATE jobs SET erinnerung_at = termin_at WHERE termin_at > 0 AND erinnerung_at = termin_at - 7*3600000 AND erinnert_at = 0`); err != nil {
-			db.Close()
-			return nil, fmt.Errorf("Schema: Termine: %w", err)
+			return fmt.Errorf("Schema: Termine: %w", err)
 		}
 	} else if !strings.Contains(err.Error(), "UNIQUE") {
-		db.Close()
-		return nil, fmt.Errorf("Schema: %w", err)
+		return fmt.Errorf("Schema: %w", err)
 	}
 	if err := backfillNr(db); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("Schema: Nummern: %w", err)
+		return fmt.Errorf("Schema: Nummern: %w", err)
 	}
-	return &Store{DB: db}, nil
+	// Suchindex der ersten Fassung (ohne eigene Tags-Spalte) verwerfen; SearchSync baut ihn neu auf.
+	var ftsTags int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('suche') WHERE name = 'tags'`).Scan(&ftsTags); err == nil && ftsTags == 0 {
+		db.Exec(`DROP TABLE IF EXISTS suche`)
+		db.Exec(`DELETE FROM kv WHERE k = 'suche_stand'`)
+	}
+	// Indizes für großen Bestand (zehntausende Einträge): Verlauf, Zähler und Termine lesen nur den Index,
+	// nicht die breiten Zeilen mit Wortlaut und Auswertung.
+	for _, q := range []string{
+		`CREATE INDEX IF NOT EXISTS jobs_verlauf ON jobs(planning_id, deleted_at, received_at, mode, termin_at, erledigt_at, read_at, empty)`,
+		`CREATE INDEX IF NOT EXISTS jobs_termin ON jobs(termin_at) WHERE termin_at > 0`,
+		`CREATE INDEX IF NOT EXISTS list_items_done ON list_items(list_id, deleted_at, done_at)`,
+		// Suchindex (Volltext, Trigramme: Teilwörter ab 3 Zeichen, Groß/klein egal auch bei Umlauten). Je Notiz bzw.
+		// Planung eine Zeile; SearchSync hält ihn über updated_at nach.
+		`CREATE VIRTUAL TABLE IF NOT EXISTS suche USING fts5(kind UNINDEXED, ref UNINDEXED, text, tags, tokenize = 'trigram case_sensitive 0')`,
+	} {
+		if _, err := db.Exec(q); err != nil {
+			return fmt.Errorf("Schema: Index: %w", err)
+		}
+	}
+	return nil
 }
 
 // migrateLists baut die Tabelle lists einmalig um: früher war der Name allein eindeutig,
@@ -605,7 +685,9 @@ type HistRef struct {
 // since > 0 beschränkt auf Ungelesenes und alles ab diesem Zeitpunkt; 0 = der ganze Verlauf.
 // mode: "" = alle; "offen" = Notiz/Termin nicht erledigt, Planung nicht geschlossen (Zähler);
 // "ungelesen" = noch nicht aufgerufen (Zähler „neu“).
-func historyQuery(kind string, tags []string, since int64, mode string) (string, []any) {
+// before/limit > 0 (nur HistoryRefs): jeder Teil liest höchstens limit Einträge vor before – über den Index in
+// Zeitfolge, statt den ganzen Bestand zu sammeln und zu sortieren.
+func historyQuery(kind string, tags []string, since int64, mode string, before int64, limit int) (string, []any) {
 	var args []any
 	// Tags liegen als JSON-Liste in der Spalte; Tag-Namen enthalten nie Anführungs- oder LIKE-Zeichen.
 	var likes []any
@@ -635,6 +717,10 @@ func historyQuery(kind string, tags []string, since int64, mode string) (string,
 	case "ungelesen":
 		q += ` AND read_at = 0`
 	}
+	if limit > 0 {
+		q = `SELECT * FROM (` + q + ` AND received_at < ? ORDER BY received_at DESC LIMIT ?)`
+		args = append(args, before, limit)
+	}
 	if kind != "diktat" && kind != "termin" {
 		q += ` UNION ALL SELECT 'planung', planning_id, MAX(received_at) FROM jobs WHERE deleted_at = 0 AND planning_id != ''
 			AND planning_id IN (SELECT id FROM plannings WHERE deleted_at = 0)`
@@ -649,20 +735,28 @@ func historyQuery(kind string, tags []string, since int64, mode string) (string,
 			args = append(args, likes...)
 		}
 		q += ` GROUP BY planning_id`
+		var having []string
 		if since > 0 {
-			q += ` HAVING MAX(received_at) >= ?`
+			having = append(having, `MAX(received_at) >= ?`)
 			args = append(args, since)
+		}
+		if limit > 0 {
+			having = append(having, `MAX(received_at) < ?`)
+			args = append(args, before)
+		}
+		if len(having) > 0 {
+			q += ` HAVING ` + strings.Join(having, ` AND `)
 		}
 	}
 	return q, args
 }
 
-// HistoryRefs liefert den Verlauf absteigend; before=0 beginnt beim neuesten.
-func (s *Store) HistoryRefs(kind string, tags []string, before int64, limit int, since int64) ([]HistRef, error) {
+// HistoryRefs liefert den Verlauf absteigend; before=0 beginnt beim neuesten. mode wie historyQuery ("" oder "offen").
+func (s *Store) HistoryRefs(kind string, tags []string, before int64, limit int, since int64, mode string) ([]HistRef, error) {
 	if before <= 0 {
 		before = 1 << 62
 	}
-	q, args := historyQuery(kind, tags, since, "")
+	q, args := historyQuery(kind, tags, since, mode, before, limit)
 	args = append(args, before, limit)
 	rows, err := s.DB.Query(`SELECT kind, id, at FROM (`+q+`) WHERE at < ? ORDER BY at DESC LIMIT ?`, args...)
 	if err != nil {
@@ -681,15 +775,15 @@ func (s *Store) HistoryRefs(kind string, tags []string, before int64, limit int,
 }
 
 // HistoryCount zählt die Einträge des Verlaufs unter denselben Filtern wie HistoryRefs.
-func (s *Store) HistoryCount(kind string, tags []string, since int64) (n int, err error) {
-	q, args := historyQuery(kind, tags, since, "")
+func (s *Store) HistoryCount(kind string, tags []string, since int64, mode string) (n int, err error) {
+	q, args := historyQuery(kind, tags, since, mode, 0, 0)
 	err = s.DB.QueryRow(`SELECT COUNT(*) FROM (`+q+`)`, args...).Scan(&n)
 	return
 }
 
 // HistoryUnreadCount zählt die noch nicht aufgerufenen Einträge eines Filters seit since (Zähler „neu“).
 func (s *Store) HistoryUnreadCount(kind string, tags []string, since int64) (n int, err error) {
-	q, args := historyQuery(kind, tags, since, "ungelesen")
+	q, args := historyQuery(kind, tags, since, "ungelesen", 0, 0)
 	err = s.DB.QueryRow(`SELECT COUNT(*) FROM (`+q+`)`, args...).Scan(&n)
 	return
 }
@@ -755,7 +849,7 @@ func (s *Store) UnreadRefs() (map[string]bool, error) {
 
 // HistoryOpenCount zählt die offenen Einträge eines Filters (Zähler der Reiter und im Menü).
 func (s *Store) HistoryOpenCount(kind string, tags []string, since int64) (n int, err error) {
-	q, args := historyQuery(kind, tags, since, "offen")
+	q, args := historyQuery(kind, tags, since, "offen", 0, 0)
 	err = s.DB.QueryRow(`SELECT COUNT(*) FROM (`+q+`)`, args...).Scan(&n)
 	return
 }
@@ -876,6 +970,13 @@ func (s *Store) SaveJob(j *Job) error {
 }
 
 // Since liefert Diktate und Planungen ab einem Zeitpunkt (für die Kostenübersicht).
+// Latest liefert die jüngsten n Aufträge (Notizen und Planungsrunden), älteste zuerst – wie Since, aber ohne den
+// ganzen Bestand zu lesen.
+func (s *Store) Latest(n int) ([]*Job, error) {
+	return s.queryJobs(`SELECT * FROM (SELECT `+jobCols+` FROM jobs WHERE deleted_at = 0 AND mode IN ('diktat','planung')
+		ORDER BY received_at DESC LIMIT ?) ORDER BY received_at`, n)
+}
+
 func (s *Store) Since(from int64) ([]*Job, error) {
 	return s.queryJobs(`SELECT `+jobCols+` FROM jobs WHERE deleted_at = 0 AND received_at >= ? AND mode IN ('diktat','planung') ORDER BY received_at`, from)
 }
@@ -883,7 +984,7 @@ func (s *Store) Since(from int64) ([]*Job, error) {
 // JobsAsking liefert fertige Notizen, an denen noch Rückfragen der KI offen sind.
 func (s *Store) JobsAsking() ([]*Job, error) {
 	return s.queryJobs(`SELECT `+jobCols+` FROM jobs WHERE deleted_at = 0 AND mode = 'diktat' AND planning_id = '' AND state = ? AND failed = 0
-		AND result LIKE '%"rueckfragen":[{%' ORDER BY received_at DESC`, StateDone)
+		AND erledigt_at = 0 AND result LIKE '%"rueckfragen":[{%' ORDER BY received_at DESC`, StateDone)
 }
 
 // FailedJobs liefert alle dauerhaft fehlgeschlagenen Aufträge (auch leere Aufnahmen).
@@ -1652,11 +1753,19 @@ func (s *Store) RemoveTag(name string) (int, error) {
 
 // TagSets liefert die Tag-Liste jedes sichtbaren Eintrags mit Tags (Notizen und Planungen), für den Tag-Filter:
 // welche Tags zusammen vorkommen.
-func (s *Store) TagSets() ([][]string, error) {
-	out := [][]string{}
+// TagCombo: eine Tag-Zusammenstellung (sortiert) und an wie vielen Einträgen sie vorkommt.
+type TagCombo struct {
+	Tags  []string `json:"tags"`
+	Count int      `json:"anzahl"`
+}
+
+// TagSets fasst die Tags aller Einträge zu Zusammenstellungen mit ihrer Zahl zusammen (statt einer Zeile je Eintrag).
+func (s *Store) TagSets() ([]TagCombo, error) {
+	counts := map[string]*TagCombo{}
+	var order []string
 	for _, q := range []string{
-		`SELECT tags FROM jobs WHERE deleted_at = 0 AND planning_id = '' AND tags != '[]'`,
-		`SELECT tags FROM plannings WHERE deleted_at = 0 AND tags != '[]'`,
+		`SELECT tags, COUNT(*) FROM jobs WHERE deleted_at = 0 AND planning_id = '' AND tags != '[]' GROUP BY tags`,
+		`SELECT tags, COUNT(*) FROM plannings WHERE deleted_at = 0 AND tags != '[]' GROUP BY tags`,
 	} {
 		rows, err := s.DB.Query(q)
 		if err != nil {
@@ -1664,18 +1773,32 @@ func (s *Store) TagSets() ([][]string, error) {
 		}
 		for rows.Next() {
 			var t string
-			if err := rows.Scan(&t); err != nil {
+			var n int
+			if err := rows.Scan(&t, &n); err != nil {
 				rows.Close()
 				return nil, err
 			}
-			if l := decodeList(t); len(l) > 0 {
-				out = append(out, l)
+			l := decodeList(t)
+			if len(l) == 0 {
+				continue
+			}
+			slices.Sort(l)
+			k := strings.Join(l, "\n")
+			if c, ok := counts[k]; ok {
+				c.Count += n
+			} else {
+				counts[k] = &TagCombo{Tags: l, Count: n}
+				order = append(order, k)
 			}
 		}
 		rows.Close()
 		if err := rows.Err(); err != nil {
 			return nil, err
 		}
+	}
+	out := make([]TagCombo, 0, len(order))
+	for _, k := range order {
+		out = append(out, *counts[k])
 	}
 	return out, nil
 }
@@ -1824,6 +1947,15 @@ func (s *Store) queryItems(where string, args ...any) ([]*ListItem, error) {
 // ListItems liefert die Punkte einer Liste: offene zuerst, dann erledigte, je nach Eingang (neueste unten).
 func (s *Store) ListItems(listID string) ([]*ListItem, error) {
 	return s.queryItems(`WHERE i.list_id = ? ORDER BY i.done_at != 0, i.created_at`, listID)
+}
+
+// ItemsActive liefert die Punkte aller Listen in einem Zug, je Liste wie ListItems sortiert. doneAfter > 0: nur
+// offene und die nach doneAfter erledigten (Listenübersicht); 0 = alle.
+func (s *Store) ItemsActive(doneAfter int64) ([]*ListItem, error) {
+	if doneAfter > 0 {
+		return s.queryItems(`WHERE (i.done_at = 0 OR i.done_at > ?) ORDER BY i.list_id, i.done_at != 0, i.created_at`, doneAfter)
+	}
+	return s.queryItems(`WHERE 1 ORDER BY i.list_id, i.done_at != 0, i.created_at`)
 }
 
 func (s *Store) ItemsByJob(jobID string) ([]*ListItem, error) {
@@ -2060,4 +2192,187 @@ func (s *Store) AudioJobs() ([]*Job, error) {
 func (s *Store) SetAudioPath(id, path string) error {
 	_, err := s.DB.Exec(`UPDATE jobs SET audio_path = ? WHERE id = ?`, path, id)
 	return err
+}
+
+// SearchRow ist ein Kandidat der Volltextsuche: nur die durchsuchten Felder, ohne Zusammenfassung.
+type SearchRow struct {
+	Kind, ID                        string // Kind: "job" oder "planung"
+	Nr, At                          int64
+	Title, Transcript, Result, Tags string // Result: Auswertung bzw. Stand der Planung
+}
+
+// searchFilter: Vorfilter in SQL für die Wörter aus ASCII-Zeichen (lower() faltet nur ASCII); nr >= 0 lässt die
+// Nummer immer durch. Die genaue Prüfung (Umlaute, Feld der Fundstelle) macht der Aufrufer.
+func searchFilter(expr string, ascii []string, nr int64) (string, []any) {
+	if len(ascii) == 0 {
+		return "", nil
+	}
+	var conds []string
+	var args []any
+	for _, t := range ascii {
+		conds = append(conds, `instr(lower(`+expr+`), ?) > 0`)
+		args = append(args, t)
+	}
+	q := ` AND ((` + strings.Join(conds, ` AND `) + `)`
+	if nr >= 0 {
+		q += ` OR nr = ?`
+		args = append(args, nr)
+	}
+	return q + `)`, args
+}
+
+// SearchJobs liefert eigenständige Notizen (keine leeren, keine Planungsrunden) vor before, neueste zuerst.
+func (s *Store) SearchJobs(before int64, limit int, ascii []string, nr int64) ([]SearchRow, error) {
+	f, fa := searchFilter(`title || ' ' || transcript || ' ' || result || ' ' || tags`, ascii, nr)
+	args := append([]any{before}, fa...)
+	args = append(args, limit)
+	rows, err := s.DB.Query(`SELECT id, nr, received_at, title, transcript, result, tags FROM jobs
+		WHERE planning_id = '' AND deleted_at = 0 AND mode = 'diktat' AND empty = 0 AND received_at < ?`+f+`
+		ORDER BY received_at DESC LIMIT ?`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []SearchRow
+	for rows.Next() {
+		r := SearchRow{Kind: "job"}
+		if err := rows.Scan(&r.ID, &r.Nr, &r.At, &r.Title, &r.Transcript, &r.Result, &r.Tags); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// SearchPlannings liefert Planungen mit dem Wortlaut aller Runden, nach ihrer jüngsten Runde vor before.
+func (s *Store) SearchPlannings(before int64, limit int, ascii []string, nr int64) ([]SearchRow, error) {
+	f, fa := searchFilter(`title || ' ' || plan || ' ' || tags || ' ' || t`, ascii, nr)
+	args := append([]any{before}, fa...)
+	args = append(args, limit)
+	rows, err := s.DB.Query(`SELECT * FROM (SELECT p.id, p.nr, MAX(j.received_at) AS at, p.title, group_concat(j.transcript, ' ') AS t, p.plan, p.tags
+		FROM plannings p JOIN jobs j ON j.planning_id = p.id AND j.deleted_at = 0 WHERE p.deleted_at = 0 GROUP BY p.id)
+		WHERE at < ?`+f+` ORDER BY at DESC LIMIT ?`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []SearchRow
+	for rows.Next() {
+		r := SearchRow{Kind: "planung"}
+		if err := rows.Scan(&r.ID, &r.Nr, &r.At, &r.Title, &r.Transcript, &r.Result, &r.Tags); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// --- Suchindex (FTS5) ---
+
+const searchStandKey = "suche_stand"
+
+// searchJobText / searchPlanText: der durchsuchte Text einer Notiz bzw. einer Planung (mit dem Wortlaut aller Runden).
+const searchJobInsert = `INSERT INTO suche (kind, ref, text, tags) SELECT 'job', id, title || ' ' || transcript || ' ' || CASE WHEN json_valid(result) THEN json_remove(result, '$.tags', '$.neue_tags') ELSE result END, tags
+	FROM jobs WHERE id = ? AND planning_id = '' AND deleted_at = 0 AND mode = 'diktat' AND empty = 0`
+const searchPlanInsert = `INSERT INTO suche (kind, ref, text, tags) SELECT 'planung', p.id, p.title || ' ' || CASE WHEN json_valid(p.plan) THEN json_remove(p.plan, '$.tags', '$.neue_tags') ELSE p.plan END || ' ' || group_concat(j.transcript, ' '), p.tags
+	FROM plannings p JOIN jobs j ON j.planning_id = p.id AND j.deleted_at = 0 WHERE p.id = ? AND p.deleted_at = 0 GROUP BY p.id`
+
+// SearchSync bringt den Suchindex auf den Stand: beim ersten Mal ganz, danach nur, was seit dem letzten Lauf geändert
+// wurde (updated_at). Endgültig Gelöschtes kann als Zeile stehen bleiben; die Suche prüft jeden Treffer gegen die Tabelle.
+func (s *Store) SearchSync() error {
+	start := Now()
+	var stand int64
+	if v, err := s.Get(searchStandKey); err == nil && v != "" {
+		stand, _ = strconv.ParseInt(v, 10, 64)
+	}
+	tx, err := s.DB.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if stand == 0 {
+		for _, q := range []string{`DELETE FROM suche`,
+			`INSERT INTO suche (kind, ref, text, tags) SELECT 'job', id, title || ' ' || transcript || ' ' || CASE WHEN json_valid(result) THEN json_remove(result, '$.tags', '$.neue_tags') ELSE result END, tags
+				FROM jobs WHERE planning_id = '' AND deleted_at = 0 AND mode = 'diktat' AND empty = 0`,
+			`INSERT INTO suche (kind, ref, text, tags) SELECT 'planung', p.id, p.title || ' ' || CASE WHEN json_valid(p.plan) THEN json_remove(p.plan, '$.tags', '$.neue_tags') ELSE p.plan END || ' ' || group_concat(j.transcript, ' '), p.tags
+				FROM plannings p JOIN jobs j ON j.planning_id = p.id AND j.deleted_at = 0 WHERE p.deleted_at = 0 GROUP BY p.id`} {
+			if _, err := tx.Exec(q); err != nil {
+				return err
+			}
+		}
+	} else {
+		type ref struct{ kind, id string }
+		var refs []ref
+		rows, err := tx.Query(`SELECT CASE WHEN planning_id = '' THEN 'job' ELSE 'planung' END, CASE WHEN planning_id = '' THEN id ELSE planning_id END
+			FROM jobs WHERE updated_at > ? UNION SELECT 'planung', id FROM plannings WHERE updated_at > ?`, stand, stand)
+		if err != nil {
+			return err
+		}
+		for rows.Next() {
+			var r ref
+			if err := rows.Scan(&r.kind, &r.id); err != nil {
+				rows.Close()
+				return err
+			}
+			refs = append(refs, r)
+		}
+		rows.Close()
+		for _, r := range refs {
+			if _, err := tx.Exec(`DELETE FROM suche WHERE ref = ?`, r.id); err != nil {
+				return err
+			}
+			ins := searchJobInsert
+			if r.kind == "planung" {
+				ins = searchPlanInsert
+			}
+			if _, err := tx.Exec(ins, r.id); err != nil {
+				return err
+			}
+		}
+	}
+	// Etwas Rückstand: was während des Laufs geändert wurde, kommt beim nächsten Mal sicher mit.
+	if _, err := tx.Exec(`INSERT INTO kv (k, v) VALUES (?, ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v`, searchStandKey, strconv.FormatInt(start-1000, 10)); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// SearchIndex liefert Kandidaten aus dem Suchindex, neueste zuerst, vor before; alle Wörter (je mindestens 3 Zeichen)
+// müssen vorkommen. Stufe 1: alle in Titel, Wortlaut oder Auswertung; Stufe 2: nur zusammen mit den Tags.
+// Die Felder kommen frisch aus den Tabellen; Gelöschtes fällt dabei heraus.
+func (s *Store) SearchIndex(words []string, tier int, before int64, limit int) ([]SearchRow, error) {
+	var parts []string
+	for _, w := range words {
+		parts = append(parts, `"`+strings.ReplaceAll(w, `"`, `""`)+`"`)
+	}
+	all := `(` + strings.Join(parts, " AND ") + `)`
+	match := `text : ` + all
+	if tier == 2 {
+		match = all + ` NOT text : ` + all
+	}
+	rows, err := s.DB.Query(`SELECT * FROM (
+		SELECT 'job', j.id, j.nr, j.received_at AS at, j.title, j.transcript, j.result, j.tags
+			FROM suche s JOIN jobs j ON s.kind = 'job' AND j.id = s.ref AND j.deleted_at = 0 AND j.planning_id = ''
+			WHERE s.suche MATCH ? AND j.received_at < ?
+		UNION ALL
+		SELECT 'planung', p.id, p.nr, (SELECT MAX(received_at) FROM jobs WHERE planning_id = p.id AND deleted_at = 0) AS at, p.title,
+			(SELECT group_concat(transcript, ' ') FROM jobs WHERE planning_id = p.id AND deleted_at = 0), p.plan, p.tags
+			FROM suche s JOIN plannings p ON s.kind = 'planung' AND p.id = s.ref AND p.deleted_at = 0
+			WHERE s.suche MATCH ?)
+		WHERE at < ? ORDER BY at DESC LIMIT ?`, match, before, match, before, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []SearchRow
+	for rows.Next() {
+		var r SearchRow
+		var tr sql.NullString
+		if err := rows.Scan(&r.Kind, &r.ID, &r.Nr, &r.At, &r.Title, &tr, &r.Result, &r.Tags); err != nil {
+			return nil, err
+		}
+		r.Transcript = tr.String
+		out = append(out, r)
+	}
+	return out, rows.Err()
 }

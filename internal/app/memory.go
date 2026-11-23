@@ -226,7 +226,8 @@ func (a *App) trainIfDue(ctx context.Context) {
 // train wertet die jüngsten Notizen und Planungen aus (MEMORY_TRAIN_ENTRIES, nicht den ganzen Bestand)
 // und legt, was die KI daraus lernt, als Vorschläge an.
 func (a *App) train(ctx context.Context) (info TrainInfo) {
-	jobs, err := a.DB.Since(0)
+	// Genug Vorrat für MemoryTrainEntries (Planungen bestehen aus mehreren Runden, Fehlschläge fallen weg).
+	jobs, err := a.DB.Latest(a.Cfg.MemoryTrainEntries*10 + 50)
 	if err != nil {
 		info.Fehler = "Datenbankfehler: " + err.Error()
 		return

@@ -7,6 +7,7 @@ import (
 	"maps"
 	"net/http"
 	"os"
+	"path/filepath"
 	"slices"
 	"sort"
 	"strconv"
@@ -186,6 +187,9 @@ func (a *App) addTags(m map[string]any, kind, id string) {
 	m["tags"], m["tag_vorschlaege"] = set.Tags, set.Suggestions
 }
 
+// historyPageSize: Einträge je nachgeladener Seite des Verlaufs.
+const historyPageSize = 50
+
 func (a *App) handleHistory(w http.ResponseWriter, r *http.Request) {
 	before, _ := strconv.ParseInt(r.URL.Query().Get("vor"), 10, 64)
 	kind := r.URL.Query().Get("art")
@@ -249,10 +253,10 @@ func (a *App) handleHistory(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, 500, "speicher", "Datenbankfehler")
 			return
 		}
-		// aeltere = bestätigte Termine, die erst mit alle=1 kommen.
-		list, done := upcoming, len(all)-len(upcoming)
-		if r.URL.Query().Get("alle") == "1" {
-			list, done = all, 0
+		// Ohne offen=1 auch die bestätigten.
+		list := upcoming
+		if r.URL.Query().Get("offen") != "1" {
+			list = all
 		}
 		out := []map[string]any{}
 	termine:
@@ -266,7 +270,7 @@ func (a *App) handleHistory(w http.ResponseWriter, r *http.Request) {
 			}
 			out = append(out, m)
 		}
-		resp := map[string]any{"eintraege": out, "mehr": false, "fragen_offen": total, "aeltere": done, "besuch_pause_minuten": a.Cfg.VisitGapMinutes}
+		resp := map[string]any{"eintraege": out, "mehr": false, "fragen_offen": total, "besuch_pause_minuten": a.Cfg.VisitGapMinutes}
 		maps.Copy(resp, termine)
 		writeJSON(w, 200, resp)
 		return
@@ -276,7 +280,7 @@ func (a *App) handleHistory(w http.ResponseWriter, r *http.Request) {
 			asking = []map[string]any{}
 		}
 		sort.Slice(asking, func(i, k int) bool { return asking[i]["eingegangen"].(int64) > asking[k]["eingegangen"].(int64) })
-		resp := map[string]any{"eintraege": asking, "mehr": false, "fragen_offen": total, "aeltere": 0, "besuch_pause_minuten": a.Cfg.VisitGapMinutes}
+		resp := map[string]any{"eintraege": asking, "mehr": false, "fragen_offen": total, "besuch_pause_minuten": a.Cfg.VisitGapMinutes}
 		maps.Copy(resp, termine)
 		writeJSON(w, 200, resp)
 		return
@@ -284,50 +288,39 @@ func (a *App) handleHistory(w http.ResponseWriter, r *http.Request) {
 	if kind != "diktat" && kind != "planung" {
 		kind = ""
 	}
-	// Ohne alle=1: die letzten 24 Stunden, mindestens aber die jüngsten HistoryMinEntries Einträge,
-	// dazu alles seit zuletzt gesehen (seit=, vom Gerät: letzte Aktion des vorigen Besuchs). since geht als grenze an die Web-App.
-	// Das Fenster hängt vom Filter ab (je Art die eigenen jüngsten Einträge); die Zahl jedes Filterknopfs
-	// nutzt deshalb das Fenster seiner Art, sonst zeigt ein Knopf 0 und seine Ansicht doch Einträge.
-	showAll := r.URL.Query().Get("alle") == "1"
+	// offen=1: nur offene Einträge (Notiz/Termin nicht erledigt, Planung nicht geschlossen).
+	mode := ""
+	if r.URL.Query().Get("offen") == "1" {
+		mode = "offen"
+	}
+	// Seitenweise, neueste zuerst. Erste Seite (ohne vor=): alles seit zuletzt gesehen (seit=, Neu) und
+	// dazu die jüngsten HistoryMinEntries; weitere Seiten (vor=) je HistoryPageSize, die Web-App lädt beim Scrollen nach.
 	seit, _ := strconv.ParseInt(r.URL.Query().Get("seit"), 10, 64)
-	window := func(kind string) (int64, error) {
-		if showAll {
-			return 0, nil
+	limit := historyPageSize
+	if before <= 0 {
+		limit = a.Cfg.HistoryMinEntries
+		if limit <= 0 {
+			limit = 10
 		}
-		since := store.Now() - 24*3600_000
 		if seit > 0 {
-			since = min(since, seit)
+			n, err := a.DB.HistoryCount(kind, tags, seit, mode)
+			if err != nil {
+				writeErr(w, 500, "speicher", "Datenbankfehler")
+				return
+			}
+			// Lange weg gewesen: höchstens 100 auf einmal, der Rest kommt beim Scrollen.
+			limit = min(limit+n, 100)
 		}
-		latest, err := a.DB.HistoryRefs(kind, tags, 0, a.Cfg.HistoryMinEntries, 0)
-		if err != nil {
-			return 0, err
-		}
-		if len(latest) > 0 && len(latest) == a.Cfg.HistoryMinEntries {
-			since = min(since, latest[len(latest)-1].At)
-		} else if len(latest) > 0 {
-			since = 0 // weniger Einträge als das Minimum: alle zeigen
-		}
-		return since, nil
 	}
-	since, err := window(kind)
+	refs, err := a.DB.HistoryRefs(kind, tags, before, limit+1, 0, mode)
 	if err != nil {
 		writeErr(w, 500, "speicher", "Datenbankfehler")
 		return
 	}
-	refs, err := a.DB.HistoryRefs(kind, tags, before, 51, since)
-	if err != nil {
-		writeErr(w, 500, "speicher", "Datenbankfehler")
-		return
-	}
-	// Zahlen der Filterknöpfe: offene Einträge im Fenster ihrer Art; aeltere = was die Standardansicht ausblendet.
+	// Zahlen der Filterknöpfe: alle offenen Einträge ihrer Art, auch die noch nicht geladenen.
 	counts := map[string]any{"fragen": total, "termin": len(upcoming)}
 	for name, k := range map[string]string{"alles": "", "diktat": "diktat", "planung": "planung"} {
-		ks, err := window(k)
-		if err != nil {
-			writeErr(w, 500, "speicher", "Datenbankfehler")
-			return
-		}
-		n, err := a.DB.HistoryOpenCount(k, tags, ks)
+		n, err := a.DB.HistoryOpenCount(k, tags, 0)
 		if err != nil {
 			writeErr(w, 500, "speicher", "Datenbankfehler")
 			return
@@ -336,7 +329,7 @@ func (a *App) handleHistory(w http.ResponseWriter, r *http.Request) {
 	}
 	// neu: noch nicht aufgerufene Einträge seit zuletzt gesehen (seit=) je Filter – die Web-App zeigt sie gelb im Menü.
 	newCounts := map[string]int{}
-	if seit, err := strconv.ParseInt(r.URL.Query().Get("seit"), 10, 64); err == nil && seit > 0 {
+	if seit > 0 {
 		for name, k := range map[string]string{"alles": "", "diktat": "diktat", "termin": "termin", "planung": "planung"} {
 			n, err := a.DB.HistoryUnreadCount(k, tags, seit)
 			if err != nil {
@@ -346,19 +339,9 @@ func (a *App) handleHistory(w http.ResponseWriter, r *http.Request) {
 			newCounts[name] = n
 		}
 	}
-	older := 0
-	if since > 0 {
-		all, err := a.DB.HistoryCount(kind, tags, 0)
-		if err != nil {
-			writeErr(w, 500, "speicher", "Datenbankfehler")
-			return
-		}
-		shown, _ := a.DB.HistoryCount(kind, tags, since)
-		older = all - shown
-	}
-	more := len(refs) > 50
+	more := len(refs) > limit
 	if more {
-		refs = refs[:50]
+		refs = refs[:limit]
 	}
 	out := make([]map[string]any, 0, len(refs))
 	for _, ref := range refs {
@@ -376,7 +359,12 @@ func (a *App) handleHistory(w http.ResponseWriter, r *http.Request) {
 			out = append(out, a.planningSummary(p, rounds))
 		}
 	}
-	resp := map[string]any{"eintraege": out, "mehr": more, "fragen_offen": total, "aeltere": older, "zahlen": counts, "neu": newCounts, "besuch_pause_minuten": a.Cfg.VisitGapMinutes, "grenze": since}
+	// vor_naechste: Zeitpunkt des letzten Eintrags dieser Seite (Planungen zählen mit ihrer jüngsten Runde).
+	cursor := int64(0)
+	if len(refs) > 0 {
+		cursor = refs[len(refs)-1].At
+	}
+	resp := map[string]any{"eintraege": out, "mehr": more, "vor_naechste": cursor, "fragen_offen": total, "zahlen": counts, "neu": newCounts, "besuch_pause_minuten": a.Cfg.VisitGapMinutes}
 	maps.Copy(resp, termine)
 	writeJSON(w, 200, resp)
 }
@@ -839,17 +827,41 @@ func (a *App) handleStatus(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 	// Je Ablage: Pfad, von der App belegt, frei und gesamt auf dem Dateisystem.
-	disk := func(name, path string) map[string]any {
+	// size: von der App belegt (nil = ganzer Ordner).
+	disk := func(name, path string, size func() int64) map[string]any {
 		m := map[string]any{"name": name, "pfad": path}
-		free, total, err := diskSpace(path)
+		// Frei/gesamt vom Dateisystem; Datenbank und App-Versionen liegen in DATA_DIR (releases/ gibt es evtl. noch nicht).
+		fs := path
+		if size != nil {
+			fs = a.Cfg.DataDir
+		}
+		free, total, err := diskSpace(fs)
 		if err != nil {
 			m["fehler"] = err.Error()
 			return m
 		}
-		m["belegt"], m["frei"], m["gesamt"], m["knapp"] = dirSize(path), free, total, free < a.Cfg.MinFreeBytes
+		if size == nil {
+			size = func() int64 { return dirSize(path) }
+		}
+		m["belegt"], m["frei"], m["gesamt"], m["knapp"] = size(), free, total, free < a.Cfg.MinFreeBytes
 		return m
 	}
-	out["speicher"] = []map[string]any{disk("Daten", a.Cfg.DataDir), disk("Aufnahmen", a.Cfg.AudioDir), disk("Backups", a.Cfg.BackupDir)}
+	// DATA_DIR getrennt: Datenbank (pebble.db samt -wal/-shm) und zwischengespeicherte App-Versionen (releases/).
+	dbFile := filepath.Join(a.Cfg.DataDir, "pebble.db")
+	dbSize := func() (n int64) {
+		for _, suf := range []string{"", "-wal", "-shm"} {
+			if fi, err := os.Stat(dbFile + suf); err == nil {
+				n += fi.Size()
+			}
+		}
+		return n
+	}
+	releases := filepath.Join(a.Cfg.DataDir, "releases")
+	appSize := func() int64 { return dirSize(releases) }
+	out["speicher"] = []map[string]any{disk("Datenbank", dbFile, dbSize), disk("App-Versionen", releases, appSize),
+		disk("Aufnahmen", a.Cfg.AudioDir, nil), disk("Backups", a.Cfg.BackupDir, nil)}
+	cb, cr, cbb, crb := a.cleanupPlan()
+	out["aufraeumen"] = map[string]any{"backups": len(cb), "backups_groesse": cbb, "versionen": len(cr), "versionen_groesse": crb}
 	tj, _ := a.DB.TrashedJobs(0)
 	tp, _ := a.DB.TrashedPlannings(0)
 	out["papierkorb"] = len(tj) + len(tp)

@@ -42,6 +42,8 @@ const usage = `pebble-webhook <Befehl>
   ersteinrichtung
             Pfad des Einrichtungsassistenten mit Einmal-Code ausgeben (nur solange nicht eingerichtet)
   version   Version ausgeben
+  schema [DATEI]
+            Schema-Stand ausgeben, den dieses Programm kennt – mit DATEI den einer Datenbank (für den Installer)
 
 Start-Werte (LISTEN, DATA_DIR, AUDIO_DIR) kommen aus der Umgebung; außerhalb von systemd wird die
 Datei aus PEBBLE_ENV_FILE gelesen (Standard /etc/pebble-webhook/env). Alle übrigen Einstellungen
@@ -72,6 +74,14 @@ func main() {
 		fail(setupLink())
 	case "version":
 		fmt.Println(version)
+	case "schema":
+		if len(os.Args) > 2 {
+			v, err := store.DBSchema(os.Args[2])
+			fail(err)
+			fmt.Println(v)
+		} else {
+			fmt.Println(store.SchemaVersion)
+		}
 	default:
 		fmt.Fprintln(os.Stderr, usage)
 		os.Exit(2)
