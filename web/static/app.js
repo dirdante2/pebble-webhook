@@ -4,6 +4,7 @@ const seite = document.getElementById('seite');
 const nav = document.getElementById('nav');
 const menue = document.getElementById('menue');
 const menueKnopf = document.getElementById('menueknopf');
+const neuKnopf = document.getElementById('neuknopf');
 
 // ---------- Sprache ----------
 // Deutsch steht im Code; für Englisch liefert der Server das Wörterbuch (deutscher Text → englischer) in index.html mit.
@@ -257,6 +258,12 @@ async function sendeAusgang() {
           if (p.audio) form.set('audio', p.audio, 'antwort');
           else form.set('text', p.text);
           await api(p.planung ? T`/api/planungen/${p.planung}/antwort` : '/api/planungen', { method: 'POST', body: form });
+        } else if (p.typ === 'notiz') {
+          const form = new FormData();
+          form.set('client_id', p.client_id);
+          form.set('zeit', String(p.zeit));
+          form.set('audio', p.audio, 'notiz');
+          await api('/api/notizen', { method: 'POST', body: form });
         } else if (p.typ === 'notizantwort') {
           await api(T`/api/eintraege/${p.eintrag}/antwort`, { method: 'POST', body: { antworten: p.antworten } });
         } else if (p.typ === 'schliessen') {
@@ -310,7 +317,6 @@ const routen = [
   [/^\/liste\/([0-9a-f]+)$/, 'liste', zeigeListe],
   [/^\/liste\/([0-9a-f]+)\/bearbeiten$/, 'listeBearbeiten', zeigeListeBearbeiten],
   [/^\/gruppe\/([^/]+)\/bearbeiten$/, 'gruppeBearbeiten', (n) => zeigeGruppeBearbeiten(decodeURIComponent(n))],
-  [/^\/liste\/([0-9a-f]+)\/punkt\/([0-9a-f]+)\/verschieben$/, 'verschieben', zeigeVerschieben],
   [/^\/status$/, 'status', zeigeStatus],
   [/^\/status\/kosten$/, 'kosten', zeigeKosten],
   [/^\/status\/ring$/, 'ring', zeigeRing],
@@ -381,6 +387,7 @@ async function zeige() {
     if (menue.open && menue.matches(':modal')) menue.close();
     menueModus();
     suchForm.hidden = offen;
+    neuKnopf.hidden = offen;
     if (!offen) ladeZaehler();
     // Außerhalb der Suchseite ist das Feld leer; auf ihr zeigt es die Suche aus der Adresse.
     if (name !== 'suche') suchFeld.value = '';
@@ -612,7 +619,7 @@ function karte(e) {
     <div class="zeile"><span>${nrHtml(e.nr)}${t ? T`<span class="badge termin">${terminArt(e.termin)}</span>` : T`<span class="badge ${esc(e.modus)}">${esc(MODUS[e.modus] || e.modus)}</span>${runde}`} ${planung && !zu ? planungZeichen(e.planung_status === 'offen') : ''}${e.liste ? T` <span class="badge liste">${esc(listenName(e.liste))}</span>${e.liste.erledigt && !zu ? ` ${erledigtZeichen}` : ''}` : ''}</span>
       <span class="kartenzeit">${stand}<span class="leise">${kartenZeit(e.aufgenommen)}</span></span></div>
     <div class="titel">${esc(e.titel || tx('Ohne Titel'))}</div>
-    ${zu ? '' : termin}${zu ? '' : vorschau}${!zu && e.tags?.length ? T`<div class="tags">${e.tags.map((t) => T`<span class="tagchip">${esc(t)}</span>`).join('')}</div>` : ''}${fehler}
+    ${e.besetzung && !zu ? T`<div class="besetzung klein">${esc(e.besetzung)}</div>` : ''}${zu ? '' : termin}${zu ? '' : vorschau}${!zu && e.tags?.length ? T`<div class="tags">${e.tags.map((t) => T`<span class="tagchip">${esc(t)}</span>`).join('')}</div>` : ''}${fehler}
     ${e.fragen ? T`<div class="fragezeile"><span class="badge frage">${fragenText(e.fragen)}</span><span class="btn klein haupt" role="button" data-fragen="${e.id}" data-ftyp="${planung ? 'planung' : 'eintrag'}">Beantworten</span></div>` : ''}</a>`;
 }
 
@@ -840,7 +847,7 @@ async function zeigeAusgang() {
   const box = document.getElementById('ausgang');
   if (!box) return;
   const posten = (await alle('ausgang')).sort((a, b) => a.zeit - b.zeit);
-  const name = (p) => (p.typ === 'antwort' ? (p.audio ? tx('Antwort (Aufnahme)') : T`Antwort: ${esc((p.text || '').slice(0, 80))}`) : p.typ === 'notizantwort' ? tx('Antwort auf Rückfrage') : p.typ === 'schliessen' ? tx('Planung schließen') : p.typ === 'haken' ? tx('Punkt abhaken') : tx('Erneut starten'));
+  const name = (p) => (p.typ === 'notiz' ? tx('Notiz (Aufnahme)') : p.typ === 'antwort' ? (p.audio ? tx('Antwort (Aufnahme)') : T`Antwort: ${esc((p.text || '').slice(0, 80))}`) : p.typ === 'notizantwort' ? tx('Antwort auf Rückfrage') : p.typ === 'schliessen' ? tx('Planung schließen') : p.typ === 'haken' ? tx('Punkt abhaken') : tx('Erneut starten'));
   box.innerHTML = posten.map((p) => {
     if (p.zustand === 'konflikt') {
       return T`<div class="hinweis warn"><strong>Die Planung wurde inzwischen geschlossen.</strong><br>${name(p)} <span class="leise">(${zeit(p.zeit)})</span>
@@ -873,6 +880,91 @@ const ARTEN = [['alles', tx('Alles')], ['diktat', tx('Notizen')], ['termin', SPR
 const passtArt = (e, art) => (art === 'alles' || (art === 'termin' ? !!e.termin : art === 'diktat' ? e.modus === 'diktat' && !e.termin : e.modus === art));
 const passt = (e, art, tags) => (art === 'fragen' ? e.fragen > 0 : passtArt(e, art) && tags.every((t) => (e.tags || []).includes(t)));
 // Gewählte Tags des Verlaufs (alle müssen passen); früher nur einer unter „verlauf-tag“.
+// Tag-Filter: Trichter in der Suchleiste, Dialog mit Mehrfachauswahl (nach Menge sortiert); alle gewählten müssen passen.
+// Eine Auswahl für Verlauf und Listen (verlauf-tags). tags wird in place geändert, danach neu(); aus() blendet den Knopf aus.
+// daten(vorrat, kombis): vorrat [{name, anzahl}], kombis [{tags, anzahl}] – daraus die Zahlen im Dialog.
+function richteTagFilter({ tags, aus = () => false, neu }) {
+  let vorrat = [], kombis = [];
+  const male = () => {
+    tagFilterKnopf.hidden = aus() || (!vorrat.length && !tags.length);
+    suchForm.classList.toggle('mitfilter', !tagFilterKnopf.hidden);
+    tagFilterKnopf.classList.toggle('an', tags.length > 0);
+    const z = tagFilterKnopf.querySelector('.zaehler');
+    z.hidden = !tags.length;
+    z.textContent = tags.length;
+    // Aktiver Filter sichtbar über der Liste, mit Knopf zum sofortigen Zurücksetzen (Element #tagleiste der Seite,
+    // nach jedem Neuaufbau der Seite erneut über male()).
+    const tl = document.getElementById('tagleiste');
+    if (!tl) return;
+    tl.hidden = !tags.length;
+    tl.innerHTML = tags.length ? T`<span class="tags">${tags.map((t) => T`<span class="tagchip">${esc(t)}</span>`).join('')}</span>
+      <button class="btn klein" data-tags-weg="1" aria-label="Tag-Filter zurücksetzen">✕ Zurücksetzen</button>` : '';
+    tl.onclick = (ev) => { if (ev.target.closest('[data-tags-weg]')) setze([]); };
+  };
+  const setze = (liste) => {
+    localStorage.setItem('verlauf-tags', JSON.stringify(liste));
+    localStorage.removeItem('verlauf-tag');
+    tags.splice(0, tags.length, ...liste);
+    male();
+    neu();
+  };
+  // Dialog: jeder Tipp filtert sofort; Tags, die mit der Auswahl nie zusammen vorkommen, sind ausgegraut.
+  // Die Zahlen zählen Einträge, die alle gewählten Tags und diesen Tag tragen.
+  tagFilterKnopf.onclick = () => {
+    const wahlTags = new Set(tags);
+    const namen = [...new Set([...vorrat.map((t) => t.name), ...tags])];
+    const gesamt = (n) => vorrat.find((t) => t.name === n)?.anzahl ?? 0;
+    namen.sort((a, b) => gesamt(b) - gesamt(a) || a.localeCompare(b, 'de'));
+    const dialog = document.createElement('dialog');
+    dialog.className = 'tagdialog';
+    const maleDialog = () => {
+      // kombis: [{tags, anzahl}] (früher eine Liste je Eintrag – im Zwischenspeicher kann noch die alte Form liegen).
+      const passend = kombis.map((k) => (Array.isArray(k) ? { tags: k, anzahl: 1 } : k)).filter((k) => [...wahlTags].every((t) => k.tags.includes(t)));
+      const summe = (l) => l.reduce((z, k) => z + k.anzahl, 0);
+      const anzahl = (n) => (wahlTags.size ? summe(passend.filter((k) => k.tags.includes(n))) : gesamt(n));
+      dialog.innerHTML = T`<h2>Nach Tags filtern</h2><p class="leise">${wahlTags.size ? T`${summe(passend)} ${summe(passend) === 1 ? tx('Eintrag trägt') : tx('Einträge tragen')} alle gewählten Tags.` : tx('Gezeigt werden Einträge mit allen gewählten Tags.')}</p>
+        <div class="tags wahl">${namen.map((n) => {
+          const an = wahlTags.has(n), z = anzahl(n), weg = !an && wahlTags.size > 0 && z === 0;
+          return T`<button class="tagchip wahl${an ? ' an' : ''}${weg ? ' aus' : ''}" data-tag="${esc(n)}" aria-pressed="${an}"${weg ? ' disabled' : ''}>${esc(n)} <span class="zahl">${z}</span></button>`;
+        }).join('')}</div>
+        <div class="leiste">${wahlTags.size ? T('<button class="btn" data-aus="1">Alle abwählen</button>') : ''}<button class="btn haupt" data-zu="1">Fertig</button></div>`;
+    };
+    // Sofort filtern: Auswahl speichern und die Seite hinter dem Dialog neu aufbauen.
+    const uebernehmen = () => setze([...wahlTags]);
+    dialog.onclick = (e2) => {
+      const k = e2.target.closest('button');
+      if (e2.target === dialog || k?.dataset.zu) return dialog.close();
+      if (k?.dataset.aus) { wahlTags.clear(); uebernehmen(); return dialog.close(); }
+      if (k?.dataset.tag && !k.disabled) {
+        if (!wahlTags.delete(k.dataset.tag)) wahlTags.add(k.dataset.tag);
+        maleDialog();
+        uebernehmen();
+      }
+    };
+    maleDialog();
+    dialog.onclose = () => dialog.remove();
+    document.body.append(dialog);
+    dialog.showModal();
+  };
+  return { male, daten(v, k) { vorrat = (v || []).filter((t) => t && t.name); if (k) kombis = k; male(); } };
+}
+
+// tagVorratAus: Vorrat und Kombinationen aus Listenpunkten (je Punkt die Tags seiner Notiz bzw. Planung).
+function tagVorratAus(punkte) {
+  const zahl = new Map(), kombi = new Map();
+  for (const p of punkte) {
+    if (!p.tags?.length) continue;
+    for (const t of p.tags) zahl.set(t, (zahl.get(t) || 0) + 1);
+    const k = [...p.tags].sort().join('\n');
+    kombi.set(k, (kombi.get(k) || 0) + 1);
+  }
+  return {
+    vorrat: [...zahl].map(([name, anzahl]) => ({ name, anzahl })),
+    kombis: [...kombi].map(([k, anzahl]) => ({ tags: k.split('\n'), anzahl })),
+  };
+}
+const passtTags = (p, tags) => !tags.length || tags.every((t) => p.tags?.includes(t));
+
 function gewaehlteTags() {
   try {
     const v = JSON.parse(localStorage.getItem('verlauf-tags') || 'null');
@@ -938,78 +1030,17 @@ async function zeigeVerlauf() {
     localStorage.setItem('verlauf-art', b.dataset.artWahl);
     zeigeVerlauf();
   };
-  // Tag-Filter: Trichter in der Suchleiste, Dialog mit Mehrfachauswahl (nach Menge sortiert); alle gewählten müssen passen.
-  let vorrat = [];
-  const maleTags = (liste) => {
-    vorrat = liste.filter((t) => t && t.name);
-    tagFilterKnopf.hidden = art === 'fragen' || (!vorrat.length && !tags.length);
-    suchForm.classList.toggle('mitfilter', !tagFilterKnopf.hidden);
-    tagFilterKnopf.classList.toggle('an', tags.length > 0);
-    const z = tagFilterKnopf.querySelector('.zaehler');
-    z.hidden = !tags.length;
-    z.textContent = tags.length;
-    // Aktiver Filter sichtbar über der Liste, mit Knopf zum sofortigen Zurücksetzen.
-    const tl = document.getElementById('tagleiste');
-    tl.hidden = !tags.length;
-    tl.innerHTML = tags.length ? T`<span class="tags">${tags.map((t) => T`<span class="tagchip">${esc(t)}</span>`).join('')}</span>
-      <button class="btn klein" data-tags-weg="1" aria-label="Tag-Filter zurücksetzen">✕ Zurücksetzen</button>` : '';
-  };
-  // Zurücksetzen ohne Dialog: Filter weg, Verlauf neu.
-  const setzeTags = (liste) => {
-    localStorage.setItem('verlauf-tags', JSON.stringify(liste));
-    localStorage.removeItem('verlauf-tag');
-    tags.splice(0, tags.length, ...liste);
-    maleTags(vorrat);
-    aktuell.neuLaden?.();
-  };
-  document.getElementById('tagleiste').onclick = (ev) => { if (ev.target.closest('[data-tags-weg]')) setzeTags([]); };
+  // Tag-Filter (Trichter in der Suchleiste): Vorrat und Kombinationen über alle Einträge vom Server.
+  const tagFilter = richteTagFilter({ tags, aus: () => art === 'fragen', neu: () => aktuell.neuLaden?.() });
   let gespeichert = [], kombis = [];
   try { gespeichert = JSON.parse(localStorage.getItem('tag-vorrat') || '[]'); } catch (f) { /* leer */ }
   try { kombis = JSON.parse(localStorage.getItem('tag-kombis') || '[]'); } catch (f) { /* leer */ }
-  maleTags(gespeichert);
-  // Dialog: jeder Tipp filtert sofort; Tags, die mit der Auswahl nie zusammen vorkommen, sind ausgegraut.
-  // Die Zahlen zählen Einträge, die alle gewählten Tags und diesen Tag tragen.
-  tagFilterKnopf.onclick = () => {
-    const wahlTags = new Set(tags);
-    const namen = [...new Set([...vorrat.map((t) => t.name), ...tags])];
-    const gesamt = (n) => vorrat.find((t) => t.name === n)?.anzahl ?? 0;
-    namen.sort((a, b) => gesamt(b) - gesamt(a) || a.localeCompare(b, 'de'));
-    const dialog = document.createElement('dialog');
-    dialog.className = 'tagdialog';
-    const maleDialog = () => {
-      // kombis: [{tags, anzahl}] (früher eine Liste je Eintrag – im Zwischenspeicher kann noch die alte Form liegen).
-      const passend = kombis.map((k) => (Array.isArray(k) ? { tags: k, anzahl: 1 } : k)).filter((k) => [...wahlTags].every((t) => k.tags.includes(t)));
-      const summe = (l) => l.reduce((z, k) => z + k.anzahl, 0);
-      const anzahl = (n) => (wahlTags.size ? summe(passend.filter((k) => k.tags.includes(n))) : gesamt(n));
-      dialog.innerHTML = T`<h2>Nach Tags filtern</h2><p class="leise">${wahlTags.size ? T`${summe(passend)} ${summe(passend) === 1 ? tx('Eintrag trägt') : tx('Einträge tragen')} alle gewählten Tags.` : tx('Gezeigt werden Einträge mit allen gewählten Tags.')}</p>
-        <div class="tags wahl">${namen.map((n) => {
-          const an = wahlTags.has(n), z = anzahl(n), aus = !an && wahlTags.size > 0 && z === 0;
-          return T`<button class="tagchip wahl${an ? ' an' : ''}${aus ? ' aus' : ''}" data-tag="${esc(n)}" aria-pressed="${an}"${aus ? ' disabled' : ''}>${esc(n)} <span class="zahl">${z}</span></button>`;
-        }).join('')}</div>
-        <div class="leiste">${wahlTags.size ? T('<button class="btn" data-aus="1">Alle abwählen</button>') : ''}<button class="btn haupt" data-zu="1">Fertig</button></div>`;
-    };
-    // Sofort filtern: Auswahl speichern und den Verlauf hinter dem Dialog neu aufbauen.
-    const uebernehmen = () => setzeTags([...wahlTags]);
-    dialog.onclick = (e2) => {
-      const k = e2.target.closest('button');
-      if (e2.target === dialog || k?.dataset.zu) return dialog.close();
-      if (k?.dataset.aus) { wahlTags.clear(); maleDialog(); return uebernehmen(); }
-      if (k?.dataset.tag && !k.disabled) {
-        if (!wahlTags.delete(k.dataset.tag)) wahlTags.add(k.dataset.tag);
-        maleDialog();
-        uebernehmen();
-      }
-    };
-    maleDialog();
-    dialog.onclose = () => dialog.remove();
-    document.body.append(dialog);
-    dialog.showModal();
-  };
+  tagFilter.daten(gespeichert, kombis);
   api('/api/tags').then((d) => {
     localStorage.setItem('tag-vorrat', JSON.stringify(d.tags));
     kombis = d.kombis || [];
     try { localStorage.setItem('tag-kombis', JSON.stringify(kombis)); } catch (f) { /* voll */ }
-    if (aktuell?.name === 'verlauf') maleTags(d.tags);
+    if (aktuell?.name === 'verlauf') tagFilter.daten(d.tags, kombis);
   }).catch(() => {});
   zeigeAusgang();
   // Zwischenspeicher aus einer früheren Fassung (eine Zeile je Runde) verwerfen.
@@ -1446,7 +1477,6 @@ function analyseHtml(e, aufnahme = '') {
       <div class="leiste"><button class="btn haupt" data-fragen="${e.id}" data-ftyp="eintrag">${tx('{0} beantworten', fragenText(e.fragen))}</button></div></div>`;
   }
   if (an?.antworten?.length) html += T`<h2>Deine Antworten</h2><dl>${an.antworten.map((x) => T`<dt>${esc(x.frage)}</dt><dd>${esc(x.antwort)}</dd>`).join('')}</dl>`;
-  if (an?.anweisungen?.length) html += block(tx('Deine Anweisungen an die KI'), T`<ul>${an.anweisungen.map((x) => T`<li>${esc(x)}</li>`).join('')}</ul>`, 'anweisungen');
   // Eckdaten zuerst (bei mehreren Punkten je Punkt mit Namen), darunter getrennt der Listenbezug mit Erledigt-Haken.
   const lp = e.liste?.punkte || [];
   const mehrere = lp.length > 1;
@@ -1456,6 +1486,8 @@ function analyseHtml(e, aufnahme = '') {
   }
   // Text: kurze KI-Fassung des Gesagten; ältere Einträge ohne diese Fassung zeigen hier das Transkript.
   html += block(tx('Text'), notizHtml(an?.notiz || e.transkript), 'notiz');
+  // Fortsetzung einer früheren Notiz (von der KI erkannt): Verweis darauf.
+  if (e.bezug) html += T`<p class="leise bezug">Fortsetzung von <a href="/eintrag/${e.bezug.id}">#${e.bezug.nr} ${esc(e.bezug.titel || '')}</a></p>`;
   if (!an) return html + aufnahme;
   // Details: Zusatzwissen (z. B. Inhalt eines Films), Hinweise, Links. Die Aufnahme steht als eigene Karte am Ende.
   const mehr = `${an.beschreibung ? T`<div class="beschreibung">${esc(an.beschreibung)}</div>` : ''}${an.hinweise?.length ? T`<ul>${an.hinweise.map((h) => T`<li>${md(h).replace(/^<p>|<\/p>$/g, '')}</li>`).join('')}</ul>` : ''}${an.quellen?.length ? T`<h3>Links</h3>${linksHtml(an.quellen)}` : ''}`;
@@ -1534,6 +1566,10 @@ function eintragHtml(e, offline) {
     html += T`<h2>Runden</h2>${p.runden.map((r) => T`<a class="karte" href="/eintrag/${r.id}"><div class="zeile"><span class="leise">Runde ${r.nr} · ${zeit(r.zeit)} · ${r.quelle === 'web' ? tx('Web-App') : r.quelle === 'import' ? tx('Import') : tx('Pebble')}</span>
       ${r.id === e.id ? T('<span class="badge neutral">diese</span>') : T`<span class="badge ${esc(r.status)}">${esc(STATUS[r.status] || r.status)}</span>`}</div><div class="vorschau">${esc(r.transkript)}</div></a>`).join('')}`;
   }
+
+  // Anweisungen an die KI: ganz unten, eingeklappt.
+  const anw = e.analyse?.anweisungen || [];
+  if (anw.length) html += T`<details class="einklapp anweisungen"><summary>Deine Anweisungen an die KI (${anw.length})</summary><ul>${anw.map((x) => T`<li>${esc(x)}</li>`).join('')}</ul></details>`;
 
   const details = [];
   if (e.zuordnung) details.push([tx('Zuordnung'), ZUORDNUNG[e.zuordnung] || e.zuordnung]);
@@ -1942,8 +1978,33 @@ async function zeigeAnweisung(id) {
 
 // ---------- Antwortseite ----------
 
+// starteAufnahme: Mikrofon an, Aufnahme läuft bis stopp() oder maxSek (0 = ohne Grenze); onEnde(blob, sek)
+// kommt nach dem Stopp, nicht nach verwerfen(). onTick(sek) etwa fünfmal je Sekunde.
+async function starteAufnahme({ maxSek = 0, onTick, onEnde } = {}) {
+  const strom = await navigator.mediaDevices.getUserMedia({ audio: true });
+  const teile = [];
+  let rekorder;
+  try { rekorder = new MediaRecorder(strom); } catch (f) { strom.getTracks().forEach((t) => t.stop()); throw f; }
+  const start = Date.now();
+  let verworfen = false, uhr = null;
+  const aus = () => { clearInterval(uhr); strom.getTracks().forEach((t) => t.stop()); };
+  rekorder.ondataavailable = (d) => d.data.size && teile.push(d.data);
+  rekorder.onstop = () => { aus(); if (!verworfen) onEnde?.(new Blob(teile, { type: rekorder.mimeType || 'audio/webm' }), (Date.now() - start) / 1000); };
+  rekorder.start();
+  uhr = setInterval(() => {
+    const sek = (Date.now() - start) / 1000;
+    if (maxSek && sek >= maxSek && rekorder.state === 'recording') rekorder.stop();
+    else onTick?.(sek);
+  }, 200);
+  return {
+    get laeuft() { return rekorder.state === 'recording'; },
+    stopp() { if (rekorder.state === 'recording') rekorder.stop(); },
+    verwerfen() { verworfen = true; if (rekorder.state === 'recording') rekorder.stop(); else aus(); },
+  };
+}
+
 async function zeigeAntwort(planung) {
-  let aufnahme = null, rekorder = null, strom = null;
+  let aufnahme = null, lauf = null;
   const entwurfKey = T`entwurf:${planung}`;
   seite.innerHTML = T`<h1>Antworten</h1>
     <p class="leise">Die Antwort wird als neue Runde in die Planung eingearbeitet. Tippen oder aufnehmen.</p>
@@ -1958,9 +2019,8 @@ async function zeigeAntwort(planung) {
   text.oninput = () => localStorage.setItem(entwurfKey, text.value);
   document.getElementById('zurueck').onclick = () => history.back();
 
-  const stoppeStrom = () => { strom?.getTracks().forEach((t) => t.stop()); strom = null; };
   const male = () => {
-    if (rekorder?.state === 'recording') box.innerHTML = T('<span class="punkt"></span><span>Aufnahme läuft …</span><button class="btn klein" data-a="stopp">Stopp</button>');
+    if (lauf?.laeuft) box.innerHTML = T('<span class="punkt"></span><span>Aufnahme läuft …</span><button class="btn klein" data-a="stopp">Stopp</button>');
     else if (aufnahme) {
       box.innerHTML = T('<audio controls></audio><button class="btn klein gefahr" data-a="weg">Aufnahme verwerfen</button>');
       box.querySelector('audio').src = URL.createObjectURL(aufnahme);
@@ -1970,21 +2030,16 @@ async function zeigeAntwort(planung) {
     const a = ev.target.closest('button')?.dataset.a;
     if (a === 'start') {
       try {
-        strom = await navigator.mediaDevices.getUserMedia({ audio: true });
-        const teile = [];
-        rekorder = new MediaRecorder(strom);
-        rekorder.ondataavailable = (d) => d.data.size && teile.push(d.data);
-        rekorder.onstop = () => { aufnahme = new Blob(teile, { type: rekorder.mimeType || 'audio/webm' }); stoppeStrom(); male(); };
-        rekorder.start();
+        lauf = await starteAufnahme({ onEnde: (blob) => { aufnahme = blob; lauf = null; male(); } });
       } catch (f) { melde(tx('Mikrofon nicht verfügbar')); }
-    } else if (a === 'stopp') rekorder.stop();
+    } else if (a === 'stopp') lauf?.stopp();
     else if (a === 'weg') aufnahme = null;
     male();
   };
   male();
 
   document.getElementById('senden').onclick = async (ev) => {
-    if (rekorder?.state === 'recording') return melde(tx('Erst die Aufnahme stoppen'));
+    if (lauf?.laeuft) return melde(tx('Erst die Aufnahme stoppen'));
     const inhalt = text.value.trim();
     if (!aufnahme && !inhalt) return melde(tx('Antwort ist leer'));
     if (aufnahme && inhalt && !confirm(tx('Es gibt Text und Aufnahme. Gesendet wird die Aufnahme, der Text entfällt. Fortfahren?'))) return;
@@ -1994,8 +2049,69 @@ async function zeigeAntwort(planung) {
     melde(gesendet ? tx('Antwort gesendet') : tx('Antwort vorgemerkt – wird bei Verbindung gesendet'));
     geheZu(T`/planung/${planung}`, true);
   };
-  aufraeumen = () => { if (rekorder?.state === 'recording') rekorder.stop(); stoppeStrom(); };
+  aufraeumen = () => lauf?.verwerfen();
 }
+
+// ---------- Notiz aufnehmen (Knopf + im Kopf) ----------
+// Aufnahme bis 60 s → Ausgang (IndexedDB) → POST /api/notizen; gelöscht wird sie erst nach der Bestätigung.
+const NOTIZ_MAX_SEK = 60;
+const mmss = (sek) => { const s = Math.max(0, Math.round(sek)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; };
+function oeffneAufnahme() {
+  if (document.querySelector('dialog.drawer')) return;
+  const d = document.createElement('dialog');
+  d.className = 'drawer aufnahmedrawer';
+  const umfang = 2 * Math.PI * 46;
+  const kann = !!(navigator.mediaDevices?.getUserMedia && window.MediaRecorder);
+  d.innerHTML = T`<div class="griff" aria-hidden="true"></div><div class="zeile"><h2>Notiz aufnehmen</h2><button class="btn klein rund" data-d="zu" aria-label="Schließen">×</button></div>
+    ${kann ? T`<button type="button" class="aufnahmeknopf" data-d="knopf" aria-label="Aufnahme starten">
+        <svg viewBox="0 0 100 100" aria-hidden="true"><circle class="spur" cx="50" cy="50" r="46"/><circle class="fortschritt" cx="50" cy="50" r="46" stroke-dasharray="${umfang}" stroke-dashoffset="${umfang}"/></svg>
+        <span class="symbol" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3" fill="currentColor"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></span>
+      </button>
+      <p class="aufnahmezeit" aria-live="polite"><span data-zeit>0:00</span> / ${mmss(NOTIZ_MAX_SEK)}</p>
+      <p class="leise aufnahmehinweis" data-hinweis>Tippen zum Aufnehmen, nochmal tippen zum Senden.</p>` : T('<p class="hinweis warn">Aufnahme wird von diesem Browser nicht unterstützt.</p>')}`;
+  const knopf = d.querySelector('.aufnahmeknopf');
+  const ring = d.querySelector('.fortschritt');
+  const zeitEl = d.querySelector('[data-zeit]');
+  const hinweis = d.querySelector('[data-hinweis]');
+  let lauf = null, startet = false;
+  const tick = (sek) => {
+    ring.style.strokeDashoffset = String(umfang * (1 - Math.min(1, sek / NOTIZ_MAX_SEK)));
+    zeitEl.textContent = mmss(sek);
+  };
+  const fertig = async (blob, sek) => {
+    lauf = null;
+    knopf.classList.remove('laeuft');
+    knopf.disabled = true;
+    if (!blob.size || sek < 0.5) { d.close(); return melde(tx('Aufnahme zu kurz')); }
+    const gesendet = await merkeVor({ typ: 'notiz', audio: blob });
+    d.close();
+    melde(gesendet ? tx('Notiz gesendet') : tx('Notiz vorgemerkt – wird bei Verbindung gesendet'));
+    if (aktuell?.name === 'verlauf') zeigeAusgang();
+  };
+  d.onclick = async (ev) => {
+    if (ev.target === d) return d.close();
+    const b = ev.target.closest('[data-d]');
+    if (!b) return;
+    if (b.dataset.d === 'zu') return d.close();
+    if (b.dataset.d !== 'knopf' || startet) return;
+    if (lauf) return lauf.stopp();
+    startet = true;
+    try {
+      lauf = await starteAufnahme({ maxSek: NOTIZ_MAX_SEK, onTick: tick, onEnde: fertig });
+      if (!d.open) return lauf.verwerfen();
+      knopf.classList.add('laeuft');
+      knopf.setAttribute('aria-label', tx('Aufnahme beenden und senden'));
+      hinweis.textContent = tx('Aufnahme läuft – tippen zum Beenden und Senden.');
+    } catch (f) {
+      melde(tx('Mikrofon nicht verfügbar'));
+    } finally { startet = false; }
+  };
+  // Schließen ohne Stopp verwirft die laufende Aufnahme.
+  d.onclose = () => { lauf?.verwerfen(); d.remove(); };
+  document.body.append(d);
+  d.showModal();
+}
+neuKnopf.onclick = oeffneAufnahme;
 
 // ---------- Fragen der KI (Drawer): eine Frage nach der anderen, drei Vorschläge oder eigene Antwort ----------
 
@@ -2082,6 +2198,8 @@ async function oeffneFragen(planung, typ = 'planung') {
 // ---------- Listen: Punkte aus Notizen zum Abhaken ----------
 
 // Alle Listen, oder als Unterseite /listen/gruppe/<name> nur eine Gruppe ('-' = ohne Gruppe).
+const LISTE_PUNKTE_SCHRITT = 10;
+
 async function zeigeListen(filter) {
   seite.innerHTML = T('<p class="leer">Lädt …</p>');
   // alle: Punkte sämtlicher Listen, erst geholt, wenn „Vergangene“ aufgeklappt wird (die Übersicht lädt nur aktive Punkte).
@@ -2089,6 +2207,27 @@ async function zeigeListen(filter) {
   // Ausgeklappt: unter jeder aktiven Liste ihre offenen (und kürzlich abgehakten) Punkte; je Gerät gemerkt.
   let ausgeklappt = false;
   try { ausgeklappt = localStorage.getItem('listen-ausgeklappt') === '1'; } catch { /* Standard: eingeklappt */ }
+  // Je Liste, wie viele Punkte gerade gezeigt werden (Vorgabe LISTE_PUNKTE_SCHRITT).
+  const gezeigt = new Map();
+  // Tag-Filter (gleiche Auswahl wie im Verlauf): nur Listen mit passenden Punkten, diese dann aufgeklappt.
+  // Tags kommen je Punkt von seiner Notiz bzw. Planung und werden nicht angezeigt.
+  const tags = gewaehlteTags();
+  const ladeAlle = async () => {
+    try {
+      const voll = await api('/api/listen?punkte=1');
+      alle = new Map(voll.listen.map((x) => [x.id, x.punkte || []]));
+      vorratNeu();
+      male();
+    } catch (f) { if (!(f instanceof NetzFehler)) melde(f.message); }
+  };
+  const vorratNeu = () => {
+    const punkte = new Map();
+    for (const l of d?.listen || []) for (const p of l.punkte || []) punkte.set(p.id, p);
+    for (const ps of alle?.values() || []) for (const p of ps) punkte.set(p.id, p);
+    const v = tagVorratAus(punkte.values());
+    tagFilter.daten(v.vorrat, v.kombis);
+  };
+  const tagFilter = richteTagFilter({ tags, neu: () => { if (tags.length && !alle) ladeAlle(); male(); } });
   const punktHtml = (p) => T`<div class="lp${p.erledigt ? ' erledigt' : ''}">
     <button class="haken" data-haken="${p.id}" aria-pressed="${!!p.erledigt}" aria-label="${p.erledigt ? tx('Wieder öffnen') : tx('Abhaken')}: ${esc(p.text)}"><span class="hakenbild" aria-hidden="true"></span></button>
     <div class="lptext"><div class="lpzeile">${p.eintrag || p.planung ? T`<a class="lptitel" href="${p.eintrag ? T`/eintrag/${p.eintrag}` : T`/planung/${p.planung}`}">${esc(p.text)}</a>${punktEnde(p)}` : `${esc(p.text)}${punktEnde(p)}`}</div></div></div>`;
@@ -2096,14 +2235,23 @@ async function zeigeListen(filter) {
     if (aktuell?.name !== 'listen' || (aktuell.arg ? decodeURIComponent(aktuell.arg) : '') !== filter) return;
     const zeile = (l) => T`<a class="karte listenkarte" href="/liste/${l.id}"><span class="titel">${listenNr(l)}${esc(l.name)}</span>
         <span class="badge ${l.offen ? 'in_arbeit' : 'fertig'}" title="${tx('{0} von {1} offen', l.offen, l.gesamt)}">${l.offen}/${l.gesamt}</span></a>`;
+    const gefiltert = tags.length > 0;
+    const aktuellePunkte = (l) => (l.punkte || []).filter((p) => (!p.erledigt || p.erledigt > d.vergangen_vor) && passtTags(p, tags));
+    // Je Liste höchstens LISTE_PUNKTE_SCHRITT Punkte, „Weitere laden“ zeigt die nächsten; alle stehen in der Liste selbst.
+    const punkteHtml = (l, sichtbar) => {
+      if (!sichtbar.length) return '';
+      const n = gezeigt.get(l.id) || LISTE_PUNKTE_SCHRITT;
+      const rest = sichtbar.length - n;
+      return T`<div class="lpgruppe">${sichtbar.slice(0, n).map(punktHtml).join('')}${rest > 0 ? T`<div class="lpmehr"><button class="btn klein" data-mehr="${l.id}">${tx('Weitere {0} laden', Math.min(rest, LISTE_PUNKTE_SCHRITT))}</button></div>` : ''}</div>`;
+    };
     const mitPunkten = (l) => {
-      const sichtbar = ausgeklappt ? (l.punkte || []).filter((p) => !p.erledigt || p.erledigt > d.vergangen_vor) : [];
-      return zeile(l) + (sichtbar.length ? T`<div class="lpgruppe">${sichtbar.map(punktHtml).join('')}</div>` : '');
+      const sichtbar = ausgeklappt || gefiltert ? aktuellePunkte(l) : [];
+      return zeile(l) + punkteHtml(l, sichtbar);
     };
     // Vergangene Listen sehen aus wie die aktiven: ausgeklappt mit allen (erledigten) Punkten.
     const mitAllenPunkten = (l) => {
-      const sichtbar = ausgeklappt ? (alle?.get(l.id) || l.punkte || []) : [];
-      return zeile(l) + (sichtbar.length ? T`<div class="lpgruppe">${sichtbar.map(punktHtml).join('')}</div>` : '');
+      const sichtbar = ausgeklappt || gefiltert ? (alle?.get(l.id) || l.punkte || []).filter((p) => passtTags(p, tags)) : [];
+      return zeile(l) + punkteHtml(l, sichtbar);
     };
     // Je Gruppe ihre Listen; Listen ohne Gruppe unter „Ohne Gruppe“. Gruppen und Listen nach dem jüngsten Punkt, neueste oben.
     // Der Gruppenname öffnet die Gruppe als Unterseite; dort steht kein Gruppenkopf.
@@ -2127,17 +2275,20 @@ async function zeigeListen(filter) {
     const gruppe = filter && filter !== '-' ? namen.find((n) => n.toLowerCase() === filter.toLowerCase()) : '';
     const passt = (l) => !filter || (filter === '-' ? !l.projekt : (l.projekt || '').toLowerCase() === filter.toLowerCase());
     const sichtbar = d.listen.filter(passt);
-    const aktiv = sichtbar.filter(istAktiv), vergangen = sichtbar.filter((l) => !istAktiv(l));
+    // Mit Tag-Filter: aktive Listen mit passendem aktuellem Punkt, vergangene mit irgendeinem passenden (sobald alle Punkte da sind).
+    const aktiv = sichtbar.filter((l) => istAktiv(l) && (!gefiltert || aktuellePunkte(l).length > 0));
+    const vergangen = sichtbar.filter((l) => !istAktiv(l) && (!gefiltert || (alle?.get(l.id) || []).some((p) => passtTags(p, tags))));
     // Titelzeile: links Stift (Gruppe bearbeiten), rechts großes Symbol zum Aus-/Einklappen der offenen Punkte.
     const klapp = aktiv.length || (vergangeneZeigen && vergangen.length) ? T`<button class="titelknopf gross" data-ausklappen="1" aria-pressed="${ausgeklappt}" aria-label="${ausgeklappt ? tx('Offene Punkte einklappen') : tx('Alle offenen Punkte ausklappen')}" title="${ausgeklappt ? tx('Offene Punkte einklappen') : tx('Alle offenen Punkte ausklappen')}">${ausgeklappt ? EINKLAPPEN : AUSKLAPPEN}</button>` : '';
     const titel = gruppenTitel(gruppe || filter);
     const kopf = filter
       ? T`${krumen([[tx('Listen'), '/listen'], [titel]])}<div class="titelzeile">${gruppe ? T`<a class="titelknopf" href="/gruppe/${encodeURIComponent(gruppe)}/bearbeiten" aria-label="${esc(tx('Gruppe {0} bearbeiten', gruppe))}" title="Gruppe bearbeiten">${STIFT}</a>` : ''}<h1>${esc(titel)}</h1>${klapp}</div>`
       : T`<div class="titelzeile"><h1>Listen</h1>${klapp}</div><p class="leise">Die KI sortiert Notizen selbst als Punkte in Listen, Listen eines größeren Themas in Gruppen. Von Hand über „In Liste“ an der Notiz.</p>`;
-    seite.innerHTML = `${kopf}
-      ${filter && !sichtbar.length ? T('<p class="leer">Keine Einträge vorhanden.</p>') : !d.listen.length ? T('<p class="leer">Noch keine Liste. Einfach einen Filmtitel oder eine Idee diktieren.</p>') : aktiv.length ? gruppiert(aktiv, mitPunkten) : T('<p class="leer">Alles erledigt.</p>')}
+    seite.innerHTML = `${kopf}<div id="tagleiste" class="tagleiste" hidden></div>
+      ${filter && !sichtbar.length ? T('<p class="leer">Keine Einträge vorhanden.</p>') : !d.listen.length ? T('<p class="leer">Noch keine Liste. Einfach einen Filmtitel oder eine Idee diktieren.</p>') : aktiv.length ? gruppiert(aktiv, mitPunkten) : gefiltert ? T('<p class="leer">Keine offenen Punkte mit diesen Tags.</p>') : T('<p class="leer">Alles erledigt.</p>')}
       ${vergangen.length ? T`<div class="leiste"><button class="btn klein" data-vergangen="1">${vergangeneZeigen ? tx('Vergangene ausblenden') : T`Vergangene Listen anzeigen (${vergangen.length})`}</button></div>
         ${vergangeneZeigen ? T`<h2>Vergangen</h2>${gruppiert(vergangen, mitAllenPunkten)}` : ''}` : ''}`;
+    tagFilter.male();
   };
   const laden = async (vorab) => {
     try { d = await apiAbgelegt('/api/listen?punkte=aktiv', vorab); } catch (f) {
@@ -2156,7 +2307,9 @@ async function zeigeListen(filter) {
     }
     try { localStorage.setItem('listen-gruppen', JSON.stringify(gruppen)); } catch { /* nur Komfort */ }
     maleMenue();
+    vorratNeu();
     male();
+    if (tags.length && !alle && !vorab) ladeAlle();
   };
   aktuell.neuLaden = laden;
   seite.onclick = async (ev) => {
@@ -2165,13 +2318,12 @@ async function zeigeListen(filter) {
     if (b.dataset.vergangen) {
       vergangeneZeigen = !vergangeneZeigen;
       male();
-      if (vergangeneZeigen && !alle) {
-        try {
-          const voll = await api('/api/listen?punkte=1');
-          alle = new Map(voll.listen.map((x) => [x.id, x.punkte || []]));
-          male();
-        } catch (f) { if (!(f instanceof NetzFehler)) melde(f.message); }
-      }
+      if (vergangeneZeigen && !alle) await ladeAlle();
+      return;
+    }
+    if (b.dataset.mehr) {
+      gezeigt.set(b.dataset.mehr, (gezeigt.get(b.dataset.mehr) || LISTE_PUNKTE_SCHRITT) + LISTE_PUNKTE_SCHRITT);
+      male();
       return;
     }
     if (b.dataset.ausklappen) {
@@ -2211,25 +2363,28 @@ async function merkeHakenAbgelegt(listeId, punkt) {
 async function zeigeListe(id) {
   seite.innerHTML = T('<p class="leer">Lädt …</p>');
   let l = null, vergangeneZeigen = false;
+  // Tag-Filter (gleiche Auswahl wie im Verlauf): nur Punkte, deren Notiz bzw. Planung alle gewählten Tags trägt.
+  const tags = gewaehlteTags();
+  const tagFilter = richteTagFilter({ tags, neu: () => male() });
   const punkt = (p) => T`<div class="lp${p.erledigt ? ' erledigt' : ''}">
     <button class="haken" data-haken="${p.id}" aria-pressed="${!!p.erledigt}" aria-label="${p.erledigt ? tx('Wieder öffnen') : tx('Abhaken')}: ${esc(p.text)}"><span class="hakenbild" aria-hidden="true"></span></button>
-    <div class="lptext"><div class="lpzeile">${p.eintrag || p.planung ? T`<a class="lptitel" href="${p.eintrag ? T`/eintrag/${p.eintrag}` : T`/planung/${p.planung}`}">${esc(p.text)}</a>${punktEnde(p)}` : `${esc(p.text)}${punktEnde(p)}`}</div>
-      <details class="lpmenue"><summary aria-label="${esc(tx('Mehr zu {0}', p.text))}">Mehr</summary><div class="leiste"><a class="btn klein" href="/liste/${id}/punkt/${p.id}/verschieben">Verschieben</a><button class="btn klein gefahr" data-weg="${p.id}">Löschen</button></div></details></div></div>`;
+    <div class="lptext"><div class="lpzeile">${p.eintrag || p.planung ? T`<a class="lptitel" href="${p.eintrag ? T`/eintrag/${p.eintrag}` : T`/planung/${p.planung}`}">${esc(p.text)}</a>${punktEnde(p)}` : `${esc(p.text)}${punktEnde(p)}`}</div></div></div>`;
   const male = () => {
     if (aktuell?.name !== 'liste' || aktuell.arg !== id) return;
     const offen = l.punkte.filter((p) => !p.erledigt), fertig = l.punkte.filter((p) => p.erledigt);
     // Frisch Erledigtes bleibt eine Weile bei den aktiven Punkten, älteres steht eingeklappt unter „Vergangen“.
-    const kuerzlich = fertig.filter((p) => p.erledigt > l.vergangen_vor), vergangen = fertig.filter((p) => p.erledigt <= l.vergangen_vor);
-    const aktiv = [...offen, ...kuerzlich];
-    const auf = new Set([...seite.querySelectorAll('details[open] [data-weg]')].map((b) => b.dataset.weg));
+    const passend = (p) => passtTags(p, tags);
+    const kuerzlich = fertig.filter((p) => p.erledigt > l.vergangen_vor && passend(p)), vergangen = fertig.filter((p) => p.erledigt <= l.vergangen_vor && passend(p));
+    const aktiv = [...offen.filter(passend), ...kuerzlich];
     seite.innerHTML = T`${krumen([[tx('Listen'), '/listen'], [gruppenTitel(l.projekt), gruppenPfad(l.projekt)], [`${l.nr ? `L${l.nr} ` : ''}${l.name}`]])}
       <h1>${listenNr(l)}${esc(l.name)}</h1><div class="leise">${l.projekt ? T`Gruppe ${esc(l.projekt)} · ` : ''}${offen.length} offen · ${fertig.length} erledigt</div>
-      ${l.beschreibung ? T`<p class="leise">${esc(l.beschreibung)}</p>` : ''}
-      ${aktiv.length ? aktiv.map(punkt).join('') : T`<p class="leer">${fertig.length ? tx('Alles erledigt.') : tx('Die Liste ist leer.')}</p>`}
+      ${l.beschreibung ? T`<p class="leise">${esc(l.beschreibung)}</p>` : ''}<div id="tagleiste" class="tagleiste" hidden></div>
+      ${aktiv.length ? aktiv.map(punkt).join('') : T`<p class="leer">${tags.length ? tx('Keine offenen Punkte mit diesen Tags.') : fertig.length ? tx('Alles erledigt.') : tx('Die Liste ist leer.')}</p>`}
       ${vergangen.length ? T`<div class="leiste"><button class="btn klein" data-vergangen="1">${vergangeneZeigen ? tx('Vergangene ausblenden') : T`Vergangene anzeigen (${vergangen.length})`}</button></div>
         ${vergangeneZeigen ? T`<h2>Vergangen</h2>${vergangen.map(punkt).join('')}` : ''}` : ''}
       <div class="leiste">${l.joplin_id ? T`<a class="btn" href="joplin://x-callback-url/openNote?id=${esc(l.joplin_id)}" target="_self">In Joplin öffnen</a>` : ''}<a class="btn" href="/liste/${id}/bearbeiten">Bearbeiten</a><button class="btn gefahr" data-liste-weg="1">Liste löschen</button></div>`;
-    seite.querySelectorAll('details.lpmenue').forEach((dt) => { if (auf.has(dt.querySelector('[data-weg]')?.dataset.weg)) dt.open = true; });
+    const v = tagVorratAus(l.punkte);
+    tagFilter.daten(v.vorrat, v.kombis);
   };
   const laden = async (vorab) => {
     const hier = () => aktuell?.name === 'liste' && aktuell.arg === id;
@@ -2255,10 +2410,6 @@ async function zeigeListe(id) {
         male();
         await merkeHakenAbgelegt(id, p);
         await merkeVor({ typ: 'haken', punkt: p.id });
-      } else if (b.dataset.weg) {
-        if (!confirm(tx('Punkt aus der Liste löschen?'))) return;
-        await api(T`/api/listenpunkte/${b.dataset.weg}`, { method: 'DELETE' });
-        await laden();
       } else if (b.dataset.listeWeg) {
         if (!confirm(T`Liste „${l.name}“ mit ${l.punkte.length} Punkten löschen? Die Notizen bleiben im Verlauf.`)) return;
         await api(T`/api/listen/${id}`, { method: 'DELETE' });
@@ -2270,27 +2421,6 @@ async function zeigeListe(id) {
   aufraeumen = () => { seite.onclick = null; };
   await laden(true).catch(() => {});
   await laden();
-}
-
-async function zeigeVerschieben(liste, punkt) {
-  const [l, alleListen] = await Promise.all([api(T`/api/listen/${liste}`), api('/api/listen')]);
-  const p = l.punkte.find((x) => x.id === punkt);
-  const ziele = alleListen.listen.filter((x) => x.id !== liste);
-  if (!p) { seite.innerHTML = T`<p class="leer">Punkt nicht gefunden.</p><p class="mitte"><a class="btn" href="/liste/${liste}">Zur Liste</a></p>`; return; }
-  seite.innerHTML = T`<h1>Punkt verschieben</h1><p class="leise">„${esc(p.text)}“ aus „${esc(l.name)}“ in eine andere Liste.</p>
-    ${ziele.length ? ziele.map((z) => T`<div class="karte listenkarte"><span class="titel">${esc(listenName(z))}</span><span class="leise">${z.gesamt} ${z.gesamt === 1 ? tx('Punkt') : tx('Punkte')}</span><button class="btn klein haupt" data-ziel="${z.id}">Hierher</button></div>`).join('') : T('<p class="leise">Es gibt keine andere Liste.</p>')}
-    <div class="leiste"><a class="btn" href="/liste/${liste}">Abbrechen</a></div>`;
-  seite.onclick = async (ev) => {
-    const b = ev.target.closest('button[data-ziel]');
-    if (!b) return;
-    b.disabled = true;
-    try {
-      await api(T`/api/listenpunkte/${punkt}/verschieben`, { method: 'POST', body: { ziel: b.dataset.ziel } });
-      melde(tx('Verschoben'));
-      geheZu(T`/liste/${b.dataset.ziel}`, true);
-    } catch (f) { b.disabled = false; melde(f.message); }
-  };
-  aufraeumen = () => { seite.onclick = null; };
 }
 
 // Eigene Seite: Liste umbenennen oder in eine andere Gruppe verschieben (auch „ohne Gruppe“).
@@ -2363,10 +2493,33 @@ async function zeigeEinsortieren(id, art) {
   const was = art === 'planung' ? tx('Die Planung') : tx('Die Notiz');
   seite.innerHTML = T`<h1>${e.liste ? tx('Liste wechseln') : tx('In Liste einsortieren')}</h1>
     <p class="leise">„${esc(e.titel)}“ ${e.liste ? T`steht in „${esc(listenName(e.liste))}“ und zieht in die gewählte Liste um.` : T`wird ein Punkt zum Abhaken. ${was} bleibt im Verlauf.`}</p>
-    ${ziele.map((z) => T`<div class="karte listenkarte"><span class="titel">${esc(listenName(z))}</span><span class="leise">${z.gesamt} ${z.gesamt === 1 ? tx('Punkt') : tx('Punkte')}</span><button class="btn klein haupt" data-ziel="${z.id}">Hierher</button></div>`).join('')}
+    <input type="search" id="zielsuche" placeholder="Liste oder Gruppe suchen …" aria-label="Liste oder Gruppe suchen" autocomplete="off" enterkeyhint="search">
+    <div id="ziele"></div>
     <label for="neueliste">Neue Liste</label>
     <div class="zeile"><input type="text" id="neueliste" maxlength="40" placeholder="z. B. Filme"><button class="btn" data-neu="1">Anlegen</button></div>
     <div class="leiste">${e.liste ? T`<a class="btn" href="/liste/${e.liste.id}">Zur Liste „${esc(listenName(e.liste))}“</a>` : ''}<a class="btn" href="${zurueck}">Abbrechen</a></div>`;
+  // Ziele je Gruppe zum Aufklappen (Gruppe mit dem jüngsten Punkt zuerst, „Ohne Gruppe“ am Ende); die Suche filtert
+  // Listen- und Gruppennamen und klappt Gruppen mit Treffern auf.
+  const box = seite.querySelector('#ziele'), suche = seite.querySelector('#zielsuche');
+  const gruppen = [];
+  for (const z of [...ziele].sort((x, y) => (y.neuester || 0) - (x.neuester || 0))) {
+    const g = gruppen.find(([n]) => n === (z.projekt || ''));
+    if (g) g[1].push(z); else gruppen.push([z.projekt || '', [z]]);
+  }
+  gruppen.sort(([x], [y]) => (x === '') - (y === ''));
+  const maleZiele = () => {
+    const q = suche.value.trim().toLowerCase();
+    const html = gruppen.map(([g, ls]) => {
+      const gruppeTrifft = q && (g || tx('Ohne Gruppe')).toLowerCase().includes(q);
+      const sichtbar = !q || gruppeTrifft ? ls : ls.filter((z) => z.name.toLowerCase().includes(q));
+      if (!sichtbar.length) return '';
+      return T`<details class="zielgruppe"${q ? ' open' : ''}><summary><span>${esc(g ? g : tx('Ohne Gruppe'))}</span><span class="zaehler still">${sichtbar.length}</span></summary>
+        ${sichtbar.map((z) => T`<div class="karte listenkarte"><span class="titel">${listenNr(z)}${esc(z.name)}</span><span class="leise">${z.gesamt} ${z.gesamt === 1 ? tx('Punkt') : tx('Punkte')}</span><button class="btn klein haupt" data-ziel="${z.id}">Hierher</button></div>`).join('')}</details>`;
+    }).join('');
+    box.innerHTML = html || T('<p class="leise">Keine passende Liste – unten neu anlegen.</p>');
+  };
+  suche.oninput = maleZiele;
+  maleZiele();
   seite.onclick = async (ev) => {
     const b = ev.target.closest('button[data-ziel], button[data-neu]');
     if (!b) return;
@@ -2464,7 +2617,7 @@ async function zeigeStatus() {
       ${s.fehlgeschlagen ? T`<div class="hinweis schlecht">${s.fehlgeschlagen} Auftrag/Aufträge dauerhaft fehlgeschlagen.</div>` : T('<div class="hinweis gut">Keine fehlgeschlagenen Aufträge.</div>')}
       ${(s.audio_unbekannt || []).length ? T`<h2>Aufnahmen ohne Eintrag <span class="zaehler fehler">${s.audio_unbekannt.length}</span></h2>
         <div class="hinweis schlecht">Im Audio-Ordner liegen Aufnahmen, die die Datenbank nicht kennt – z. B. nach dem Wiederherstellen eines älteren Backups. Importieren legt je Aufnahme einen neuen Eintrag an (Eingang = Zeitpunkt der Datei); er wird neu transkribiert und von der KI ausgewertet. Planungen kommen danach dran: eine Runde ohne Rückfragen, die KI ordnet sie einer Planung zu.</div>
-        ${s.audio_unbekannt.map((f) => T`<div class="karte"><div class="zeile"><span><span class="badge fehler">ohne Eintrag</span> <span class="badge ${esc(f.modus)}">${esc(MODUS[f.modus] || f.modus)}</span> ${zeit(f.zeit)}</span><button class="btn klein" data-import="${esc(f.datei)}">Importieren</button></div>
+        ${s.audio_unbekannt.map((f) => T`<div class="karte"><div class="zeile"><span><span class="badge fehler">ohne Eintrag</span> <span class="badge ${esc(f.modus)}">${esc(MODUS[f.modus] || f.modus)}</span>${f.web ? T(' <span class="badge">Web-App</span>') : ''} ${zeit(f.zeit)}</span><button class="btn klein" data-import="${esc(f.datei)}">Importieren</button></div>
           <div class="leise">${esc(f.datei)} · ${groesse(f.groesse)}</div></div>`).join('')}
         ${s.audio_unbekannt.length > 1 ? T('<div class="leiste"><button class="btn haupt" data-import-alle="1">Alle importieren</button></div>') : ''}` : ''}
       ${s.joplin.aktiv ? T`<dl><dt>Joplin</dt><dd>${joplin}</dd></dl>` : ''}
@@ -3901,7 +4054,16 @@ function zeigeVersionskarte() {
 
 async function ladeZaehler() {
   try {
-    const z = await api('/api/zaehler');
+    // menue=1: Zahlen des Seitenmenüs (Verlauf-Filter mit Tag-Filter, Neu seit zuletzt gesehen, Listen-Gruppen).
+    const grenze = besuche.grenze();
+    const z = await api(`/api/zaehler?${['menue=1', Number.isFinite(grenze) ? T`seit=${grenze}` : '', ...gewaehlteTags().map((t) => T`tag=${encodeURIComponent(t)}`)].filter(Boolean).join('&')}`);
+    if (z.menue) {
+      try {
+        localStorage.setItem('verlauf-zahlen', JSON.stringify(z.menue.zahlen));
+        localStorage.setItem('verlauf-neu', JSON.stringify(z.menue.neu));
+        localStorage.setItem('listen-gruppen', JSON.stringify(z.menue.gruppen));
+      } catch { /* nur Anzeige */ }
+    }
     offeneVorschlaege = z.vorschlaege || 0;
     neueVersion = z.update || '';
     papierkorbZahl = z.papierkorb || 0;
@@ -3924,13 +4086,15 @@ async function ladeZaehler() {
 
 // ---------- Live-Daten (SSE), Verbindung, Start ----------
 
-let quelle = null, ladeTimer = null;
+let quelle = null, ladeTimer = null, zaehlerTimer = null;
 function starteLive() {
   if (quelle) return;
   quelle = new EventSource('/api/ereignisse');
   quelle.onopen = () => { sendeAusgang(); };
   quelle.onmessage = (ev) => {
-    if (String(ev.data).startsWith('gedaechtnis') || ev.data === 'version' || ev.data === 'ring') ladeZaehler();
+    // Jede Änderung (erledigt, gelöscht, Liste/Gruppe neu …) kann die Zahlen im Menü ändern: gebündelt neu laden.
+    clearTimeout(zaehlerTimer);
+    zaehlerTimer = setTimeout(ladeZaehler, 800);
     clearTimeout(ladeTimer);
     ladeTimer = setTimeout(() => aktuell?.neuLaden?.(), 300);
   };

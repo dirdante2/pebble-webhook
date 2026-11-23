@@ -73,11 +73,11 @@ func (a *App) handleMCP(w http.ResponseWriter, r *http.Request) {
 		}
 		mcpReply(w, req.ID, map[string]any{"protocolVersion": version, "capabilities": map[string]any{"tools": map[string]any{}},
 			"serverInfo":   map[string]any{"name": "pebble-webhook", "version": shortVersion(a.Version)},
-			"instructions": i18n.T("Sprachnotizen des Nutzers: Listen (listen_uebersicht, punkt_lesen, punkte_abhaken mit Kennung wie #59.2), Termine (termine), Suche in allen Notizen (notizen_suchen) und Notiz per Nummer (notiz_lesen). Fragen nach Terminen immer mit termine beantworten, nicht aus den Listen.")}, nil)
+			"instructions": i18n.T("Sprachnotizen des Nutzers: Listen (listen_uebersicht, punkt_lesen, punkte_abhaken mit Kennung wie #59.2), Termine (termine), Suche in allen Notizen (notizen_suchen) und Notiz per Nummer (notiz_lesen). Anlegen: notizen_importieren (nur Texte; die Notiz-KI sortiert selbst ein). Listen umbauen (listen_aufraeumen) nur auf ausdrücklichen Wunsch und erst nach Zustimmung zum Vorschlag. Fragen nach Terminen immer mit termine beantworten, nicht aus den Listen.")}, nil)
 	case "ping":
 		mcpReply(w, req.ID, map[string]any{}, nil)
 	case "tools/list":
-		mcpReply(w, req.ID, map[string]any{"tools": mcpLocalize(append(append([]map[string]any{}, mcpTools...), mcpToolsNotes...))}, nil)
+		mcpReply(w, req.ID, map[string]any{"tools": mcpLocalize(append(append(append(append([]map[string]any{}, mcpTools...), mcpToolsNotes...), mcpToolsCreate...), mcpToolsCleanup...))}, nil)
 	case "tools/call":
 		var p struct {
 			Name      string          `json:"name"`
@@ -166,6 +166,21 @@ func (a *App) mcpItems() ([]*store.List, []mcpItem, error) {
 }
 
 func (a *App) mcpCall(name string, raw json.RawMessage) (string, error) {
+	// Eigene Argumente (punkte sind hier Objekte, nicht Kennungen).
+	switch name {
+	case "notizen_importieren":
+		return a.mcpImport(raw)
+	case "listen_aufraeumen":
+		return a.mcpCleanup(raw)
+	case "notizen_anreichern":
+		var in struct {
+			Nummern []string `json:"nummern"`
+		}
+		if json.Unmarshal(raw, &in) != nil {
+			return "", i18n.Errorf("Argumente nicht lesbar")
+		}
+		return a.mcpEnrich(in.Nummern)
+	}
 	var args struct {
 		Gruppe     string   `json:"gruppe"`
 		Liste      string   `json:"liste"`
@@ -181,6 +196,8 @@ func (a *App) mcpCall(name string, raw json.RawMessage) (string, error) {
 		return "", i18n.Errorf("Argumente nicht lesbar")
 	}
 	switch name {
+	case "listen_struktur":
+		return a.mcpStructure()
 	case "termine":
 		return a.mcpAppointments(args.Tage, args.Vergangene)
 	case "notizen_suchen":

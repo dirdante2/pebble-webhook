@@ -143,7 +143,7 @@ func (a *App) handleHook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if len(audio) > 0 {
-		path, err := a.saveAudio(j.ID, j.Mode, audio, audioMime)
+		path, err := a.saveAudio(j.ID, j.Mode, audio, audioMime, false)
 		if err != nil {
 			logf("hook: Audio speichern: %v", err)
 			hookReply(w, http.StatusInsufficientStorage, "Speicher nicht verfügbar")
@@ -222,8 +222,9 @@ func audioExt(mimeType string) string {
 	return ".m4a"
 }
 
-// saveAudio schreibt die Aufnahme dauerhaft (fsync) unter AUDIO_DIR/<diktat|planung>/JJJJ/MM/<id>.<ext>.
-func (a *App) saveAudio(id, mode string, data []byte, mimeType string) (string, error) {
+// saveAudio schreibt die Aufnahme dauerhaft (fsync) unter AUDIO_DIR/<diktat|planung>/JJJJ/MM/<id>.<ext>;
+// Aufnahmen aus der Web-App (web) heißen <id>-web.<ext>, damit ein Reimport sie nicht dem Ring zuschreibt.
+func (a *App) saveAudio(id, mode string, data []byte, mimeType string, web bool) (string, error) {
 	free, err := freeBytes(a.Cfg.AudioDir)
 	if err != nil {
 		return "", err
@@ -235,7 +236,11 @@ func (a *App) saveAudio(id, mode string, data []byte, mimeType string) (string, 
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return "", err
 	}
-	path := filepath.Join(dir, id+audioExt(mimeType))
+	name := id
+	if web {
+		name += webMark
+	}
+	path := filepath.Join(dir, name+audioExt(mimeType))
 	tmp := path + ".tmp"
 	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o640)
 	if err != nil {

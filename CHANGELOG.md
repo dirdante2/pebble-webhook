@@ -9,6 +9,30 @@ Version numbers X.Y.Z:
 
 Own builds show X.Y.Z.A: **A** is a local build counter (one per deployed change, starting at 1 for every new X.Y.Z); it never appears in Git or releases, so one version can collect several changes.
 
+## [2.2.0] - 2026-11-23
+
+### New
+- Record notes in the web app: "+" button next to the search, up to 60 s, queued offline; not counted as ring usage.
+- Web recordings named `<id>-web`; reimport keeps them as web recordings.
+- Notes in context: AI sees notes from the last minutes and links follow-ups to the same list.
+- AI can search earlier notes itself (several searches at once, limited output).
+- Tag filter on lists, group pages and single lists.
+- MCP: import entries as text (`notizen_importieren`), the AI sorts them.
+- MCP: list overview (`listen_struktur`), re-evaluate notes (`notizen_anreichern`).
+- MCP: tidy up lists and groups (`listen_aufraeumen`), proposal first, execute after consent.
+- Films and series: title with year, "Zu sehen bei" (streaming or buy link), director and cast on history cards.
+
+### Changed
+- List overview: at most 10 items per list, "Load 10 more".
+- Single list: no per-item menu; move items via the note's "Change list".
+- "Change list": lists grouped by group, collapsible, with search field.
+- Sidebar counters and groups refresh on every change.
+- "Deselect all" in the tag filter closes the dialog.
+- AI instructions shown collapsed at the bottom of a note.
+
+### Fixed
+- Sidebar showed outdated counts and groups until History or Lists was opened.
+
 ## [2.1.0] - 2026-11-23
 
 ### New

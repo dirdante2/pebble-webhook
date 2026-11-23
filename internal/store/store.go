@@ -809,6 +809,30 @@ func (s *Store) HistoryUnreadCount(kind string, tags []string, since int64) (n i
 
 // ItemRefs liefert je Listenpunkt seine Kennung: „59“ bzw. „59.k“, wenn die Notiz/Planung mehrere Punkte hat
 // (k nach Anlage, über alle Listen; Punkte im Papierkorb zählen nicht).
+// ItemTags: Tags jedes Listenpunkts aus seiner Notiz bzw. Planung (nur Punkte mit Tags) – für den Tag-Filter
+// der Listen in der Web-App.
+func (s *Store) ItemTags() (map[string][]string, error) {
+	rows, err := s.DB.Query(`SELECT i.id, CASE WHEN i.planning_id != '' THEN COALESCE(p.tags, '[]') ELSE COALESCE(j.tags, '[]') END FROM list_items i
+		LEFT JOIN jobs j ON i.job_id != '' AND j.id = i.job_id
+		LEFT JOIN plannings p ON i.planning_id != '' AND p.id = i.planning_id
+		WHERE i.deleted_at = 0`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string][]string{}
+	for rows.Next() {
+		var id, t string
+		if err := rows.Scan(&id, &t); err != nil {
+			return nil, err
+		}
+		if l := decodeList(t); len(l) > 0 {
+			out[id] = l
+		}
+	}
+	return out, rows.Err()
+}
+
 func (s *Store) ItemRefs() (map[string]string, error) {
 	rows, err := s.DB.Query(`SELECT i.id, COALESCE(j.nr, p.nr, 0) FROM list_items i
 		LEFT JOIN jobs j ON i.job_id != '' AND j.id = i.job_id
@@ -1011,6 +1035,25 @@ func (s *Store) FailedJobs() ([]*Job, error) {
 	return s.queryJobs(`SELECT ` + jobCols + ` FROM jobs WHERE deleted_at = 0 AND failed = 1 ORDER BY received_at`)
 }
 
+// DictationsBefore: Notizen (ohne Planungsrunden, Tests, Leere und Gelöschte), aufgenommen in [since, before),
+// außer except; jüngste zuerst, höchstens limit.
+func (s *Store) DictationsBefore(since, before int64, except string, limit int) ([]*Job, error) {
+	return s.queryJobs(`SELECT `+jobCols+` FROM jobs WHERE deleted_at = 0 AND mode = 'diktat' AND planning_id = '' AND is_test = 0 AND empty = 0
+		AND id != ? AND recorded_at >= ? AND recorded_at < ? ORDER BY recorded_at DESC LIMIT ?`, except, since, before, limit)
+}
+
+// JobByNr: Notiz mit der Nummer #nr (nicht im Papierkorb).
+func (s *Store) JobByNr(nr int64) (*Job, error) {
+	jobs, err := s.queryJobs(`SELECT `+jobCols+` FROM jobs WHERE nr = ? AND deleted_at = 0 LIMIT 1`, nr)
+	if err != nil {
+		return nil, err
+	}
+	if len(jobs) == 0 {
+		return nil, ErrNotFound
+	}
+	return jobs[0], nil
+}
+
 // RingJobs: alle Eingänge vom Ring (Webhook und importierte Aufnahmen) samt Papierkorb, ohne Test-Events.
 func (s *Store) RingJobs() ([]*Job, error) {
 	return s.queryJobs(`SELECT ` + jobCols + ` FROM jobs WHERE source IN ('pebble', 'import') AND is_test = 0 ORDER BY received_at`)
@@ -1039,9 +1082,9 @@ func (s *Store) Counts() (c Counts, err error) {
 	return
 }
 
-// TranscriptWords: Wortzahl je Aufnahme mit Transkript ab since (ohne Fehlaufnahmen, Tests und Gelöschte).
+// TranscriptWords: Wortzahl je Ring-Aufnahme mit Transkript ab since (ohne Web-App-Aufnahmen, Fehlaufnahmen, Tests und Gelöschte).
 func (s *Store) TranscriptWords(since int64) ([]int, error) {
-	rows, err := s.DB.Query(`SELECT transcript FROM jobs WHERE deleted_at = 0 AND audio_path != '' AND is_test = 0 AND empty = 0 AND transcript != '' AND received_at >= ?`, since)
+	rows, err := s.DB.Query(`SELECT transcript FROM jobs WHERE deleted_at = 0 AND audio_path != '' AND source != 'web' AND is_test = 0 AND empty = 0 AND transcript != '' AND received_at >= ?`, since)
 	if err != nil {
 		return nil, err
 	}
@@ -2008,6 +2051,12 @@ func (s *Store) AddListItem(it *ListItem) error {
 
 func (s *Store) SaveListItem(it *ListItem) error {
 	_, err := s.DB.Exec(`UPDATE list_items SET list_id = ?, done_at = ? WHERE id = ?`, it.ListID, it.DoneAt, it.ID)
+	return err
+}
+
+// SetListItemText ändert den Namen eines Listenpunkts.
+func (s *Store) SetListItemText(id, text string) error {
+	_, err := s.DB.Exec(`UPDATE list_items SET text = ? WHERE id = ?`, text, id)
 	return err
 }
 

@@ -4,6 +4,22 @@ Summarised notes for **beta** and **stable** releases. Each section lists only w
 
 A tag `vX.Y.Z-stable` (stable; before 1.33.5 `vX.Y.Z`) or `vX.Y.Z-beta` (beta) needs a section `## [X.Y.Z]` or `## [X.Y.Z-beta]` here; the release workflow uses it as the release notes.
 
+## [2.2.0] - 2026-11-23
+
+### Recording and AI
+- Record notes directly in the web app ("+" next to the search, up to 60 s, offline queue); not counted as ring usage.
+- Follow-up notes are linked to the previous topic and sorted into the same list.
+- The AI searches earlier notes itself when context is missing.
+
+### Lists
+- Tag filter also on lists; overview shows 10 items per list with "Load 10 more".
+- "Change list" grouped by group with search; sidebar always up to date.
+- Films and series with year, streaming provider or buy link, director and cast.
+
+### MCP
+- Import entries as text, the AI sorts them; re-evaluate notes.
+- Tidy up lists and groups with a proposal before executing.
+
 ## [2.1.0] - 2026-11-23
 
 ### Notes

@@ -467,6 +467,8 @@ func sourceLabel(j *store.Job) string {
 		return i18n.T("Import")
 	case "joplin":
 		return i18n.T("Joplin")
+	case "mcp":
+		return i18n.T("KI (MCP)")
 	}
 	return "Pebble"
 }

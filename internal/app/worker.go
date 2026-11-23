@@ -22,6 +22,8 @@ func (a *App) Run(ctx context.Context) {
 	go a.BackupSchedule(ctx)
 	a.initRing() // vor sortAudio: die Pfade der Einträge stimmen noch
 	a.sortAudio()
+	a.fixItemYears()
+	a.fixNoteFilms()
 	a.Cleanup()
 	lastCleanup := time.Now()
 	for {

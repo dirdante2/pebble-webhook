@@ -185,9 +185,19 @@ func (a *App) handleCounters(w http.ResponseWriter, r *http.Request) {
 	}
 	tj, _ := a.DB.TrashedJobs(0)
 	tp, _ := a.DB.TrashedPlannings(0)
-	writeJSON(w, 200, map[string]any{"vorschlaege": n, "update": a.AvailableUpdate(), "papierkorb": len(tj) + len(tp),
+	out := map[string]any{"vorschlaege": n, "update": a.AvailableUpdate(), "papierkorb": len(tj) + len(tp),
 		"version": strings.Fields(a.Version + " ")[0], "kanal": a.installedChannel(), "joplin": a.Cfg.JoplinEnabled, "audio_unbekannt": len(a.orphans()),
-		"version_bestaetigt": a.confirmedVersion(), "ring": a.ringSummary(), "spenden": a.donateURL()})
+		"version_bestaetigt": a.confirmedVersion(), "ring": a.ringSummary(), "spenden": a.donateURL()}
+	// menue=1: Zahlen des Seitenmenüs (Verlauf-Filter, Neu, Listen-Gruppen), damit es ohne Seitenwechsel stimmt.
+	if r.URL.Query().Get("menue") == "1" {
+		m, err := a.menuCounts(r)
+		if err != nil {
+			writeErr(w, 500, "speicher", "Datenbankfehler")
+			return
+		}
+		out["menue"] = m
+	}
+	writeJSON(w, 200, out)
 }
 
 // versionConfirmedKey: zuletzt bestätigte Version „<version>|<kanal>“ – für alle Geräte gemeinsam (ein Nutzer).

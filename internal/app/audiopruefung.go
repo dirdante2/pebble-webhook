@@ -24,6 +24,7 @@ import (
 type orphanAudio struct {
 	Path  string `json:"datei"` // relativ zu AUDIO_DIR
 	Mode  string `json:"modus"` // diktat | planung (aus dem Unterordner; ältere Dateien ohne Unterordner: diktat)
+	Web   bool   `json:"web"`   // in der Web-App aufgenommen (Dateiname <id>-web), zählt nicht zum Ring
 	Size  int64  `json:"groesse"`
 	MTime int64  `json:"zeit"`
 }
@@ -33,6 +34,19 @@ var (
 	orphanList []orphanAudio
 	jobIDRe    = regexp.MustCompile(`^[0-9a-f]{32}$`)
 )
+
+// webMark: Zusatz im Dateinamen von Aufnahmen aus der Web-App (<id>-web.<ext>). Sie zählen nicht zum Ring;
+// am Zusatz erkennt der Reimport das auch ohne Datenbank.
+const webMark = "-web"
+
+// audioIDOf: Eintrags-Id aus dem Dateinamen einer Aufnahme und ob sie aus der Web-App stammt.
+func audioIDOf(name string) (id string, web bool) {
+	base := strings.TrimSuffix(filepath.Base(name), filepath.Ext(name))
+	if id, ok := strings.CutSuffix(base, webMark); ok {
+		return id, true
+	}
+	return base, false
+}
 
 // audioSub: Unterordner einer Aufnahme je Art – Planungsrunden getrennt von Notizen, damit sich eine Datei
 // ohne Eintrag später wieder richtig zuordnen lässt.
@@ -59,7 +73,8 @@ func (a *App) sortAudio() {
 	byID := map[string]string{}
 	filepath.WalkDir(a.Cfg.AudioDir, func(p string, d fs.DirEntry, err error) error {
 		if err == nil && d.Type().IsRegular() && audioMimeOf(p) != "" {
-			byID[strings.TrimSuffix(d.Name(), filepath.Ext(d.Name()))] = p
+			id, _ := audioIDOf(d.Name())
+			byID[id] = p
 		}
 		return nil
 	})
@@ -158,7 +173,7 @@ func (a *App) scanAudio() []orphanAudio {
 		if err != nil || !d.Type().IsRegular() || audioMimeOf(p) == "" {
 			return nil
 		}
-		base := strings.TrimSuffix(d.Name(), filepath.Ext(d.Name()))
+		base, web := audioIDOf(d.Name())
 		if paths[p] || ids[base] {
 			return nil
 		}
@@ -170,7 +185,7 @@ func (a *App) scanAudio() []orphanAudio {
 		if err != nil {
 			return nil
 		}
-		found = append(found, orphanAudio{Path: filepath.ToSlash(rel), Mode: modeOfPath(rel), Size: fi.Size(), MTime: fi.ModTime().UnixMilli()})
+		found = append(found, orphanAudio{Path: filepath.ToSlash(rel), Mode: modeOfPath(rel), Web: web, Size: fi.Size(), MTime: fi.ModTime().UnixMilli()})
 		return nil
 	})
 	sort.Slice(found, func(i, k int) bool { return found[i].MTime < found[k].MTime })
@@ -197,7 +212,7 @@ func (a *App) importAudio(o orphanAudio) error {
 	if err != nil {
 		return err
 	}
-	base := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+	base, web := audioIDOf(path)
 	_, ids, err := a.DB.AudioRefs()
 	if err != nil {
 		return err
@@ -207,7 +222,11 @@ func (a *App) importAudio(o orphanAudio) error {
 		id = base // ursprüngliche Id aus dem Dateinamen
 	}
 	at := fi.ModTime().UnixMilli()
-	j := &store.Job{ID: id, DeliveryID: "import-" + id, Source: "import", Trigger: "import", Mode: modeOfPath(o.Path),
+	source := "import" // vom Ring
+	if web {
+		source = "web"
+	}
+	j := &store.Job{ID: id, DeliveryID: "import-" + id, Source: source, Trigger: "import", Mode: modeOfPath(o.Path),
 		ReceivedAt: at, RecordedAt: at, AudioPath: path, AudioMime: audioMimeOf(path), State: store.StateNew}
 	if _, err := a.DB.InsertJob(j); err != nil {
 		return err

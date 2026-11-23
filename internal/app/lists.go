@@ -37,6 +37,8 @@ type Dictation struct {
 	Anweisungen []string `json:"anweisungen,omitempty"`
 	// Termin nur bei art termin.
 	Termin *Appointment `json:"termin_info,omitempty"`
+	// Bezug: Nummer der früheren Notiz, die diese fortsetzt (dann dieselbe Liste); 0 = eigenes Thema.
+	Bezug int64 `json:"bezug,omitempty"`
 }
 
 // Answer ist die Antwort des Nutzers auf eine Rückfrage zu einer Notiz.
@@ -63,9 +65,10 @@ func parseDictation(s string) *Dictation {
 
 var dictationSchema = map[string]any{
 	"type": "object", "additionalProperties": false,
-	"required": []string{"titel", "art", "termin", "notiz", "beschreibung", "eckdaten", "hinweise", "gruppe", "liste", "punkte", "quellen", "rueckfragen", "tags", "neue_tags", "merken"},
+	"required": []string{"titel", "art", "termin", "notiz", "beschreibung", "eckdaten", "hinweise", "gruppe", "liste", "punkte", "quellen", "rueckfragen", "tags", "neue_tags", "merken", "bezug"},
 	"properties": map[string]any{
 		"titel":        map[string]any{"type": "string"},
+		"bezug":        map[string]any{"type": "integer"},
 		"art":          map[string]any{"type": "string", "enum": []string{"notiz", "listenpunkt", "termin"}},
 		"termin":       appointmentSchema,
 		"notiz":        map[string]any{"type": "string"},
@@ -95,21 +98,24 @@ Felder:
 - art: "listenpunkt", wenn die Notiz ein oder mehrere Dinge nennt, die man sammelt und später abhakt (Film, Serie, Buch, Musik, Spiel, Einkauf, Restaurant, Ausflugsziel, Geschenk, Aufgabe, Idee zum Ausprobieren). Ebenso, wenn das Gedächtnis für das Thema dieser Notiz eine Liste nennt oder die Notiz zu einem dort genannten wiederkehrenden Thema ohne Liste gehört und sich als kurzer Punkt fassen lässt – dann entsteht eine neue Themen-Liste. "termin" für Termine und Erinnerungen – alles, was zu einem bestimmten Zeitpunkt passieren muss: Arzt, Treffen, Anruf, Abgabe, Frist („bis Freitag“), Geburtstag, „erinnere mich …“ / „Erinnerung für …“ mit Zeitangabe, Aufgabe mit Uhrzeit oder Datum. Geht vor listenpunkt und vor Listen aus dem Gedächtnis (z. B. Vorhaben); ohne Zeitangabe kein termin. Sonst "notiz" (Gedanke, Information, längerer Text).
 - ` + appointmentRules + `
 - notiz: kurze Fassung des Gesagten in 1–3 sauberen Sätzen, ohne Füllwörter, Versprecher und Wiederholungen; Erkennungsfehler berichtigen. Nur was gesagt wurde – kein Zusatzwissen, nichts aus der Websuche. Immer füllen, auch bei listenpunkt.
-- beschreibung: Zusatzwissen zum genannten Werk, Produkt, Ort oder Thema in 2–4 kurzen Sätzen (Film, Serie, Buch: worum es geht, ohne das Ende zu verraten; Ort: was es dort gibt). Nichts aus eckdaten oder notiz wiederholen. Leer bei persönlichen Gedanken, Aufgaben, Einkäufen und wenn du nichts Gesichertes weißt.
+- beschreibung: Zusatzwissen zum genannten Werk, Produkt, Ort oder Thema in 2–4 kurzen Sätzen (Regie und Schauspieler stehen in den Eckdaten, hier nicht wiederholen) (Film, Serie, Buch: worum es geht, ohne das Ende zu verraten; Ort: was es dort gibt). Nichts aus eckdaten oder notiz wiederholen. Leer bei persönlichen Gedanken, Aufgaben, Einkäufen und wenn du nichts Gesichertes weißt.
 - ` + sortRules + `
-- punkte: bei listenpunkt: je genanntem Ding ein Punkt. Bei notiz nur, wenn eine Anweisung des Nutzers verlangt, die Notiz in mehrere Punkte aufzuteilen: dann je Teil ein Punkt (eckdaten leer). text = richtiger Name oder Titel (Erkennungsfehler berichtigen), höchstens 8 Wörter. eckdaten = 2–6 Paare name/wert zu diesem Punkt (Film: Jahr, Regie, Schauspieler, Genre, Länge, Zu sehen bei; Buch: Autor, Jahr, Genre; Einkauf: leer). Sonst bei notiz leer.
+- punkte: bei listenpunkt: je genanntem Ding ein Punkt. Bei notiz nur, wenn eine Anweisung des Nutzers verlangt, die Notiz in mehrere Punkte aufzuteilen: dann je Teil ein Punkt (eckdaten leer). text = richtiger Name oder Titel (Erkennungsfehler berichtigen), höchstens 8 Wörter; Film und Serie immer als Titel mit Jahr in Klammern („Arrival (2016)“, Serie mit Startjahr: „Severance (2022)“). eckdaten = 2–6 Paare name/wert zu diesem Punkt (Film/Serie: Jahr, Zu sehen bei, Regie (Serie: Idee), Schauspieler – höchstens 3 bekannte, Genre, Länge; Regie bzw. Idee und Schauspieler immer; Buch: Autor, Jahr, Genre; Einkauf: leer). Sonst bei notiz leer.
+- Film und Serie: „Zu sehen bei“ ist Pflicht – Streaming-Anbieter in Deutschland, bei denen er im Abo läuft (z. B. „Netflix, Prime Video“). Läuft er nirgends im Abo: „Kaufen/Leihen“ mit Anbieter (z. B. „Amazon, Apple TV“) und den Link zum Kaufen/Leihen in quellen. Dafür die Websuche nutzen.
 - eckdaten: nur bei notiz: 0–5 Paare name/wert mit den wichtigsten Fakten zum Thema (Termin, Ort, Preis, Person …). name höchstens 3 Wörter, wert höchstens 8 Wörter. Bei listenpunkt leer.
 - hinweise: höchstens 4 Stichpunkte, die weiterhelfen: Ähnliches, Tipp, nächster Schritt, wichtige Einschränkung. Nichts aus den Eckdaten oder der notiz wiederholen. Keine URLs, Links gehören in quellen. Leer, wenn nichts Nützliches zu sagen ist.
 - quellen: die tatsächlich verwendeten Webseiten mit Titel und vollständiger URL. Nichts erfinden.
 - rueckfragen: höchstens 2 Fragen an den Nutzer, nur wenn du die Notiz ohne die Antwort nicht richtig verstehen oder einsortieren kannst (unbekannter Name, unklare Abkürzung, mehrdeutiges Ziel, fehlender Zusammenhang) und das Gedächtnis es nicht klärt. Je Frage: frage = kurz und einzeln beantwortbar; antworten = genau 3 naheliegende, unterschiedliche Vorschläge, je höchstens 6 Wörter. Werte die Notiz trotzdem so gut wie möglich aus. Stehen in der Eingabe schon Antworten des Nutzers, stellst du keine Frage mehr. Meist leer.
 - ` + tagRules + `
 - ` + memoryRules + ` Besonders, was Antworten des Nutzers auf Rückfragen über diese Notiz hinaus klären.
+- ` + contextRules + `
 
 Regeln:
 - ` + styleRules + `
 - ` + memoryUse + `
+- ` + contextUse + `
 - Anweisungen des Nutzers zu dieser Notiz (in der Eingabe) befolgst du vorrangig, soweit sie dieses Format einhalten: aufteilen, umbenennen, anders einsortieren, Art ändern. Ohne Anweisung zur Liste bleibt die bisherige Liste.
-- Websuche: höchstens eine, nur wenn Fakten zu einem bestimmten Werk, Produkt, Ort oder Ereignis fehlen oder aktuell sein müssen. Für persönliche Gedanken und Erinnerungen nie suchen.
+- Websuche: höchstens eine, nur wenn Fakten zu einem bestimmten Werk, Produkt, Ort oder Ereignis fehlen oder aktuell sein müssen (z. B. wo ein Film oder eine Serie gerade läuft). Für persönliche Gedanken und Erinnerungen nie suchen.
 - Links und Quellenverweise stehen ausschließlich in quellen – nie in eckdaten, punkte, notiz oder hinweise.
 - Nur Gesichertes als Eckdatum. Bist du unsicher, was gemeint ist: art notiz und der Zweifel als Hinweis.
 - Du wertest nur aus. Keine Käufe, keine Nachrichten, keine Änderungen an anderen Systemen.
@@ -166,7 +172,9 @@ func (a *App) analyseDictation(ctx context.Context, j *store.Job) error {
 	req := openai.Request{
 		Model: a.Cfg.DictationModel, Instructions: dictationInstructions, MaxOutputTokens: 3000,
 		ReasoningEffort: a.Cfg.PlanReasoningEffort, SchemaName: "diktat", Schema: dictationSchema,
-		Input: fmt.Sprintf("Heute ist der %s. %s\n%s\n%s\n%s\n\nDiktat:\n%s", time.Now().Format("02.01.2006"), appointmentHint(j.RecordedAt), a.tagHint(), known, a.memoryHint(), input),
+		Input: fmt.Sprintf("Heute ist der %s. %s\n%s\n%s\n%s\n%s\nDiktat (#%d):\n%s", time.Now().Format("02.01.2006"), appointmentHint(j.RecordedAt), a.tagHint(), known, a.memoryHint(), a.noteContextHint(j), j.Nr, input),
+		// Eigene Suche in früheren Notizen, wenn Kontext fehlt.
+		Functions: []openai.Function{noteSearchTool}, Call: a.noteSearchCall(j.ID), MaxFunctionRounds: searchRoundsMax,
 	}
 	// Ohne Preise wäre das Kostenlimit nicht prüfbar: dann ohne Websuche.
 	if c := a.Cfg; c.PricePlanIn != nil && c.PricePlanOut != nil && c.PriceSearchCall != nil {
@@ -253,16 +261,38 @@ func (a *App) analyseDictation(ctx context.Context, j *store.Job) error {
 	d.Liste, d.Gruppe = cleanName(d.Liste), cleanName(d.Gruppe)
 	items := []DictItem{}
 	for _, it := range d.Punkte {
-		it.Text, it.Eckdaten = store.Preview(it.Text, 120), cleanFacts(it.Eckdaten, 6)
+		it.Eckdaten = cleanFacts(it.Eckdaten, 6)
+		it.Text = store.Preview(withYear(it.Text, it.Eckdaten), 120)
 		if it.Text != "" && len(items) < 20 {
 			items = append(items, it)
 		}
 	}
 	d.Punkte = items
+	// Film/Serie: Titel der Notiz mit Jahr (Regie und Schauspieler zeigt die Notizansicht unter dem Titel, aus den Eckdaten).
+	if facts := d.Eckdaten; len(items) == 1 || castLine(facts) != "" {
+		if len(items) == 1 {
+			facts = items[0].Eckdaten
+		}
+		if t := withYear(title, facts); t != title {
+			title = t
+			j.Title = title + " – " + date
+		}
+	}
 	// Im Diktat mit Nummer genannte Liste („Liste 12“) gilt vor der Wahl der KI.
 	list := a.listByNr(j.Transcript)
 	if d.Art == "termin" {
 		list = nil
+	}
+	// Fortsetzung einer früheren Notiz: dieselbe Liste wie dort (außer der Nutzer hat zur Notiz etwas angewiesen).
+	if d.Bezug == j.Nr {
+		d.Bezug = 0
+	}
+	if d.Bezug > 0 {
+		if p, err := a.DB.JobByNr(d.Bezug); err != nil || p.Mode != "diktat" {
+			d.Bezug = 0
+		} else if rl := a.relatedList(d.Bezug, j.ID); list == nil && rl != nil && d.Art != "termin" && len(instructions) == 0 {
+			list = rl
+		}
 	}
 	if list != nil && d.Art == "listenpunkt" && len(d.Punkte) == 0 {
 		d.Art = "notiz"
@@ -383,11 +413,21 @@ func (a *App) handleJobInstruction(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusConflict, "zu_viele", "Höchstens 10 Anweisungen je Notiz")
 		return
 	}
+	if err := a.reevaluate(j, d, text); err != nil {
+		writeErr(w, 500, "speicher", "Datenbankfehler")
+		return
+	}
+	a.observe("anweisung", fmt.Sprintf("Anweisung des Nutzers zur Notiz „%s“: %s", j.Title, text))
+	writeJSON(w, 200, map[string]any{"ok": true})
+}
+
+// reevaluate hängt eine Anweisung an die Notiz und lässt sie neu auswerten. Alle Punkte der Notiz fallen weg;
+// die neue Auswertung legt sie wieder an.
+func (a *App) reevaluate(j *store.Job, d *Dictation, text string) error {
 	d.Anweisungen = append(d.Anweisungen, text)
 	items, err := a.DB.ItemsByJob(j.ID)
 	if err != nil {
-		writeErr(w, 500, "speicher", "Datenbankfehler")
-		return
+		return err
 	}
 	// Anders als bei Rückfragen fallen auch Punkte in Gruppen-Listen weg: der Nutzer verlangt ausdrücklich eine neue Einteilung.
 	for _, it := range items {
@@ -397,13 +437,11 @@ func (a *App) handleJobInstruction(w http.ResponseWriter, r *http.Request) {
 	data, _ := json.Marshal(d)
 	j.Result, j.State, j.Attempts, j.NextTryAt, j.Error = string(data), store.StateTranscribed, 0, 0, ""
 	if err := a.DB.SaveJob(j); err != nil {
-		writeErr(w, 500, "speicher", "Datenbankfehler")
-		return
+		return err
 	}
-	a.observe("anweisung", fmt.Sprintf("Anweisung des Nutzers zur Notiz „%s“: %s", j.Title, text))
 	a.changed(j.ID)
 	a.Wake()
-	writeJSON(w, 200, map[string]any{"ok": true})
+	return nil
 }
 
 // addToList hängt die Punkte eines Diktats an die Liste. Ein Punkt, den die Liste schon führt, kommt kein zweites Mal hinein.
@@ -873,6 +911,13 @@ func withRead(m map[string]any, it *store.ListItem, unread map[string]bool) map[
 	return m
 }
 
+// withTags: Tags der Notiz bzw. Planung eines Punkts – nur für den Tag-Filter, die Listen zeigen sie nicht an.
+func withTags(m map[string]any, tags []string) {
+	if len(tags) > 0 {
+		m["tags"] = tags
+	}
+}
+
 func listJSON(l *store.List) map[string]any {
 	return map[string]any{"id": l.ID, "name": l.Name, "projekt": l.Project, "nr": l.Nr, "beschreibung": l.Description, "offen": l.Open, "neuester": l.NewestAt, "gesamt": l.Total, "geaendert": l.UpdatedAt, "erledigt_am": l.DoneAt}
 }
@@ -908,9 +953,15 @@ func (a *App) handleLists(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, 500, "speicher", "Datenbankfehler")
 			return
 		}
+		tags, err := a.DB.ItemTags()
+		if err != nil {
+			writeErr(w, 500, "speicher", "Datenbankfehler")
+			return
+		}
 		for _, it := range items {
 			m := withRead(itemJSON(it), it, unread)
 			m["ref"] = refs[it.ID]
+			withTags(m, tags[it.ID])
 			byList[it.ListID] = append(byList[it.ListID], m)
 		}
 	}
@@ -961,11 +1012,17 @@ func (a *App) handleList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	refs, _ := a.itemRefs()
+	tags, err := a.DB.ItemTags()
+	if err != nil {
+		writeErr(w, 500, "speicher", "Datenbankfehler")
+		return
+	}
 	m := listJSON(l)
 	list := make([]map[string]any, 0, len(items))
 	for _, it := range items {
 		im := withRead(itemJSON(it), it, unread)
 		im["ref"] = refs[it.ID]
+		withTags(im, tags[it.ID])
 		list = append(list, im)
 	}
 	m["punkte"] = list

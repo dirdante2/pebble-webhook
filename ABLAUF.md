@@ -16,6 +16,14 @@ In der Web-App und in Joplin heißt die Art „Notiz“ (Nutzervorgabe 15.11.202
 8. Einsortieren in Gruppen und Listen siehe unten. `listenpunkt` → Punkte in die Liste (vorhandener Punkt kein zweites Mal). `notiz` → eigene Notiz und **immer** ein Punkt in einer Liste (Nutzervorgabe 21.11.2026): die Liste ihres Themas, bei zu wenig Information die generische Liste „Unsortiert“ (ohne Gruppe). Termine kommen in keine Liste. Einmaliger Nachtrag für Altbestand: `pebble notizen-einsortieren`.
 9. Joplin-Push (siehe unten): Notiz nach `Sprachnotizen/Notizen` (Eckdaten, Hinweise, Wortlaut), Liste als eine Notiz mit Kästchen nach `Sprachnotizen/Listen` → `fertig` → SSE an offene Web-Apps. Kein Web-Push für Notizen. Das Notizbuch hieß bis 15.11.2026 „Diktate“: seine Id leitet sich weiter von diesem Namen ab, der Titel wird beim ersten Push einmal umgeschrieben (Merker `joplin_ordner_notizen` in `kv`).
 
+## Zusammenhang zwischen Notizen
+
+1. Auswertung einer Notiz (Schritt 7 oben): die Eingabe enthält bis zu 3 Notizen aus den `NOTE_CONTEXT_MINUTES` (30) Minuten davor (Nummer, Abstand, Art, Titel, Kurzfassung, Liste); 0 = aus.
+2. Die KI darf mit dem Werkzeug `suche_notizen` (höchstens 2 Runden) frühere Notizen und Planungen durchsuchen – mehrere Suchen in einem Aufruf (`suchen` = Liste, höchstens 5), gleiche Suche wie in der Web-App, ohne die Notiz selbst; je Suche höchstens 8 Treffer (neueste), je Treffer 300 Zeichen, je Aufruf 6000 Zeichen. Findet eine Suche mit allen Wörtern nichts, wird jedes Wort einzeln gesucht.
+3. Ergebnis `bezug` = Nummer der Notiz, die diese fortsetzt (0 = eigenes Thema). Richtlinie: neue Themen kommen mit viel Kontext, Folgenotizen mit wenig; eigener Kontext für ein anderes Thema = neu trotz gleicher Wörter; kaum Kontext + Begriff passt zu genau einem Thema = Bezug auch nach Wochen; je länger her, desto unwahrscheinlicher; zeitliche Nähe allein nie; mehrere passend → die neueste.
+4. Bezug auf eine Notiz mit Liste → dieselbe Liste (vor der Wahl der KI; nicht bei Termin, „Liste N“ im Diktat oder Anweisung des Nutzers).
+5. Detailseite: „Fortsetzung von #N …“ mit Link.
+
 ## Aufnahme vom Pebble (Planung)
 
 1. Schritte 1–6 wie bei der Notiz.
@@ -24,6 +32,15 @@ In der Web-App und in Joplin heißt die Art „Notiz“ (Nutzervorgabe 15.11.202
 4. Kosten = Tokens × Preis + Suchen × Preis, je Auftrag aufsummiert. ≥ `RESEARCH_LIMIT_USD` → am Eintrag markiert; vor einem weiteren Versuch erreicht → Dauerfehler. Fehlt ein Preis in der Konfiguration, läuft keine Recherche.
 5. Ergebnis (Kernfrage in einem Satz, Eckdaten als Kurzantwort, Hintergrund in kurzen Absätzen, 3–6 Tipps, Rückfragen nur wenn die Antwort sonst nicht stimmt – meist keine, je 3 Antwortvorschläge, „Annahme / unklar“, Quellen nur am Ende, in der Web-App eingeklappt; Zitate im Text werden entfernt) wird Stand der Planung; die Runde behält ihren Stand als Schnappschuss.
 6. Joplin-Push der ganzen Planung als To-do in `Sprachnotizen/Planungsaufgaben` (aktueller Stand + Verlauf aller Runden mit Transkripten) → `fertig` → SSE, Web-Push „Planung fertig · n Fragen“. Web-Push gibt es nur für Planungen (fertig oder dauerhaft fehlgeschlagen).
+
+## Aufnahme in der Web-App (Notiz)
+
+1. Kopf → „+“ (Akzentfarbe, rechts neben der Suche) → Drawer mit großem Aufnahmeknopf: tippen = Start, nochmal tippen = Stopp; nach 60 s stoppt sie selbst. Schließen während der Aufnahme verwirft sie.
+2. Aufnahme kommt mit eigener Kennung in den Ausgang (IndexedDB) und wird sofort gesendet: `POST /api/notizen` (multipart `client_id`, `zeit`, `audio`, höchstens 8 MB). Ohne Verbindung bleibt sie vorgemerkt; gelöscht wird sie erst nach `200`.
+3. Server: Zustellung `web:<client_id>` schon bekannt → `200 bekannt`. Sonst Audio nach `AUDIO_DIR/diktat/JJJJ/MM/<id>-web.<ext>` (fsync) → Eintrag `source=web`, `mode=diktat` → erst dann `200`.
+4. Weiter wie Notiz vom Pebble ab Schritt 6 (Transkription per OpenAI, Auswertung, Einsortieren).
+5. Zählt **nicht** zum Ring: keine Zeile in `ring_recordings`, nicht in „Wörter je Aufnahme“, der Ring-Nachtrag überspringt `-web`-Dateien. Antworten aus der Web-App (Planung) heißen ebenso `<id>-web.<ext>`.
+6. Reimport („Aufnahmen ohne Eintrag“): Dateiname `<id>-web.<ext>` → Eintrag mit `source=web` statt `import`, also wieder ohne Ring.
 
 ## Antwort aus der Web-App (Fortsetzung)
 
@@ -50,8 +67,8 @@ In der Web-App und in Joplin heißt die Art „Notiz“ (Nutzervorgabe 15.11.202
 ## Listen
 
 1. `GET /api/listen` (Name, offen/gesamt), `GET /api/listen/{id}` (Punkte: offene zuerst, dann erledigte).
-2. Abhaken/wieder öffnen: `POST /api/listenpunkte/{id}/haken` (offline vorgemerkt) – in der Liste und auf der Detailseite der Notiz an ihren Punkten. Verschieben: eigene Seite → `POST /api/listenpunkte/{id}/verschieben` mit `ziel`. Löschen: `DELETE /api/listenpunkte/{id}`, ganze Liste `DELETE /api/listen/{id}` (Notizen bleiben).
-3. Von Hand einsortieren: Notiz oder Planung → „In Liste“ (eigene Seite) → `POST /api/eintraege/{id}/liste` bzw. `POST /api/planungen/{id}/liste` mit `ziel` (Liste) oder `neu` (Name, vorhandener Name wird wiederverwendet). Nur fertige Notizen und Planungen mit Ergebnis; eine Planung zählt als Ganzes, nicht ihre Runden. Es entsteht ein Punkt mit Titel und Eckdaten; der Eintrag bleibt im Verlauf und in Joplin. Ein Eintrag steht in höchstens einer Liste: steht er schon in einer, zieht er um („Liste wechseln“). Herausnehmen = Punkt in der Liste löschen. Verschwindet die Planung, verschwindet ihr Punkt.
+2. Abhaken/wieder öffnen: `POST /api/listenpunkte/{id}/haken` (offline vorgemerkt) – in der Liste und auf der Detailseite der Notiz an ihren Punkten. Die Listenansicht zeigt Punkte wie die Übersicht, ohne Menü je Punkt (seit 23.11.2026); verschieben über die Detailseite („Liste wechseln“), Punkt löschen per API `DELETE /api/listenpunkte/{id}` (MCP), ganze Liste `DELETE /api/listen/{id}` (Notizen bleiben).
+3. Von Hand einsortieren: Notiz oder Planung → „In Liste“ (eigene Seite) → `POST /api/eintraege/{id}/liste` bzw. `POST /api/planungen/{id}/liste` mit `ziel` (Liste) oder `neu` (Name, vorhandener Name wird wiederverwendet). Nur fertige Notizen und Planungen mit Ergebnis; eine Planung zählt als Ganzes, nicht ihre Runden. Es entsteht ein Punkt mit Titel und Eckdaten; der Eintrag bleibt im Verlauf und in Joplin. Ein Eintrag steht in höchstens einer Liste: steht er schon in einer, zieht er um („Liste wechseln“). Die Seite zeigt die Ziele je Gruppe zum Aufklappen (jüngste Gruppe zuerst, „Ohne Gruppe“ zuletzt) mit Suchfeld oben (Listen- und Gruppenname; Treffer-Gruppen aufgeklappt). Verschwindet die Planung, verschwindet ihr Punkt.
 4. Jede Änderung markiert die Liste; der Worker schiebt die Notiz neu nach Joplin (`- [ ]` / `- [x]`). Haken aus Joplin kommen nicht zurück.
 
 ## Löschen
@@ -231,6 +248,26 @@ Token-Routen (alles andere bleibt bei der Passkey-Sitzung, kein Löschen): `GET 
 2. Werkzeuge: `listen_uebersicht` (Gruppen, Listen, Punkte mit Kennung; Filter gruppe/liste/alle), `punkt_lesen` (Notiz mit Kurzfassung, Eckdaten, Hinweisen, Wortlaut bzw. Planungsstand), `punkte_abhaken` (einzeln, `offen: true` öffnet wieder) → gleicher Weg wie Abhaken in der Web-App (`setItemDone`: Liste, Joplin, Live-Update).
 2a. Seit 1.24.0 außerdem: `termine` (`Appointments(true)`: kommende, verpasste unbestätigte; `tage`/`vergangene` begrenzen; Antwort beginnt mit heutigem Datum), `notizen_suchen` (ruft `handleSearch` intern auf, max. 30 Treffer), `notiz_lesen` (Notiz/Planung per #Nr aus `SearchableJobs`/`AllPlannings`).
 3. Kennung je Punkt (`ItemRefs`): `59`, bei mehreren Punkten derselben Notiz/Planung `59.1`, `59.2` … nach Anlage über alle Listen. `#59` bei mehreren → Fehler mit den einzelnen Kennungen; `#59.*` = alle. Dieselbe Kennung liefert `GET /api/listen?punkte=1` als `ref` (Skill `sprachnotizen-todos`).
+
+## MCP: Einträge importieren (seit 23.11.2026)
+
+1. KI am MCP → `notizen_importieren` mit `eintraege` (Texte, höchstens 100, z. B. „Film: Arrival (2016)“) und optional `quelle`. Keine Liste, keine Punkte: die Zuordnung macht die interne KI.
+2. Server: je Eintrag eine Notiz `source=mcp`, Wortlaut „Import von <quelle>: <text>“, Stand `neu` → Worker wertet aus wie ein Diktat (Listen, Gruppen, Termine, Eckdaten, Tags), ohne „Notizen kurz davor“.
+3. `listen_struktur`: Gruppen und Listen (L-Nr, offen/gesamt, Beschreibung) ohne Punkte – nur Überblick.
+4. `notizen_anreichern` (`nummern`, höchstens 50): fertige Notizen nachträglich auswerten, Liste bleibt; Anweisung nennt Titel und Punkte; überspringt Notizen mit abgehakten Punkten oder mehr als 20 Punkten.
+
+## Filme und Serien in Listen
+
+1. Punktname immer „Titel (Jahr)“, Serie mit Startjahr; fehlt das Jahr im Namen, steht es aber in den Eckdaten (Jahr, Startjahr, Erscheinungsjahr, Zeitraum, Erstausstrahlung), hängt der Server es an (`withYear`). Einmalig beim Start für vorhandene Punkte (kv `punkte_jahr_v1`).
+2. Eckdaten „Zu sehen bei“ Pflicht: Streaming-Anbieter in Deutschland (Abo); sonst „Kaufen/Leihen“ mit Anbieter und Link in den Quellen; dafür die eine Websuche.
+3. Notiz mit einem Punkt (bzw. Film-Eckdaten): Titel der Notiz mit Jahr; in der Verlaufs-Karte unter dem Titel „Regie: … · Mit: A, B, C“ (Serie: „Idee: …“; höchstens 3 Schauspieler) – Feld `besetzung` in `jobSummary` aus den Eckdaten des einen Punkts (`castLine`); die Notizansicht zeigt das nur in den Eckdaten. Einmalig beim Start für vorhandene Notizen (kv `notiz_film_v2`).
+
+## MCP: Listen aufräumen (seit 23.11.2026)
+
+1. Nur auf ausdrücklichen Wunsch des Nutzers: KI → `listen_aufraeumen` mit `aenderungen` (höchstens 50, in Reihenfolge) **ohne** `ausfuehren` → geprüfter Vorschlag, nichts geändert; Fehler stehen je Änderung dabei.
+2. KI zeigt den Vorschlag, Nutzer stimmt zu → derselbe Auftrag mit `ausfuehren: true`.
+3. Aktionen: `liste_anlegen` (name, gruppe), `liste_aendern` (liste, name/gruppe; gruppe "" = ohne), `listen_zusammenfuehren` (liste → ziel, Punkte direkt umgehängt, ein Gedächtnis-Vorschlag, Quelle gelöscht), `liste_loeschen`, `punkte_verschieben` (#59.2 → ziel), `gruppe_umbenennen`, `gruppe_aufloesen`.
+4. Ausgeführt über die Handler der Web-App (gleiche Prüfungen, Korrekturen ins Gedächtnis, Live-Anzeige); Listen als „L12“ oder eindeutiger Name.
 
 ## MCP-OAuth (seit 1.23.0)
 

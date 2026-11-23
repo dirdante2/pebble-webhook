@@ -86,7 +86,7 @@ dl { display: grid; grid-template-columns: minmax(7rem, 40%) 1fr; gap: .3rem .8r
 dt { color: var(--leise); } dd { margin: 0; }
 
 label { display: block; font-weight: 600; margin: .9rem 0 .3rem; }
-textarea, input[type=text], input[type=password], input[type=url] {
+textarea, input[type=text], input[type=password], input[type=url], #zielsuche {
   width: 100%; padding: .65rem .75rem; border: 1px solid var(--linie); border-radius: 10px;
   background: var(--flaeche); color: var(--text); font: inherit;
 }
@@ -297,9 +297,6 @@ dialog.drawer[open] { animation: hoch .18s ease-out; }
     url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M4.5 10.5l3.6 3.6L15.5 6.5' fill='none' stroke='white' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
 }
 .lp.erledigt .lptext > div:first-child { text-decoration: line-through; color: var(--leise); }
-.lpmenue { margin-top: .1rem; }
-.lpmenue .leiste { margin: .4rem 0 .3rem; }
-.lpmenue .leiste .btn { flex: 0 1 auto; }
 
 /* Verlauf: Gelesen-Stand, Zähler der Filter, Mehrfachauswahl */
 .karte .datum { margin-bottom: .25rem; }
@@ -346,7 +343,6 @@ details.quellen { margin-top: 1.1rem; }
 .lp .haken { width: 2.5rem; height: 2.5rem; }
 .lptext { display: flex; align-items: baseline; flex-wrap: wrap; gap: 0 .5rem; padding: .3rem 0; }
 .lptext > div:first-child { flex: 1; min-width: 0; }
-.lpmenue > summary { font-size: .82rem; }
 .lpgruppe { margin: -.1rem 0 .4rem .8rem; }
 .listenkarte { padding: .3rem .7rem; margin: .25rem 0; gap: .4rem; }
 .listenkarte .titel { font-size: .95rem; }
@@ -712,3 +708,35 @@ code.kopierbar { display: block; margin: .15rem 0 .4rem; overflow-wrap: anywhere
 .kofiframe { display: block; width: 100%; max-height: 70vh; border: none; border-radius: var(--radius); padding: 4px; background: #f9f9f9; box-sizing: border-box; }
 .logblatt .versionskopf { margin: 1.2rem 0 .2rem; padding-top: .6rem; border-top: 1px solid var(--linie); font-size: 1.05rem; }
 .logblatt .versionskopf:first-of-type { border-top: 0; padding-top: 0; margin-top: .4rem; }
+
+/* Notiz aufnehmen: Knopf + rechts neben der Suche, Drawer mit großem Aufnahmeknopf */
+.neuknopf { flex: none; display: inline-grid; place-items: center; width: 2.4rem; height: 2.4rem; padding: 0; border: 0; border-radius: 50%;
+  background: var(--akzent); color: var(--akzent-text); cursor: pointer; box-shadow: 0 1px 4px rgb(0 0 0 / .25); }
+.neuknopf[hidden] { display: none; }
+.neuknopf svg { width: 1.45rem; height: 1.45rem; }
+.neuknopf:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+.aufnahmedrawer .zeile h2 { margin: .3rem 0; }
+.aufnahmeknopf { position: relative; display: grid; place-items: center; width: min(13rem, 62vw); aspect-ratio: 1; margin: 1rem auto .5rem; padding: 0;
+  border: 0; border-radius: 50%; background: var(--akzent); color: var(--akzent-text); cursor: pointer; touch-action: manipulation; }
+.aufnahmeknopf > svg { position: absolute; inset: -.55rem; width: calc(100% + 1.1rem); height: calc(100% + 1.1rem); transform: rotate(-90deg); }
+.aufnahmeknopf circle { fill: none; stroke-width: 3.5; }
+.aufnahmeknopf .spur { stroke: var(--linie); }
+.aufnahmeknopf .fortschritt { stroke: var(--schlecht); stroke-linecap: round; transition: stroke-dashoffset .2s linear; }
+.aufnahmeknopf .symbol svg { width: 4.2rem; height: 4.2rem; }
+.aufnahmeknopf.laeuft { background: var(--schlecht); color: #fff; animation: aufnahmepuls 1.4s ease-in-out infinite; }
+.aufnahmeknopf:disabled { opacity: .6; cursor: default; }
+@keyframes aufnahmepuls { 50% { box-shadow: 0 0 0 .9rem color-mix(in srgb, var(--schlecht) 18%, transparent); } }
+@media (prefers-reduced-motion: reduce) { .aufnahmeknopf.laeuft { animation: none; } }
+.aufnahmezeit { text-align: center; font-size: 1.3rem; font-weight: 600; font-variant-numeric: tabular-nums; margin: .6rem 0 .2rem; }
+.aufnahmehinweis { text-align: center; margin: 0 0 .5rem; }
+.lpmehr { margin: .3rem 0 .2rem; }
+#zielsuche { width: 100%; margin: .3rem 0 .6rem; }
+.zielgruppe { margin: .35rem 0; border: 1px solid var(--linie); border-radius: var(--radius); background: var(--flaeche); }
+.zielgruppe > summary { display: flex; align-items: center; justify-content: space-between; gap: .5rem; padding: .6rem .9rem; cursor: pointer; font-weight: 600; }
+.zielgruppe[open] > summary { border-bottom: 1px solid var(--linie); }
+.zielgruppe > .karte { margin: .4rem .5rem; }
+.zielgruppe > summary { list-style: none; }
+.zielgruppe > summary::-webkit-details-marker { display: none; }
+.zielgruppe > summary > span:first-child::before { content: "›"; display: inline-block; width: 1rem; color: var(--leise); transition: transform .15s; }
+.zielgruppe[open] > summary > span:first-child::before { transform: rotate(90deg); }
+.karte .besetzung { margin: .1rem 0 .2rem; font-size: .85rem; color: var(--leise); }

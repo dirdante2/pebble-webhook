@@ -68,6 +68,7 @@ var Fields = []Field{
 
 	{Key: "LIST_DONE_ACTIVE_MINUTES", Group: "Anzeige und Gedächtnis", Label: "Erledigtes aktiv zeigen (Minuten)", Help: "So lange bleiben abgehakte Punkte bei den offenen stehen, danach unter „Vergangen“.", Kind: "int", Default: "60"},
 	{Key: "VISIT_GAP_MINUTES", Group: "Anzeige und Gedächtnis", Label: "Neuer Besuch nach (Minuten Pause)", Help: "Nach so langer Pause beginnt ein neuer Besuch; was seit der letzten Aktion davor kam, gilt als neu.", Kind: "int", Default: "30"},
+	{Key: "NOTE_CONTEXT_MINUTES", Group: "Anzeige und Gedächtnis", Label: "Zusammenhang mit Notizen davor (Minuten)", Help: "Notizen aus so vielen Minuten davor sieht die KI bei der Auswertung; knüpft eine neue daran an, kommt sie in dieselbe Liste. 0 = aus.", Kind: "int", Default: "30"},
 	{Key: "HISTORY_MIN_ENTRIES", Group: "Anzeige und Gedächtnis", Label: "Verlauf: mindestens Einträge", Help: "Der Verlauf zeigt die letzten 24 Stunden, aber mindestens so viele Einträge je Filter.", Kind: "int", Default: "10"},
 	{Key: "MEMORY_TRAIN_ENTRIES", Group: "Anzeige und Gedächtnis", Label: "Lernlauf: jüngste Einträge", Help: "So viele der jüngsten Einträge wertet der Lernlauf des Gedächtnisses aus.", Kind: "int", Default: "30"},
 	{Key: "MEMORY_REJECTED", Group: "Anzeige und Gedächtnis", Label: "Gedächtnis: gelöschte als „nicht erwünscht“", Help: "So viele gelöschte Gedächtnis-Einträge bekommt die KI als „nicht erwünscht“ mit.", Kind: "int", Default: "30"},

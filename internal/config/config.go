@@ -65,6 +65,7 @@ type Config struct {
 	MaxAttempts         int
 	EmptyRetentionHours int // leere Aufnahmen löschen; 0 = nie
 	DoneActiveMinutes   int // erledigte Punkte und Listen so lange noch im aktiven Bereich zeigen
+	NoteContextMinutes  int // Notizen so viele Minuten vor einer neuen gehen als möglicher Zusammenhang an die Auswertung; 0 = aus
 	VisitGapMinutes     int // Pause, nach der das Öffnen der App als neuer Besuch zählt (Grenze für „Neu“ im Verlauf)
 	HistoryMinEntries   int // Standardansicht des Verlaufs: mindestens so viele Einträge, auch wenn älter als 24 Stunden
 
@@ -274,6 +275,7 @@ func FromValues(boot Bootstrap, lookup func(string) string) (*Config, error) {
 		EmptyRetentionHours: num("EMPTY_RETENTION_HOURS", 1),
 		DoneActiveMinutes:   num("LIST_DONE_ACTIVE_MINUTES", 60),
 		VisitGapMinutes:     num("VISIT_GAP_MINUTES", 30),
+		NoteContextMinutes:  num("NOTE_CONTEXT_MINUTES", 30),
 		HistoryMinEntries:   num("HISTORY_MIN_ENTRIES", 10),
 
 		JoplinEnabled:  joplinSet == "aktiv",
@@ -376,6 +378,7 @@ var intLimits = map[string][2]int{
 	"MIN_FREE_MB":                {0, 10_000_000},
 	"LIST_DONE_ACTIVE_MINUTES":   {0, 525_600},
 	"VISIT_GAP_MINUTES":          {1, 10_080},
+	"NOTE_CONTEXT_MINUTES":       {0, 1440},
 	"HISTORY_MIN_ENTRIES":        {1, 500},
 	"MEMORY_TRAIN_ENTRIES":       {1, 500},
 	"MEMORY_REJECTED":            {0, 500},

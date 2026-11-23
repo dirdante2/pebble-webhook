@@ -151,7 +151,10 @@ func (a *App) ensureRingLocked() (*store.Ring, error) {
 		if err != nil || !d.Type().IsRegular() || audioMimeOf(p) == "" {
 			return nil
 		}
-		id := strings.TrimSuffix(filepath.Base(p), filepath.Ext(p))
+		id, web := audioIDOf(p)
+		if web {
+			return nil // in der Web-App aufgenommen, nicht mit dem Ring
+		}
 		fi, err := d.Info()
 		if err != nil {
 			return nil

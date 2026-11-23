@@ -108,6 +108,14 @@ func (a *App) jobSummary(j *store.Job) map[string]any {
 				done = max(done, it.DoneAt)
 			}
 			m["liste"] = map[string]any{"id": l.ID, "nr": l.Nr, "name": l.Name, "projekt": l.Project, "punkte": len(items), "erledigt": done}
+			// Film/Serie: Regie und Schauspieler unter dem Titel der Karte im Verlauf (die Notizansicht hat sie in den Eckdaten).
+			if len(items) == 1 {
+				var facts []Fact
+				json.Unmarshal([]byte(items[0].Facts), &facts)
+				if line := castLine(facts); line != "" {
+					m["besetzung"] = line
+				}
+			}
 		}
 	}
 	if j.PlanningID != "" {
@@ -495,6 +503,12 @@ func (a *App) handleJob(w http.ResponseWriter, r *http.Request) {
 	case "diktat":
 		if d := parseDictation(j.Result); d != nil {
 			m["analyse"] = d
+			// Fortsetzung einer früheren Notiz: Verweis mit Titel (nur solange es sie gibt).
+			if d.Bezug > 0 {
+				if p, err := a.DB.JobByNr(d.Bezug); err == nil {
+					m["bezug"] = map[string]any{"id": p.ID, "nr": p.Nr, "titel": shortTitle(p.Title)}
+				}
+			}
 		}
 		if j.JoplinID != "" {
 			m["joplin"] = a.joplinInfo(j.JoplinID, j.JoplinPushedAt, false, "")
@@ -763,30 +777,46 @@ func (a *App) handleAnswer(w http.ResponseWriter, r *http.Request) {
 	if ms, err := strconv.ParseInt(r.FormValue("zeit"), 10, 64); err == nil && ms > 0 && ms <= now {
 		j.RecordedAt = ms
 	}
-	if f, hdr, err := r.FormFile("audio"); err == nil {
-		data, rerr := io.ReadAll(f)
-		f.Close()
-		if rerr != nil || len(data) == 0 {
-			writeErr(w, 400, "ungueltig", "Aufnahme nicht lesbar")
-			return
-		}
-		mimeType := hdr.Header.Get("Content-Type")
-		if !strings.HasPrefix(mimeType, "audio/") && !strings.HasPrefix(mimeType, "video/") {
-			writeErr(w, 400, "ungueltig", "Die Datei ist keine Aufnahme")
-			return
-		}
-		path, err := a.saveAudio(j.ID, j.Mode, data, mimeType)
-		if err != nil {
-			logf("Antwort: Audio speichern: %v", err)
-			writeErr(w, http.StatusInsufficientStorage, "speicher", "Speicher nicht verfügbar")
-			return
-		}
-		j.AudioPath, j.AudioMime, j.Transcript = path, mimeType, ""
+	if !a.saveWebAudio(w, r, j) {
+		return
 	}
 	if j.Transcript == "" && j.AudioPath == "" {
 		writeErr(w, 400, "leer", "Antwort ist leer")
 		return
 	}
+	a.insertWebJob(w, j)
+}
+
+// saveWebAudio speichert eine mitgeschickte Aufnahme (Feld audio) als <id>-web.<ext>; ohne Feld nichts.
+// false = Fehler, Antwort ist schon geschrieben.
+func (a *App) saveWebAudio(w http.ResponseWriter, r *http.Request, j *store.Job) bool {
+	f, hdr, err := r.FormFile("audio")
+	if err != nil {
+		return true
+	}
+	data, rerr := io.ReadAll(f)
+	f.Close()
+	if rerr != nil || len(data) == 0 {
+		writeErr(w, 400, "ungueltig", "Aufnahme nicht lesbar")
+		return false
+	}
+	mimeType := hdr.Header.Get("Content-Type")
+	if !strings.HasPrefix(mimeType, "audio/") && !strings.HasPrefix(mimeType, "video/") {
+		writeErr(w, 400, "ungueltig", "Die Datei ist keine Aufnahme")
+		return false
+	}
+	path, err := a.saveAudio(j.ID, j.Mode, data, mimeType, true)
+	if err != nil {
+		logf("Web-App: Audio speichern: %v", err)
+		writeErr(w, http.StatusInsufficientStorage, "speicher", "Speicher nicht verfügbar")
+		return false
+	}
+	j.AudioPath, j.AudioMime, j.Transcript = path, mimeType, ""
+	return true
+}
+
+// insertWebJob legt den Eintrag an und bestätigt erst danach; gleiche Zustellung → bekannter Eintrag.
+func (a *App) insertWebJob(w http.ResponseWriter, j *store.Job) {
 	created, err := a.DB.InsertJob(j)
 	if err != nil || !created {
 		if j.AudioPath != "" {
@@ -796,13 +826,50 @@ func (a *App) handleAnswer(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, 500, "speicher", "Datenbankfehler")
 			return
 		}
-		old, _ := a.DB.JobByDelivery(delivery)
+		old, _ := a.DB.JobByDelivery(j.DeliveryID)
 		writeJSON(w, 200, map[string]any{"id": old.ID, "bekannt": true})
 		return
 	}
 	a.changed(j.ID)
 	a.Wake()
 	writeJSON(w, 200, map[string]any{"id": j.ID})
+}
+
+// webNoteMaxBytes: Obergrenze einer Notiz-Aufnahme aus der Web-App (60 s sind je nach Browser 0,5–1 MB).
+const webNoteMaxBytes = 8 << 20
+
+// handleWebNote: Notiz, in der Web-App aufgenommen (höchstens 60 s). Wird verarbeitet wie eine Notiz vom
+// Ring, zählt aber nicht zur Ring-Nutzung (kein recordRecording, Datei <id>-web.<ext>).
+func (a *App) handleWebNote(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, webNoteMaxBytes)
+	if err := r.ParseMultipartForm(webNoteMaxBytes); err != nil {
+		writeErr(w, http.StatusRequestEntityTooLarge, "gross", "Aufnahme zu groß oder nicht lesbar")
+		return
+	}
+	clientID := strings.TrimSpace(r.FormValue("client_id"))
+	if clientID == "" || len(clientID) > 100 {
+		writeErr(w, 400, "ungueltig", "client_id fehlt")
+		return
+	}
+	delivery := "web:" + clientID
+	if old, err := a.DB.JobByDelivery(delivery); err == nil {
+		writeJSON(w, 200, map[string]any{"id": old.ID, "bekannt": true})
+		return
+	}
+	now := store.Now()
+	j := &store.Job{ID: store.NewID(), DeliveryID: delivery, Source: "web", Trigger: "web", Mode: "diktat",
+		ReceivedAt: now, RecordedAt: now, State: store.StateNew}
+	if ms, err := strconv.ParseInt(r.FormValue("zeit"), 10, 64); err == nil && ms > 0 && ms <= now {
+		j.RecordedAt = ms
+	}
+	if !a.saveWebAudio(w, r, j) {
+		return
+	}
+	if j.AudioPath == "" {
+		writeErr(w, 400, "leer", "Aufnahme fehlt")
+		return
+	}
+	a.insertWebJob(w, j)
 }
 
 // wordDays: Zeitraum der Wortzahl-Auswertung auf der Statusseite.

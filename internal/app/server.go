@@ -83,6 +83,7 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("GET /api/planungen/offen", s(a.handleOpenPlannings))
 	mux.HandleFunc("GET /api/planungen/{id}", m(a.handlePlanning))
 	mux.HandleFunc("POST /api/planungen", s(a.handleAnswer))
+	mux.HandleFunc("POST /api/notizen", s(a.handleWebNote))
 	mux.HandleFunc("POST /api/planungen/{id}/antwort", s(a.handleAnswer))
 	mux.HandleFunc("POST /api/planungen/{id}/schliessen", s(a.handleClose))
 	mux.HandleFunc("POST /api/planungen/{id}/oeffnen", s(a.handleReopen))
