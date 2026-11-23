@@ -299,6 +299,7 @@ const routen = [
   [/^\/eintrag\/([0-9a-f]+)$/, 'eintrag', zeigeEintrag],
   [/^\/eintrag\/([0-9a-f]+)\/umhaengen$/, 'umhaengen', zeigeUmhaengen],
   [/^\/eintrag\/([0-9a-f]+)\/wortlaut$/, 'wortlaut', zeigeWortlaut],
+  [/^\/eintrag\/([0-9a-f]+)\/anweisung$/, 'anweisung', zeigeAnweisung],
   [/^\/eintrag\/([0-9a-f]+)\/liste$/, 'einsortieren', (id) => zeigeEinsortieren(id, 'eintrag')],
   [/^\/planung\/([0-9a-f]+)\/liste$/, 'einsortieren', (id) => zeigeEinsortieren(id, 'planung')],
   [/^\/planung\/([0-9a-f]+)$/, 'planung', zeigePlanung],
@@ -1445,6 +1446,7 @@ function analyseHtml(e, aufnahme = '') {
       <div class="leiste"><button class="btn haupt" data-fragen="${e.id}" data-ftyp="eintrag">${tx('{0} beantworten', fragenText(e.fragen))}</button></div></div>`;
   }
   if (an?.antworten?.length) html += T`<h2>Deine Antworten</h2><dl>${an.antworten.map((x) => T`<dt>${esc(x.frage)}</dt><dd>${esc(x.antwort)}</dd>`).join('')}</dl>`;
+  if (an?.anweisungen?.length) html += block(tx('Deine Anweisungen an die KI'), T`<ul>${an.anweisungen.map((x) => T`<li>${esc(x)}</li>`).join('')}</ul>`, 'anweisungen');
   // Eckdaten zuerst (bei mehreren Punkten je Punkt mit Namen), darunter getrennt der Listenbezug mit Erledigt-Haken.
   const lp = e.liste?.punkte || [];
   const mehrere = lp.length > 1;
@@ -1493,6 +1495,8 @@ function eintragHtml(e, offline) {
   }
   // Termin: zweiter Knopf zum Verschieben (eigenes Fenster mit Datum und Uhrzeit).
   if (t && fertig && !offline) haupt.push(T('<button class="btn" data-akt="verschieben">Verschieben</button>'));
+  // Freie Anweisung an die KI („bitte in zwei Punkte trennen“): eigene Seite, danach neue Auswertung.
+  if (e.modus === 'diktat' && !e.planung && fertig && e.analyse && !offline) haupt.push(T`<a class="btn" href="/eintrag/${e.id}/anweisung">KI-Anweisung</a>`);
   if (e.status === 'fehler' || e.status === 'wiederholung' || e.status === 'leer') haupt.push(T`<button class="btn${e.status === 'leer' ? '' : ' haupt'}" data-akt="neustart">Erneut starten</button>`);
   if (offen && fertig) haupt.push(T`<a class="btn haupt" href="/planung/${p.id}/antwort">Antworten</a>`);
   if (fertig || e.transkript) {
@@ -1894,6 +1898,38 @@ async function zeigeWortlaut(id) {
     try {
       const d = await api(T`/api/eintraege/${id}/wortlaut`, { method: 'PUT', body: { text } });
       melde(!d.geaendert ? tx('Nichts geändert') : T`Wird neu ausgewertet${d.gelernt ? tx(' · die KI prüft, ob die Berichtigung ins Gedächtnis gehört') : ''}`);
+      ladeZaehler();
+      geheZu(zurueck, true);
+    } catch (f) {
+      b.disabled = false;
+      melde(f instanceof NetzFehler ? tx('Offline – nur mit Verbindung') : f.message);
+    }
+  };
+  aufraeumen = () => { seite.onclick = null; };
+}
+
+// Anweisung an die KI zu einer fertigen Notiz: freier Text, danach wertet die KI die Notiz neu aus (Punkte werden neu angelegt).
+async function zeigeAnweisung(id) {
+  const e = await api(T`/api/eintraege/${id}`);
+  const zurueck = T`/eintrag/${id}`;
+  const bisher = e.analyse?.anweisungen || [];
+  seite.innerHTML = T`<h1>KI-Anweisung</h1>
+    <p class="leise">Sag der KI, was sie an dieser Notiz ändern soll. Danach wertet sie die Notiz neu aus; die Listenpunkte werden neu angelegt.</p>
+    ${bisher.length ? T`<h2>Bisherige Anweisungen</h2><ul>${bisher.map((x) => T`<li>${esc(x)}</li>`).join('')}</ul>` : ''}
+    <label for="anweisung">Was soll die KI ändern?</label>
+    <textarea id="anweisung" rows="4" maxlength="500" placeholder="${tx('z. B. In zwei Punkte trennen: Mitarbeiter und Kundenportal')}"></textarea>
+    <div class="leiste"><button class="btn haupt" data-akt="senden">Neu prüfen lassen</button><a class="btn" href="${zurueck}">Abbrechen</a></div>`;
+  const feld = document.getElementById('anweisung');
+  feld.focus();
+  seite.onclick = async (ev) => {
+    const b = ev.target.closest('button[data-akt="senden"]');
+    if (!b) return;
+    const text = feld.value.trim();
+    if (!text) return melde(tx('Die Anweisung ist leer'));
+    b.disabled = true;
+    try {
+      await api(T`/api/eintraege/${id}/anweisung`, { method: 'POST', body: { text } });
+      melde(tx('Wird neu ausgewertet'));
       ladeZaehler();
       geheZu(zurueck, true);
     } catch (f) {
@@ -2529,7 +2565,7 @@ async function zeigeStatus() {
 // ---------- Gedächtnis: was die KI über den Nutzer gelernt hat ----------
 
 const GED_REITER = [['vorschlaege', tx('Vorschläge')], ['aktiv', tx('Aktiv')], ['geloescht', tx('Gelöscht')]];
-const GED_QUELLE = { ki: 'KI', lernlauf: tx('Lernlauf'), korrektur: tx('Korrektur'), antwort: tx('Antwort'), nutzer: tx('von dir') };
+const GED_QUELLE = { ki: 'KI', lernlauf: tx('Lernlauf'), korrektur: tx('Korrektur'), antwort: tx('Antwort'), anweisung: tx('Anweisung'), nutzer: tx('von dir') };
 
 async function zeigeGedaechtnis() {
   seite.innerHTML = T`<p class="leer">Lädt …</p>`;

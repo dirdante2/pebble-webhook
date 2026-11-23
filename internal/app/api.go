@@ -477,6 +477,9 @@ func (a *App) handleJob(w http.ResponseWriter, r *http.Request) {
 	m := a.jobSummary(j)
 	m["transkript"] = j.Transcript
 	m["transkript_quelle"] = j.TranscriptSource
+	if _, ext := externOf(j); ext != "" {
+		m["extern_id"] = ext
+	}
 	m["pebble_text"] = j.PebbleText
 	m["audio"] = audioState(j)
 	m["zuordnung"] = j.AssignHow

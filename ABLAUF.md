@@ -144,6 +144,12 @@ In der Web-App und in Joplin heißt die Art „Notiz“ (Nutzervorgabe 15.11.202
 3. Lernen: alter und neuer Wortlaut wortweise verglichen; ersetzte Stellen (je Seite ≤ 4 Wörter, keine reinen Schreibweisen-/Satzzeichen-Änderungen, höchstens 10) werden Gedächtnis-Vorschläge „Spracherkennung: „X“ heißt richtig „Y“.“. Nach „Übernehmen“ gehen sie in jede Auswertung mit.
 4. Offene Vorschläge stehen als „(n)“ an „Status“ und am Reiter „Gedächtnis“ (`GET /api/zaehler`, nach jeder Seite und bei SSE `gedaechtnis`).
 
+## KI-Anweisung je Notiz (seit 23.11.2026)
+
+1. Detailseite einer fertigen Notiz → „KI-Anweisung“ → eigene Seite mit Textfeld → `POST /api/eintraege/{id}/anweisung` mit `{text}` (≤ 500 Zeichen, ≤ 10 je Notiz).
+2. Server: Anweisung in die Auswertung (`anweisungen`), alle Punkte der Notiz weg (auch in Gruppen-Listen), Stand `transkribiert`; Beobachtung `anweisung` fürs Gedächtnis.
+3. Neue Auswertung bekommt alle Anweisungen (Vorrang) und die bisherige Liste; verlangt eine Anweisung das Aufteilen, wird je Teil ein Punkt in derselben Liste angelegt.
+
 ## Fehler und „Erneut starten“
 
 1. Schritt scheitert → Versuch zählen, nächster Versuch nach 30 s, 2 min, 10 min, 30 min, 2 h, 6 h; der Eintrag zeigt „wird wiederholt“.
@@ -295,3 +301,10 @@ Token-Routen (alles andere bleibt bei der Passkey-Sitzung, kein Löschen): `GET 
 5. Verbrauch erreicht 60/80/95/100 % der Kapazität → Push, Hinweis auf allen Seiten bis „Bestätigen“ (`POST /api/ring/bestaetigt`); bei 100 % „+30 min“ (`plus`) erhöht die Kapazität dauerhaft.
 6. Von Hand: `/status/ring/tauschen` (Anleitung, ID, Kapazität) → bisheriger Ring endet jetzt. Ring bearbeiten: `PUT /api/ring/{nr}`.
 7. Auswertung `GET /api/ring[?ring=N]`: Summen, Notizen/Planungen, Tastendrücke, Monate, Vorhersage 80/100 % (Mittel der letzten 30 Tage), Vergleich aller Ringe. Erster Start: Ring 1 aus dem Bestand (Einträge samt Papierkorb, Audiodateien ohne Eintrag).
+
+## Notizen aus fremden Quellen: Joplin-Rückmeldungen (seit 23.11.2026)
+
+1. Stundenlauf (Werkzeug außerhalb, systemd-Timer) → `GET /api/eintraege/extern?quelle=joplin` mit `Authorization: Bearer <API_TOKEN>` → bekannte Kennungen (auch gelöschte).
+2. Je neue offene Joplin-Rückmeldung `POST /api/eintraege` mit `{quelle:"joplin", extern_id, text}` → Notiz (Diktat, Text statt Audio), `delivery_id = joplin-<extern_id>`; vorhanden → 200 `bekannt: true`, nichts geändert.
+3. Worker: Transkription übersprungen (Text liegt vor) → normale Auswertung sortiert in Gruppe/Liste.
+4. `GET /api/eintraege/{id}` liefert `quelle` und `extern_id`; abgearbeitet und abgehakt über den Listen-Haken wie jeder Punkt.

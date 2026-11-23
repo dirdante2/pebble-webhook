@@ -9,6 +9,17 @@ Version numbers X.Y.Z:
 
 Own builds show X.Y.Z.A: **A** is a local build counter (one per deployed change, starting at 1 for every new X.Y.Z); it never appears in Git or releases, so one version can collect several changes.
 
+## [2.1.0] - 2026-11-23
+
+### New
+- AI instruction per note: own page with free text, the AI re-evaluates the note (e.g. split into two items).
+- API: create notes from external sources by token (`POST /api/eintraege`), with known ids (`GET /api/eintraege/extern`).
+- Notes from Joplin feedback are sorted by the AI like dictations; source shown as "Joplin".
+
+### Changed
+- README title: Pebble Index Webapp.
+- Title button on detail pages in accent colour.
+
 ## [2.0.0] - 2026-11-23
 
 ### New

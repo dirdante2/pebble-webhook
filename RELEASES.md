@@ -4,6 +4,12 @@ Summarised notes for **beta** and **stable** releases. Each section lists only w
 
 A tag `vX.Y.Z-stable` (stable; before 1.33.5 `vX.Y.Z`) or `vX.Y.Z-beta` (beta) needs a section `## [X.Y.Z]` or `## [X.Y.Z-beta]` here; the release workflow uses it as the release notes.
 
+## [2.1.0] - 2026-11-23
+
+### Notes
+- AI instruction per note: tell the AI what to change, it re-evaluates the note.
+- External notes via API (token): e.g. feedback from Joplin, sorted by the AI.
+
 ## [2.0.0] - 2026-11-23
 
 ### Database

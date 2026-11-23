@@ -648,6 +648,25 @@ func (s *Store) JobByDelivery(id string) (*Job, error) {
 	return scanJob(s.DB.QueryRow(`SELECT `+jobCols+` FROM jobs WHERE delivery_id = ?`, id))
 }
 
+// DeliveriesWithPrefix liefert die Zustell-Kennungen mit diesem Präfix (ohne Präfix), auch aus dem Papierkorb.
+func (s *Store) DeliveriesWithPrefix(prefix string) ([]string, error) {
+	rows, err := s.DB.Query(`SELECT substr(delivery_id, ?) FROM jobs WHERE substr(delivery_id, 1, ?) = ? ORDER BY received_at`,
+		len(prefix)+1, len(prefix), prefix)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []string{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
 func (s *Store) queryJobs(q string, args ...any) ([]*Job, error) {
 	rows, err := s.DB.Query(q, args...)
 	if err != nil {

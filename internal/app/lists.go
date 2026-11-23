@@ -33,6 +33,8 @@ type Dictation struct {
 	// Rückfragen der KI, wenn die Notiz ohne Antwort nicht zu verstehen ist; Antworten = was der Nutzer darauf gesagt hat.
 	Fragen    []Question `json:"rueckfragen"`
 	Antworten []Answer   `json:"antworten,omitempty"`
+	// Anweisungen sind freie Vorgaben des Nutzers zur Auswertung („bitte in zwei Punkte trennen“); sie bleiben an der Notiz.
+	Anweisungen []string `json:"anweisungen,omitempty"`
 	// Termin nur bei art termin.
 	Termin *Appointment `json:"termin_info,omitempty"`
 }
@@ -95,7 +97,7 @@ Felder:
 - notiz: kurze Fassung des Gesagten in 1–3 sauberen Sätzen, ohne Füllwörter, Versprecher und Wiederholungen; Erkennungsfehler berichtigen. Nur was gesagt wurde – kein Zusatzwissen, nichts aus der Websuche. Immer füllen, auch bei listenpunkt.
 - beschreibung: Zusatzwissen zum genannten Werk, Produkt, Ort oder Thema in 2–4 kurzen Sätzen (Film, Serie, Buch: worum es geht, ohne das Ende zu verraten; Ort: was es dort gibt). Nichts aus eckdaten oder notiz wiederholen. Leer bei persönlichen Gedanken, Aufgaben, Einkäufen und wenn du nichts Gesichertes weißt.
 - ` + sortRules + `
-- punkte: nur bei listenpunkt: je genanntem Ding ein Punkt. text = richtiger Name oder Titel (Erkennungsfehler berichtigen), höchstens 8 Wörter. eckdaten = 2–6 Paare name/wert zu diesem Punkt (Film: Jahr, Regie, Schauspieler, Genre, Länge, Zu sehen bei; Buch: Autor, Jahr, Genre; Einkauf: leer). Bei notiz leer.
+- punkte: bei listenpunkt: je genanntem Ding ein Punkt. Bei notiz nur, wenn eine Anweisung des Nutzers verlangt, die Notiz in mehrere Punkte aufzuteilen: dann je Teil ein Punkt (eckdaten leer). text = richtiger Name oder Titel (Erkennungsfehler berichtigen), höchstens 8 Wörter. eckdaten = 2–6 Paare name/wert zu diesem Punkt (Film: Jahr, Regie, Schauspieler, Genre, Länge, Zu sehen bei; Buch: Autor, Jahr, Genre; Einkauf: leer). Sonst bei notiz leer.
 - eckdaten: nur bei notiz: 0–5 Paare name/wert mit den wichtigsten Fakten zum Thema (Termin, Ort, Preis, Person …). name höchstens 3 Wörter, wert höchstens 8 Wörter. Bei listenpunkt leer.
 - hinweise: höchstens 4 Stichpunkte, die weiterhelfen: Ähnliches, Tipp, nächster Schritt, wichtige Einschränkung. Nichts aus den Eckdaten oder der notiz wiederholen. Keine URLs, Links gehören in quellen. Leer, wenn nichts Nützliches zu sagen ist.
 - quellen: die tatsächlich verwendeten Webseiten mit Titel und vollständiger URL. Nichts erfinden.
@@ -106,6 +108,7 @@ Felder:
 Regeln:
 - ` + styleRules + `
 - ` + memoryUse + `
+- Anweisungen des Nutzers zu dieser Notiz (in der Eingabe) befolgst du vorrangig, soweit sie dieses Format einhalten: aufteilen, umbenennen, anders einsortieren, Art ändern. Ohne Anweisung zur Liste bleibt die bisherige Liste.
 - Websuche: höchstens eine, nur wenn Fakten zu einem bestimmten Werk, Produkt, Ort oder Ereignis fehlen oder aktuell sein müssen. Für persönliche Gedanken und Erinnerungen nie suchen.
 - Links und Quellenverweise stehen ausschließlich in quellen – nie in eckdaten, punkte, notiz oder hinweise.
 - Nur Gesichertes als Eckdatum. Bist du unsicher, was gemeint ist: art notiz und der Zweifel als Hinweis.
@@ -130,8 +133,11 @@ func (a *App) analyseDictation(ctx context.Context, j *store.Job) error {
 	}
 	// Erneute Auswertung nach beantworteten Rückfragen: die Antworten gehen mit und bleiben an der Notiz.
 	var answered []Answer
+	var instructions []string
+	prevList, prevGroup := "", ""
 	if prev := parseDictation(j.Result); prev != nil {
-		answered = prev.Antworten
+		answered, instructions = prev.Antworten, prev.Anweisungen
+		prevList, prevGroup = prev.Liste, prev.Gruppe
 	}
 	oldNote := ""
 	if j.JoplinPushedAt != 0 {
@@ -146,6 +152,15 @@ func (a *App) analyseDictation(ctx context.Context, j *store.Job) error {
 		input += "\n\nAntworten des Nutzers auf Rückfragen zu dieser Notiz:"
 		for _, an := range answered {
 			input += fmt.Sprintf("\nFrage: %s\nAntwort: %s", an.Frage, an.Antwort)
+		}
+	}
+	if len(instructions) > 0 {
+		input += "\n\nAnweisungen des Nutzers zu dieser Notiz (haben Vorrang, die letzte zuerst beachten):"
+		for _, in := range instructions {
+			input += "\n- " + in
+		}
+		if prevList != "" {
+			input += fmt.Sprintf("\nBisher einsortiert in Liste „%s“ (Gruppe „%s“).", prevList, prevGroup)
 		}
 	}
 	req := openai.Request{
@@ -219,7 +234,7 @@ func (a *App) analyseDictation(ctx context.Context, j *store.Job) error {
 			questions = append(questions, q)
 		}
 	}
-	d.Fragen, d.Antworten = questions, answered
+	d.Fragen, d.Antworten, d.Anweisungen = questions, answered, instructions
 
 	// Termin: eigener Zeitpunkt statt Liste. Ohne brauchbaren Zeitpunkt bleibt es eine Notiz mit sichtbarem Hinweis.
 	d.Termin = nil
@@ -279,7 +294,12 @@ func (a *App) analyseDictation(ctx context.Context, j *store.Job) error {
 		if d.Art != "termin" {
 			d.Art = "notiz"
 		}
-		d.Liste, d.Gruppe, d.Punkte = "", "", []DictItem{}
+		// Aufteilen nur auf Anweisung des Nutzers: dann steht die Notiz als mehrere Punkte in ihrer Liste.
+		parts := []DictItem{}
+		if len(instructions) > 0 && len(d.Punkte) > 1 && d.Art == "notiz" {
+			parts = d.Punkte
+		}
+		d.Liste, d.Gruppe, d.Punkte = "", "", parts
 		j.JoplinID = store.DerivedID("diktat:" + j.ID)
 		// Jede Notiz gehört in eine Liste: ohne passende (und ohne von Hand gesetzte) Liste in die generische.
 		if list == nil && d.Art == "notiz" {
@@ -299,8 +319,16 @@ func (a *App) analyseDictation(ctx context.Context, j *store.Job) error {
 			if err != nil {
 				return err
 			}
-			touched, err := a.placeItems(list, items, &store.ListItem{JobID: j.ID, Text: title}, d.Eckdaten, false)
-			if err != nil {
+			var touched []string
+			if len(parts) > 0 && len(items) == 0 {
+				for _, p := range parts {
+					t, err := a.placeItems(list, nil, &store.ListItem{JobID: j.ID, Text: p.Text}, p.Eckdaten, false)
+					if err != nil {
+						return err
+					}
+					touched = t
+				}
+			} else if touched, err = a.placeItems(list, items, &store.ListItem{JobID: j.ID, Text: title}, d.Eckdaten, false); err != nil {
 				return err
 			}
 			for _, id := range touched {
@@ -324,6 +352,58 @@ func (a *App) analyseDictation(ctx context.Context, j *store.Job) error {
 	}
 	a.remember("ki", full.Merken[:min(2, len(full.Merken))]...)
 	return nil
+}
+
+// handleJobInstruction nimmt eine freie Anweisung des Nutzers zu einer fertigen Notiz an („bitte in zwei Punkte trennen“)
+// und lässt die Notiz damit neu auswerten. Alle Punkte der Notiz fallen weg; die neue Auswertung legt sie wieder an.
+func (a *App) handleJobInstruction(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Text string `json:"text"`
+	}
+	j, err := a.DB.Job(r.PathValue("id"))
+	if err != nil {
+		writeErr(w, 404, "fehlt", "Eintrag nicht gefunden")
+		return
+	}
+	d := parseDictation(j.Result)
+	if j.Mode != "diktat" || j.State != store.StateDone || j.Failed || d == nil {
+		writeErr(w, http.StatusConflict, "nicht_fertig", "Die Notiz ist noch nicht fertig ausgewertet")
+		return
+	}
+	if readJSON(r, &in) != nil {
+		writeErr(w, 400, "ungueltig", "Anweisung nicht lesbar")
+		return
+	}
+	text := store.Preview(strings.TrimSpace(in.Text), 500)
+	if text == "" {
+		writeErr(w, 400, "leer", "Keine Anweisung gegeben")
+		return
+	}
+	if len(d.Anweisungen) >= 10 {
+		writeErr(w, http.StatusConflict, "zu_viele", "Höchstens 10 Anweisungen je Notiz")
+		return
+	}
+	d.Anweisungen = append(d.Anweisungen, text)
+	items, err := a.DB.ItemsByJob(j.ID)
+	if err != nil {
+		writeErr(w, 500, "speicher", "Datenbankfehler")
+		return
+	}
+	// Anders als bei Rückfragen fallen auch Punkte in Gruppen-Listen weg: der Nutzer verlangt ausdrücklich eine neue Einteilung.
+	for _, it := range items {
+		a.DB.DeleteListItem(it.ID)
+		a.listChanged(it.ListID)
+	}
+	data, _ := json.Marshal(d)
+	j.Result, j.State, j.Attempts, j.NextTryAt, j.Error = string(data), store.StateTranscribed, 0, 0, ""
+	if err := a.DB.SaveJob(j); err != nil {
+		writeErr(w, 500, "speicher", "Datenbankfehler")
+		return
+	}
+	a.observe("anweisung", fmt.Sprintf("Anweisung des Nutzers zur Notiz „%s“: %s", j.Title, text))
+	a.changed(j.ID)
+	a.Wake()
+	writeJSON(w, 200, map[string]any{"ok": true})
 }
 
 // addToList hängt die Punkte eines Diktats an die Liste. Ein Punkt, den die Liste schon führt, kommt kein zweites Mal hinein.

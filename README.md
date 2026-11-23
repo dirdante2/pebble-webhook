@@ -1,4 +1,4 @@
-# pebble-webhook
+# Pebble Index Webapp
 
 > **Hardware:** made for the [Pebble Index 01](https://repebble.com/index) voice ring by Pebble (Core Devices) – [buy it on repebble.com](https://repebble.com/index) · official website: [repebble.com](https://repebble.com/). This is an independent community project, not affiliated with Pebble.
 
