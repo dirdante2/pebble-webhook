@@ -112,7 +112,7 @@ func (a *App) enrichJob(nr int64) string {
 		}
 		instruction += " " + a.Tf("Punkte: %s.", strings.Join(names, ", "))
 	}
-	if err := a.reevaluate(j, d, store.Preview(instruction, 2000)); err != nil {
+	if err := a.reevaluate(j, d, store.Preview(instruction, 2000), store.Now()); err != nil {
 		return a.T("Datenbankfehler")
 	}
 	return ""

@@ -23,14 +23,15 @@ import (
 	"pebble-webhook/internal/schluessel"
 )
 
-// Backups: ein Archiv pebble-<version>-<kanal>-<zeit>-<art>[-audio].tar.gz in BACKUP_DIR mit (Format 2, ab 3.0)
-//   meta.json              Version, Build, Kanal, Zeitpunkt, Art, Audio ja/nein, Nutzer mit Schlüssel-Kennung
-//   system.db              Nutzer, Anmeldung (nur Hashes und öffentliche Schlüssel), Systemeinstellungen
-//   users/<id>/daten.db    Daten je Nutzer, verschlüsselt mit seinem Schlüssel (in sich stimmige Kopie)
-//   env                    Startwerte (LISTEN, DATA_DIR, AUDIO_DIR, BACKUP_DIR)
-//   audio/<id>/….enc       verschlüsselte Aufnahmen (nur mit BACKUP_AUDIO oder Häkchen)
+// Backups: ein Archiv pebble-<version>-<kanal>-<zeit>-<art>[-audio].tar.gz in BACKUP_DIR mit (Format 3, ab 4.0)
+//   meta.json                      Version, Build, Kanal, Zeitpunkt, Art, Audio ja/nein, Nutzer mit Schlüssel-Kennung
+//   env                            Startwerte (LISTEN, DATA_DIR, MEDIA_DIR, BACKUP_DIR)
+//   system.db                      Nutzer, Anmeldung (nur Hashes und öffentliche Schlüssel), Systemeinstellungen
+//   users/<id>/daten.db            Daten je Nutzer, verschlüsselt mit seinem Schlüssel (in sich stimmige Kopie)
+//   medien/<id>/audio|bilder/….enc verschlüsselte Aufnahmen und Bilder (nur mit BACKUP_AUDIO oder Häkchen)
 // Die Schlüssel (KEY_DIR) sind nie im Archiv: ohne sie oder den Wiederherstellungscode des Nutzers bleiben seine
-// Daten unlesbar. Format 1 (bis 2.x): pebble.db im Klartext statt system.db und users/.
+// Daten unlesbar. Format 2 (3.x): Aufnahmen unter audio/<id>/….enc, keine Bilder. Format 1 (bis 2.x): pebble.db im
+// Klartext statt system.db und users/.
 // Art: update = vom Installer vor jedem Update/Versionswechsel (30 Tage), plan = geplant (BACKUP_SCHEDULE),
 // manuell = „Jetzt sichern“; beide BACKUP_RETENTION_DAYS. Das Programm wird nicht gesichert: Wiederherstellen
 // installiert die vermerkte Version aus ihrem Kanal neu (install.sh restore).
@@ -64,7 +65,8 @@ type backupMeta struct {
 	Kind     string       `json:"art"`
 	Audio    bool         `json:"audio"`
 	DataDir  string       `json:"data_dir"`
-	AudioDir string       `json:"audio_dir"`
+	MediaDir string       `json:"media_dir,omitempty"` // ab Format 3
+	AudioDir string       `json:"audio_dir,omitempty"` // bis Format 2
 }
 
 type backupUser struct {
@@ -155,8 +157,8 @@ func (a *System) createBackup(kind string, audio bool) (backupEntry, error) {
 		return backupEntry{}, i18n.Errorf("Datenbank-Kopie fehlgeschlagen: %v", err)
 	}
 	tmp := filepath.Join(a.Cfg.BackupDir, "."+name+".tmp")
-	if err := a.writeArchive(tmp, snap, backupMeta{Format: 2, Users: users, Version: ver, Build: a.Version, Channel: channel,
-		Created: now.Format(time.RFC3339), Kind: kind, Audio: audio, DataDir: a.Cfg.DataDir, AudioDir: a.Cfg.AudioDir}); err != nil {
+	if err := a.writeArchive(tmp, snap, backupMeta{Format: 3, Users: users, Version: ver, Build: a.Version, Channel: channel,
+		Created: now.Format(time.RFC3339), Kind: kind, Audio: audio, DataDir: a.Cfg.DataDir, MediaDir: a.Cfg.MediaDir}); err != nil {
 		os.Remove(tmp)
 		return backupEntry{}, i18n.Errorf("Backup nicht schreibbar: %v", err)
 	}
@@ -270,8 +272,8 @@ func (a *System) writeArchive(path, snapDir string, meta backupMeta) (err error)
 	if err := addBytes("meta.json", append(mj, '\n')); err != nil {
 		return err
 	}
-	env := fmt.Sprintf("# Startwerte zum Zeitpunkt des Backups (/etc/pebble-webhook/env)\nLISTEN=%s\nDATA_DIR=%s\nAUDIO_DIR=%s\nBACKUP_DIR=%s\n",
-		a.Cfg.Listen, a.Cfg.DataDir, a.Cfg.AudioDir, a.Cfg.BackupDir)
+	env := fmt.Sprintf("# Startwerte zum Zeitpunkt des Backups (/etc/pebble-webhook/env)\nLISTEN=%s\nDATA_DIR=%s\nMEDIA_DIR=%s\nBACKUP_DIR=%s\n",
+		a.Cfg.Listen, a.Cfg.DataDir, a.Cfg.MediaDir, a.Cfg.BackupDir)
 	if err := addBytes("env", []byte(env)); err != nil {
 		return err
 	}
@@ -289,11 +291,11 @@ func (a *System) writeArchive(path, snapDir string, meta backupMeta) (err error)
 		return err
 	}
 	if meta.Audio {
-		// Nur verschlüsselte Aufnahmen unter AUDIO_DIR/<id>/ – Aufnahmen bis 2.x (Klartext am alten Ort) bleiben
-		// draußen, bis der Umzug sie verschlüsselt hat.
+		// Nur verschlüsselte Medien unter MEDIA_DIR/<id>/ (audio/ und bilder/) – Aufnahmen bis 2.x (Klartext am
+		// alten Ort) bleiben draußen, bis der Umzug sie verschlüsselt hat.
 		skipped := 0
 		for _, u := range meta.Users {
-			root := filepath.Join(a.Cfg.AudioDir, strconv.FormatInt(u.ID, 10))
+			root := filepath.Join(a.Cfg.MediaDir, strconv.FormatInt(u.ID, 10))
 			err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 				if errors.Is(err, fs.ErrNotExist) {
 					return nil
@@ -305,18 +307,22 @@ func (a *System) writeArchive(path, snapDir string, meta backupMeta) (err error)
 					skipped++
 					return nil
 				}
-				rel, err := filepath.Rel(a.Cfg.AudioDir, p)
+				rel, err := filepath.Rel(a.Cfg.MediaDir, p)
 				if err != nil {
 					return err
 				}
-				return addFile("audio/"+filepath.ToSlash(rel), p)
+				if !mediaFileRe.MatchString("medien/" + filepath.ToSlash(rel)) {
+					skipped++ // nicht unter audio/ oder bilder/ (z. B. noch nicht umgezogen)
+					return nil
+				}
+				return addFile("medien/"+filepath.ToSlash(rel), p)
 			})
 			if err != nil {
 				return err
 			}
 		}
 		if skipped > 0 {
-			logf("Backup: %d unverschlüsselte Aufnahmen nicht gesichert", skipped)
+			logf("Backup: %d unverschlüsselte oder nicht einsortierte Dateien nicht gesichert", skipped)
 		}
 	}
 	if err := tw.Close(); err != nil {

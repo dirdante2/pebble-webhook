@@ -11,9 +11,9 @@ import (
 	"pebble-webhook/internal/store"
 )
 
-// Aufnahmen bis 2.x liegen nach dem Umzug noch unverschlüsselt am alten Ort (AUDIO_DIR/<diktat|planung>/…), damit ein
+// Aufnahmen bis 2.x liegen nach dem Umzug noch unverschlüsselt am alten Ort (AUDIO_DIR/<diktat|planung>/…, heute MEDIA_DIR), damit ein
 // Rückweg auf 2.x sie behält. 24 Stunden nach dem Umzug (oder sofort auf Wunsch des Admins) werden sie verschlüsselt in
-// den Ordner des Nutzers gelegt (AUDIO_DIR/<id>/<diktat|planung>/JJJJ/MM/<name>.enc) und die Pfade angepasst.
+// den Ordner des Nutzers gelegt (MEDIA_DIR/<id>/audio/<diktat|planung>/JJJJ/MM/<name>.enc) und die Pfade angepasst.
 
 const (
 	audioMovedKey  = "audio_umzug" // „fertig“, sobald keine Aufnahme mehr am alten Ort liegt
@@ -43,8 +43,8 @@ func (a *App) migrateLegacyAudio(force bool) (moved int, err error) {
 	root := a.audioRoot()
 	left := 0
 	for _, j := range jobs {
-		if strings.HasPrefix(j.AudioPath, root+string(filepath.Separator)) {
-			continue
+		if strings.HasPrefix(j.AudioPath, root+string(filepath.Separator)) || strings.HasSuffix(j.AudioPath, schluessel.AudioExt) {
+			continue // schon verschlüsselt (ein veralteter Pfad wird von sortAudio gerichtet)
 		}
 		if err := a.sealLegacyAudio(j); err != nil {
 			logf("Aufnahmen bis 2.x: %s: %v", j.AudioPath, err)
@@ -55,10 +55,10 @@ func (a *App) migrateLegacyAudio(force bool) (moved int, err error) {
 	}
 	if left == 0 {
 		a.DB.Set(audioMovedKey, "fertig")
-		a.removeEmptyDirs(filepath.Join(a.Cfg.AudioDir, "diktat"))
-		a.removeEmptyDirs(filepath.Join(a.Cfg.AudioDir, "planung"))
+		a.removeEmptyDirs(filepath.Join(a.Cfg.MediaDir, "diktat"))
+		a.removeEmptyDirs(filepath.Join(a.Cfg.MediaDir, "planung"))
 		for _, d := range []string{"diktat", "planung"} {
-			os.Remove(filepath.Join(a.Cfg.AudioDir, d)) // nur, wenn leer
+			os.Remove(filepath.Join(a.Cfg.MediaDir, d)) // nur, wenn leer
 		}
 	}
 	if moved > 0 || left > 0 {
@@ -76,7 +76,7 @@ func (a *App) sealLegacyAudio(j *store.Job) error {
 	if err != nil {
 		return err
 	}
-	rel, err := filepath.Rel(a.Cfg.AudioDir, j.AudioPath)
+	rel, err := filepath.Rel(a.Cfg.MediaDir, j.AudioPath)
 	if err != nil || strings.HasPrefix(rel, "..") {
 		rel = filepath.Base(j.AudioPath)
 	}

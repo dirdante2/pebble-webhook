@@ -50,6 +50,9 @@ const usage = `pebble-webhook <Befehl>
   vorbereiten
             Datenbestand bei gestopptem Dienst auf den Stand dieses Programms bringen (vom Installer vor dem Start
             aufgerufen, ohne Zeitgrenze der Gesundheitsprüfung); --kann: nur prüfen, ob es den Befehl gibt
+  verzeichnisse
+            Ordner (DATA_DIR, DATA_DIR/users, MEDIA_DIR, BACKUP_DIR, KEY_DIR) anlegen und Besitzer/Rechte richten
+            (als root; vor jedem Start durch systemd und beim Installieren); ohne root nur prüfen
   version   Version ausgeben
   schema [DATEI]
             Schema-Stand ausgeben, den dieses Programm kennt – mit DATEI den einer Datenbank (für den Installer)
@@ -57,7 +60,7 @@ const usage = `pebble-webhook <Befehl>
 Befehle für die Daten eines Nutzers (enroll, zugang, termine-nachtragen, notizen-einsortieren, gedaechtnis-…)
 gelten für Nutzer 1, mit PEBBLE_NUTZER=<Id> für einen anderen.
 
-Start-Werte (LISTEN, DATA_DIR, AUDIO_DIR, BACKUP_DIR, KEY_DIR) kommen aus der Umgebung; außerhalb von systemd wird die
+Start-Werte (LISTEN, DATA_DIR, MEDIA_DIR, BACKUP_DIR, KEY_DIR) kommen aus der Umgebung; außerhalb von systemd wird die
 Datei aus PEBBLE_ENV_FILE gelesen (Standard /etc/pebble-webhook/env). Alle übrigen Einstellungen
 liegen in der Datenbank und werden in der Web-App gepflegt.`
 
@@ -97,6 +100,12 @@ func main() {
 			return
 		}
 		fail(prepare())
+	case "verzeichnisse":
+		if len(os.Args) > 2 && os.Args[2] == "--kann" {
+			fmt.Println("ja")
+			return
+		}
+		fail(dirs())
 	case "version":
 		fmt.Println(version)
 	case "schema":
@@ -119,21 +128,48 @@ func fail(err error) {
 	}
 }
 
-// openDB liest die Start-Werte, bringt den Datenbestand auf den Stand dieses Programms (Umzug von pebble.db bis 2.x)
-// und öffnet system.db.
-func openDB() (config.Bootstrap, *store.System, error) {
+// loadBoot liest die Start-Werte aus der env-Datei (PEBBLE_ENV_FILE, sonst /etc/pebble-webhook/env) und der Umgebung.
+func loadBoot() (config.Bootstrap, error) {
 	envFile := os.Getenv("PEBBLE_ENV_FILE")
 	if envFile == "" {
 		envFile = "/etc/pebble-webhook/env"
 	}
 	if err := config.LoadFile(envFile); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return config.Bootstrap{}, nil, fmt.Errorf("%s: %w", envFile, err)
+		return config.Bootstrap{}, fmt.Errorf("%s: %w", envFile, err)
 	}
-	boot := config.LoadBootstrap()
-	for _, dir := range []string{boot.DataDir, boot.AudioDir, boot.KeyDir} {
-		if st, err := os.Stat(dir); err != nil || !st.IsDir() {
-			return boot, nil, fmt.Errorf("Verzeichnis %s fehlt", dir)
+	return config.LoadBootstrap(), nil
+}
+
+// dirs richtet als root die Ordner ein (Mounts nach Anlegen oder Wiederherstellen gehören oft root); sonst nur Prüfung.
+func dirs() error {
+	boot, err := loadBoot()
+	if err != nil {
+		return err
+	}
+	if os.Geteuid() != 0 {
+		if err := config.CheckDirs(boot); err != nil {
+			return err
 		}
+		fmt.Println("Ordner in Ordnung")
+		return nil
+	}
+	report, err := config.EnsureDirs(boot)
+	for _, r := range report {
+		log.Printf("Ordner: %s", r)
+	}
+	return err
+}
+
+// openDB liest die Start-Werte, bringt den Datenbestand auf den Stand dieses Programms (Umzug von pebble.db bis 2.x)
+// und öffnet system.db.
+func openDB() (config.Bootstrap, *store.System, error) {
+	boot, err := loadBoot()
+	if err != nil {
+		return boot, nil, err
+	}
+	// Alle Ordner da und beschreibbar? Sonst klar abbrechen statt mitten im Betrieb (z. B. Mount gehört root).
+	if err := config.CheckDirs(boot); err != nil {
+		return boot, nil, err
 	}
 	if err := app.Prepare(boot); err != nil {
 		return boot, nil, err

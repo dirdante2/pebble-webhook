@@ -17,13 +17,13 @@ import (
 )
 
 // Audiodateien ohne Eintrag: nach dem Wiederherstellen eines älteren Backups (oder von Hand kopiert) liegen in
-// AUDIO_DIR Aufnahmen, die die Datenbank nicht kennt. Die Prüfung vergleicht nur Pfad und Dateiname (= Id des
+// MEDIA_DIR/<id>/audio Aufnahmen, die die Datenbank nicht kennt. Die Prüfung vergleicht nur Pfad und Dateiname (= Id des
 // Auftrags) mit der Datenbank, ohne die Dateien zu lesen: beim Start, täglich und auf der Statusseite.
 // „Importieren“ legt je Datei einen neuen Eintrag an (Eingang = Zeitpunkt der Datei), der wie eine neue
 // Aufnahme transkribiert und von der KI ausgewertet wird.
 
 type orphanAudio struct {
-	Path  string `json:"datei"` // relativ zu AUDIO_DIR
+	Path  string `json:"datei"` // relativ zum Audio-Ordner des Nutzers
 	Mode  string `json:"modus"` // diktat | planung (aus dem Unterordner; ältere Dateien ohne Unterordner: diktat)
 	Web   bool   `json:"web"`   // in der Web-App aufgenommen (Dateiname <id>-web), zählt nicht zum Ring
 	Size  int64  `json:"groesse"`
@@ -72,7 +72,7 @@ func modeOfPath(rel string) string {
 	return "diktat"
 }
 
-// sortAudio legt jede bekannte Aufnahme in den Unterordner ihrer Art (AUDIO_DIR/<nutzer>/<diktat|planung>/JJJJ/MM) und
+// sortAudio legt jede bekannte Aufnahme in den Unterordner ihrer Art (MEDIA_DIR/<nutzer>/audio/<diktat|planung>/JJJJ/MM) und
 // richtet den Pfad in der Datenbank nach dem Ort der Datei: verschiebt Aufnahmen aus der Zeit vor den
 // Unterordnern, folgt einem geänderten Modus und repariert Pfade einer wiederhergestellten älteren Datenbank.
 // Gefunden wird eine Datei über ihre Id im Dateinamen. Läuft beim Start.

@@ -8,7 +8,7 @@ All settings except the start values live in the database and are edited in the 
 |---|---|---|
 | `LISTEN` | `0.0.0.0:8080` | address and port of the HTTP server |
 | `DATA_DIR` | `/var/lib/pebble-webhook` | database and state |
-| `AUDIO_DIR` | `/var/lib/pebble-webhook/audio` | recordings |
+| `MEDIA_DIR` | `/srv/pebble-medien` | recordings and images per user (`<id>/audio`, `<id>/bilder`; until 3.x `AUDIO_DIR`); own mount recommended, see [installation](installation.md#storage-own-mounts-recommended) |
 | `BACKUP_DIR` | `/srv/pebble-backup` | backups; after changing it run `install.sh` again (creates the folder, allows the service to write there) |
 | `KEY_DIR` | `/etc/pebble-webhook/keys` | one key file per user (never in a backup) |
 

@@ -44,12 +44,13 @@ func (s *System) userView(u *store.User) map[string]any {
 		}
 	}
 	m["daten_bytes"] = bytes
-	m["audio_bytes"] = dirSize(s.userAudioRoot(u.ID))
+	m["audio_bytes"] = dirSize(s.userMediaRoot(u.ID))
 	return m
 }
 
-func (s *System) userAudioRoot(uid int64) string {
-	return strings.TrimRight(s.Cfg.AudioDir, "/") + "/" + strconv.FormatInt(uid, 10)
+// userMediaRoot: Medien (Aufnahmen und Bilder) eines Nutzers.
+func (s *System) userMediaRoot(uid int64) string {
+	return strings.TrimRight(s.Cfg.MediaDir, "/") + "/" + strconv.FormatInt(uid, 10)
 }
 
 func (s *System) handleUsers(w http.ResponseWriter, r *http.Request) {
@@ -210,7 +211,7 @@ func (s *System) handleUserDelete(w http.ResponseWriter, r *http.Request) {
 	delete(s.locked, u.ID)
 	s.appsMu.Unlock()
 	var errs []error
-	for _, p := range []string{UserDir(s.Cfg.DataDir, u.ID), s.userAudioRoot(u.ID)} {
+	for _, p := range []string{UserDir(s.Cfg.DataDir, u.ID), s.userMediaRoot(u.ID)} {
 		errs = append(errs, os.RemoveAll(p))
 	}
 	if err := os.Remove(schluessel.Path(s.Cfg.KeyDir, u.ID)); err != nil && !os.IsNotExist(err) {

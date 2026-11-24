@@ -32,7 +32,7 @@ func init() {
 	}
 }
 
-// Fields: alle Einstellungen außer den Start-Werten (LISTEN, DATA_DIR, AUDIO_DIR, BACKUP_DIR).
+// Fields: alle Einstellungen außer den Start-Werten (LISTEN, DATA_DIR, MEDIA_DIR, BACKUP_DIR).
 var Fields = []Field{
 	{Key: "LANGUAGE", Group: "Sprache", Label: "Sprache", Help: "Sprache der Web-App, der Meldungen und der Texte, die die KI schreibt; auch die Transkription richtet sich danach. Bestehende Einträge bleiben, wie sie sind.", Kind: "choice", Default: "de", Choices: []string{"de", "en"}},
 
@@ -56,6 +56,8 @@ var Fields = []Field{
 	{Key: "OPENAI_DICTATION_MODEL", Group: "OpenAI", Label: "Modell Notizen", Help: "Modell für die Auswertung von Notizen. Leer = Modell der Recherche.", Kind: "text"},
 	{Key: "OPENAI_PLAN_REASONING_EFFORT", Group: "OpenAI", Label: "Denkaufwand Recherche", Help: "Wie gründlich das Modell bei Recherchen nachdenkt; höher = besser, aber teurer. standard = Vorgabe des Modells.", Kind: "choice", Default: "low", Choices: []string{"standard", "none", "low", "medium", "high"}},
 	{Key: "RESEARCH_LIMIT_USD", Group: "OpenAI", Label: "Kostenlimit je Recherche (USD)", Help: "Eine Recherche bricht ab, sobald ihre Kosten diesen Betrag erreichen.", Kind: "num", Default: "0.50", Required: true},
+	{Key: "OPENAI_IMAGE_MODEL", Group: "OpenAI", Label: "Modell Bilder", Help: "Modell, mit dem die KI erklärende Bilder erzeugt (Images-API).", Kind: "text", Default: "gpt-image-1-mini"},
+	{Key: "IMAGES_GENERATE", Group: "OpenAI", Label: "Bilder erzeugen", Help: "aktiv = die KI darf zu Notizen und Planungen eigene Bilder erzeugen, wenn sie etwas besser erklären (kostet je Bild). Externe Bilder und Diagramme gibt es immer.", Kind: "choice", Default: "aktiv", Choices: []string{"aktiv", "inaktiv"}},
 	{Key: "RESEARCH_MAX_OUTPUT_TOKENS", Group: "OpenAI", Label: "Höchstens Ausgabe-Tokens", Help: "Obergrenze für die Länge einer Recherche-Antwort.", Kind: "int", Default: "6000"},
 
 	{Key: "PRICE_PLAN_INPUT_PER_MTOK", Group: "Preise", Label: "Recherche: Eingabe (USD je 1 Mio. Tokens)", Help: "Fehlt ein Recherche-Preis, läuft keine Recherche.", Kind: "num", Default: "0.10"},
@@ -63,7 +65,10 @@ var Fields = []Field{
 	{Key: "PRICE_SEARCH_PER_CALL", Group: "Preise", Label: "Websuche (USD je Aufruf)", Help: "Preis je Websuche der Recherche.", Kind: "num", Default: "0.01"},
 	{Key: "PRICE_TITLE_INPUT_PER_MTOK", Group: "Preise", Label: "Kurztitel: Eingabe (USD je 1 Mio. Tokens)", Help: "Preis für gelesene Tokens beim Kurztitel und der Zuordnung.", Kind: "num", Default: "0.10"},
 	{Key: "PRICE_TITLE_OUTPUT_PER_MTOK", Group: "Preise", Label: "Kurztitel: Ausgabe (USD je 1 Mio. Tokens)", Help: "Preis für erzeugte Tokens beim Kurztitel und der Zuordnung.", Kind: "num", Default: "0.50"},
+	{Key: "PRICE_IMAGE_PER_PICTURE", Group: "Preise", Label: "Bild erzeugen (USD je Bild)", Help: "Preis je erzeugtem Bild; zählt zu den KI-Kosten des Eintrags.", Kind: "num", Default: "0.01"},
 	{Key: "PRICE_TRANSCRIBE_PER_MIN", Group: "Preise", Label: "Transkription (USD je Minute)", Help: "Preis je Minute Audio bei der Transkription.", Kind: "num", Default: "0.0045"},
+
+	{Key: "YOUTUBE_API_KEY", Group: "YouTube", Label: "YouTube-API-Schlüssel", Help: "Schlüssel der YouTube Data API v3 für Trailer zu Filmen und Serien (kostenlos, ca. 100 Suchen am Tag). Leer = die KI sucht den Trailer über die Websuche (ungenauer, kostet).", Kind: "secret"},
 
 	{Key: "JOPLIN_ENABLED", Group: "Joplin", Label: "Joplin", Help: "aktiv = fertige Notizen, Planungen und Listen nach Joplin übertragen; eingerichtet und getestet wird unter Status → Joplin.", Kind: "choice", Default: "inaktiv", Choices: []string{"aktiv", "inaktiv"}},
 	{Key: "JOPLIN_URL", Group: "Joplin", Label: "Joplin-Server", Help: "Adresse deines Joplin-Servers (Sync-Ziel). Übertragen wird nur schreibend; E2EE muss aus sein.", Kind: "url"},

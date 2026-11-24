@@ -4,6 +4,7 @@ package openai
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -117,6 +118,33 @@ func (c *Client) Transcribe(ctx context.Context, model, name string, audio []byt
 		seconds = out.Usage.Seconds
 	}
 	return strings.TrimSpace(out.Text), seconds, nil
+}
+
+// Image erzeugt ein Bild (Images-API) und liefert es als WebP. quality: low | medium | high; size z. B. 1536x1024.
+func (c *Client) Image(ctx context.Context, model, prompt, size, quality string) ([]byte, error) {
+	body, _ := json.Marshal(map[string]any{"model": model, "prompt": prompt, "n": 1, "size": size, "quality": quality,
+		"output_format": "webp", "output_compression": 80})
+	req, err := http.NewRequestWithContext(ctx, "POST", c.Base+"/images/generations", bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	var out struct {
+		Data []struct {
+			B64 string `json:"b64_json"`
+		} `json:"data"`
+	}
+	if err := c.send(req, &out); err != nil {
+		return nil, err
+	}
+	if len(out.Data) == 0 || out.Data[0].B64 == "" {
+		return nil, i18n.Errorf("OpenAI hat kein Bild geliefert")
+	}
+	img, err := base64.StdEncoding.DecodeString(out.Data[0].B64)
+	if err != nil {
+		return nil, i18n.Errorf("OpenAI-Bild nicht lesbar: %w", err)
+	}
+	return img, nil
 }
 
 type Request struct {

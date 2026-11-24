@@ -10,7 +10,7 @@ In der Web-App und in Joplin heißt die Art „Notiz“ (Nutzervorgabe 15.11.202
 2. Prüfen: Rate-Limit je Aufrufer → Token (constant-time) → `X-Index-Webhook-Version: 1` → Größe ≤ `HOOK_MAX_MB` → HMAC-SHA256 über `v1\n<ts>\n<delivery>\n<trigger>\n<0|1>\n` + Rohkörper, Zeitfenster 5 min.
 3. Zustellungskennung schon bekannt → `200 bereits angenommen`, sonst nichts.
 4. Geste → Aktion: `single-click-hold` = `TRIGGER_SINGLE`, `double-click-hold` (in der App „Klick + Halten“) = `TRIGGER_DOUBLE`, `test-event` = nur anzeigen; unbekannte Geste → Eintrag mit sichtbarem Fehler, keine Verarbeitung.
-5. Freien Platz prüfen (`MIN_FREE_MB`) → Audio nach `AUDIO_DIR/JJJJ/MM/<id>.m4a` (fsync) → Auftrag in SQLite → **erst dann** `200 angenommen`. Speicherfehler → `507`, Pebble wiederholt (1×/min, bis 10×).
+5. Freien Platz prüfen (`MIN_FREE_MB`) → Audio verschlüsselt nach `MEDIA_DIR/<nutzer>/audio/diktat/JJJJ/MM/<id>.m4a.enc` (fsync) → Auftrag in SQLite → **erst dann** `200 angenommen`. Speicherfehler → `507`, Pebble wiederholt (1×/min, bis 10×).
 6. Worker: Transkription `POST /v1/audio/transcriptions` (bei `TRANSCRIPTION=pebble` das Pebble-Transkript); der Pebble-Text wird immer mitgespeichert. Liefert OpenAI nichts oder fehlt die Aufnahme, gilt der Pebble-Text; gibt es keinen Text → leere Aufnahme (siehe Löschen).
 7. Auswertung `POST /v1/responses` (`OPENAI_DICTATION_MODEL`, höchstens eine Websuche, JSON-Schema): Kurztitel, Art (`notiz` | `listenpunkt`), `notiz` (kurze Fassung des Gesagten), `beschreibung` (Zusatzwissen, z. B. Inhalt eines Films), Eckdaten, höchstens 4 Hinweise, Quellen, Tags. Links stehen nur in den Quellen; Quellenverweise in Eckdaten werden entfernt. Kosten zählen wie Recherche (`PRICE_PLAN_*`, `RESEARCH_LIMIT_USD`). Scheitert sie auch beim letzten Versuch, bleibt das Diktat mit den ersten sechs Wörtern als Titel und ohne Auswertung.
 8. Einsortieren in Gruppen und Listen siehe unten. `listenpunkt` → Punkte in die Liste (vorhandener Punkt kein zweites Mal). `notiz` → eigene Notiz und **immer** ein Punkt in einer Liste (Nutzervorgabe 21.11.2026): die Liste ihres Themas, bei zu wenig Information die generische Liste „Unsortiert“ (ohne Gruppe). Termine kommen in keine Liste. Einmaliger Nachtrag für Altbestand: `pebble notizen-einsortieren`.
@@ -37,7 +37,7 @@ In der Web-App und in Joplin heißt die Art „Notiz“ (Nutzervorgabe 15.11.202
 
 1. Kopf → „+“ (Akzentfarbe, rechts neben der Suche) → Eingabe-Fenster (`oeffneEingabe`, dasselbe für KI-Anweisung und Antwort auf eine Planung): oben Textfeld (mit Text: „Senden“, Aufnahme gesperrt), darunter Aufnahmeknopf: tippen = Start, nochmal tippen = Stopp und Senden; nach 60 s stoppt sie selbst. Schließen während der Aufnahme verwirft sie; getippter Text bleibt als Entwurf.
 2. Aufnahme bzw. Text kommt mit eigener Kennung in den Ausgang (IndexedDB) und wird sofort gesendet: `POST /api/notizen` (multipart `client_id`, `zeit`, `audio` oder `text`, höchstens 8 MB). KI-Anweisung: `POST /api/eintraege/{id}/anweisung` multipart (`text` oder `audio` → sofort transkribiert, Kosten zur Notiz; `client_id` gegen Doppelte, kv `anweisung:<id>`). Ohne Verbindung bleibt sie vorgemerkt; gelöscht wird sie erst nach `200`.
-3. Server: Zustellung `web:<client_id>` schon bekannt → `200 bekannt`. Sonst Audio verschlüsselt nach `AUDIO_DIR/<nutzer>/diktat/JJJJ/MM/<id>-web.<ext>.enc` (fsync) → Eintrag `source=web`, `mode=diktat` → erst dann `200`.
+3. Server: Zustellung `web:<client_id>` schon bekannt → `200 bekannt`. Sonst Audio verschlüsselt nach `MEDIA_DIR/<nutzer>/audio/diktat/JJJJ/MM/<id>-web.<ext>.enc` (fsync) → Eintrag `source=web`, `mode=diktat` → erst dann `200`.
 4. Weiter wie Notiz vom Pebble ab Schritt 6 (Transkription per OpenAI, Auswertung, Einsortieren).
 5. Zählt **nicht** zum Ring: keine Zeile in `ring_recordings`, nicht in „Wörter je Aufnahme“, der Ring-Nachtrag überspringt `-web`-Dateien. Antworten aus der Web-App (Planung) heißen ebenso `<id>-web.<ext>`.
 6. Reimport („Aufnahmen ohne Eintrag“): Dateiname `<id>-web.<ext>` → Eintrag mit `source=web` statt `import`, also wieder ohne Ring.
@@ -196,7 +196,7 @@ In der Web-App und in Joplin heißt die Art „Notiz“ (Nutzervorgabe 15.11.202
 
 ## Mehrere Nutzer (seit 24.11.2026, 3.0.0)
 
-1. Aufbau: `DATA_DIR/system.db` (Klartext: Nutzer, Rollen, Passkeys, Sitzungen, Einmal-Links, Zugangs-Hashes, Systemeinstellungen) + je Nutzer `DATA_DIR/users/<id>/daten.db` (Adiantum-verschlüsselt, `user_id` in jeder Tabelle) + Aufnahmen `AUDIO_DIR/<id>/<diktat|planung>/JJJJ/MM/<name>.enc` (AES-GCM). Schlüssel: `KEY_DIR/<id>.key` (`/etc/pebble-webhook/keys`, nie im Backup), daraus per HKDF DB- und Audio-Schlüssel; in `users.key_wrap` der Schlüssel eingewickelt mit dem Wiederherstellungscode.
+1. Aufbau: `DATA_DIR/system.db` (Klartext: Nutzer, Rollen, Passkeys, Sitzungen, Einmal-Links, Zugangs-Hashes, Systemeinstellungen) + je Nutzer `DATA_DIR/users/<id>/daten.db` (Adiantum-verschlüsselt, `user_id` in jeder Tabelle) + Medien `MEDIA_DIR/<id>/audio/<diktat|planung>/JJJJ/MM/<name>.enc` und `MEDIA_DIR/<id>/bilder/JJJJ/MM/<name>.enc` (AES-GCM; bis 3.x `AUDIO_DIR/<id>/…`). Schlüssel: `KEY_DIR/<id>.key` (`/etc/pebble-webhook/keys`, nie im Backup), daraus per HKDF DB- und Audio-Schlüssel; in `users.key_wrap` der Schlüssel eingewickelt mit dem Wiederherstellungscode.
 2. Anfrage der Web-App: Sitzung → Nutzer → seine App (eigene DB, Worker, SSE, Push); Daten nicht geöffnet → 423 (gesperrt, Schlüssel fehlt). Systemrouten (Updates, Backups, Systemeinstellungen, Nutzer) nur Admin (403).
 3. Webhook: Token-Header → Hash in `user_tokens` → Nutzer → Signatur mit seinem Secret (Klartext nur in seiner DB) → Aufnahme bei ihm. Gesperrt → 503 (Pebble-App wiederholt). API-Token, Kalender-Link, MCP-OAuth ebenso je Nutzer.
 4. Ersteinrichtung: Assistent fragt Namen → Nutzer 1 (Admin) samt Schlüssel und DB → erster Passkey → `/willkommen` zeigt einmal den Wiederherstellungscode (bis „notiert“ verschlüsselt in seiner DB).
@@ -292,7 +292,7 @@ Token-Routen (alles andere bleibt bei der Passkey-Sitzung, kein Löschen): `GET 
 
 ## Ersteinrichtung und Einstellungen (seit 1.14.0)
 
-1. `install.sh` legt Nutzer, Ordner, env-Datei (nur `LISTEN`, `DATA_DIR`, `AUDIO_DIR`) und systemd-Units an, startet den Dienst und gibt den Assistenten-Link aus.
+1. `install.sh` legt Nutzer, Ordner, env-Datei (nur `LISTEN`, `DATA_DIR`, `MEDIA_DIR`, `BACKUP_DIR`) und systemd-Units an, startet den Dienst und gibt den Assistenten-Link aus.
 2. Dienst ohne Einstellungen (oder mit ungültigen) → nur Einrichtungsassistent: `GET /api/ersteinrichtung?code=…` (Einmal-Code in `kv`, `pebble ersteinrichtung` gibt den Link aus; 20 Fehlversuche bis Neustart).
 3. Formular mit allen Feldern aus `config.Fields`, Vorgaben vorausgefüllt, Token und Signatur-Secret erzeugt; „Prüfen“ → `POST /api/ersteinrichtung/openai` (GET /models).
 4. Speichern → `POST /api/ersteinrichtung` → Prüfung wie beim Start (`config.FromValues`) → `kv` „einstellung:KEY“ → Code gelöscht → ohne Passkey Einmal-Link `/einrichten#token` → Dienst beendet sich, systemd startet neu.
@@ -357,3 +357,31 @@ Token-Routen (alles andere bleibt bei der Passkey-Sitzung, kein Löschen): `GET 
 2. Je neue offene Joplin-Rückmeldung `POST /api/eintraege` mit `{quelle:"joplin", extern_id, text}` → Notiz (Diktat, Text statt Audio), `delivery_id = joplin-<extern_id>`; vorhanden → 200 `bekannt: true`, nichts geändert.
 3. Worker: Transkription übersprungen (Text liegt vor) → normale Auswertung sortiert in Gruppe/Liste.
 4. `GET /api/eintraege/{id}` liefert `quelle` und `extern_id`; abgearbeitet und abgehakt über den Listen-Haken wie jeder Punkt.
+
+## Medien in Notizen und Planungen (seit 24.11.2026)
+
+1. KI-Auswertung (Notiz) bzw. Recherche (Planung) liefert neben dem Text `medien[]`: `diagramm` (Typ balken, balken_quer, gestapelt, linie, kreis, ablauf; Beschriftungen, Reihen, Einheit), `bild_extern` (direkte Bild-URL aus der Websuche), `bild_erzeugen` (englischer Prompt, höchstens 2), `trailer` (Film/Serie: „Titel Jahr“). Marker `[[medium:N]]` als eigene Zeile in `beschreibung` bzw. `ergebnisse`.
+2. Server prüft (`normalizeMedia`): höchstens 6 Medien + 5 Trailer, 4 Bilder (2 erzeugt; Planungen bevorzugen Bilder); Diagramm zeichenbar, sonst `fehler`. Schon aufgelöste Medien gleichen Inhalts (prompt/url/suche) aus dem vorigen Stand bleiben (neue Runde, KI-Anweisung).
+3. Ergebnis gespeichert → Schritt `bearbeitet` → `resolveJobMedia` vor dem Joplin-Push: je offenem Medium
+   - `bild_erzeugen`: Images-API (`OPENAI_IMAGE_MODEL`, quality low, WebP 1536×1024), Kosten `PRICE_IMAGE_PER_PICTURE`; aus mit `IMAGES_GENERATE=inaktiv`.
+   - `bild_extern`: Download nur öffentliche IPs, Port 80/443, ≤ 3 Weiterleitungen, ≤ 8 MB, Format am Inhalt (JPEG/PNG/GIF/WebP, kein SVG).
+   - Ablage `MEDIA_DIR/<id>/bilder/JJJJ/MM/<JJJJMM>-<hex>.<endung>.enc` (Audio-Schlüssel des Nutzers).
+   - `trailer`: mit `YOUTUBE_API_KEY` → `search.list` „… trailer deutsch“ (relevanceLanguage = App-Sprache, Titel muss „trailer“ + „deutsch/german“ + Filmwort enthalten), sonst „… official trailer“ englisch. Ohne Schlüssel oder bei API-Fehler → KI-Websuche → YouTube-URL → Prüfung per oEmbed.
+   - Scheitert etwas → `fehler` am Medium (sichtbar), Ergebnis bleibt. Planung: Stand nur geschrieben, wenn er noch der jüngste ist.
+4. Anzeige: `md(text, medien)` setzt das Medium an den Marker, sonst ans Blockende. Bild `GET /api/bilder/{name}` (nur eigener Nutzer, `private, max-age=604800, immutable`, `loading=lazy`); Trailer = Vorschaubild, iframe `youtube-nocookie.com` erst beim Tippen (Referrer-Policy am iframe); Diagramm = SVG im Browser (Ablauf als Schrittkästen) + „Werte“-Tabelle.
+5. Offline: Service Worker hält `/api/bilder/*` im Cache `bilder` (bleibt über Versionen), je Bild höchstens 7 Tage ab Laden; Aufräumen beim Aktivieren und stündlich; Abmelden löscht den Cache.
+6. Joplin: Marker entfernt, Trailer als Links unter „## Trailer“; Bilder/Diagramme nur in der Web-App. Suche ignoriert Medienfelder.
+7. Aufräumen (`Cleanup`, täglich): Bilder, auf die keine Auswertung/kein Planungsstand mehr zeigt (auch Papierkorb), älter als 24 h → gelöscht.
+8. Backup mit Aufnahmen (Format 3): `medien/<id>/audio/…` und `medien/<id>/bilder/…`. Format 2 (`audio/<id>/…`) wird beim Wiederherstellen nach `MEDIA_DIR/<id>/audio/` gelegt.
+
+## Trailer nachtragen (seit 24.11.2026)
+
+1. Status → Trailer → „5 nachtragen“ → `POST /api/medien/trailer-nachtragen?max=5`.
+2. Kandidaten: fertige Notizen (neueste zuerst) ohne Trailer, deren Punkte bzw. Eckdaten Regie/Idee/Schauspieler/Staffeln tragen → Suchbegriff „Titel Jahr“.
+3. Antwort sofort `{gestartet, offen}`; im Hintergrund je Notiz Trailer suchen (wie oben), Auswertung frisch lesen, Medien anhängen, Joplin-Merker setzen, Live-Meldung. Läuft schon ein Durchgang → 409.
+
+## Umzug MEDIA_DIR (4.0)
+
+1. `install.sh`: `MEDIA_DIR` aus env, sonst alter `AUDIO_DIR`; Zeile `AUDIO_DIR=` wird zu `MEDIA_DIR=`; `ReadWritePaths` mit `/srv/pebble-audio` und `/srv/pebble-medien`.
+2. Start je Nutzer (`migrateMedia`): alles unter `MEDIA_DIR/<id>/` außer `audio/`, `bilder/` → `audio/` (Ordner zusammenführen, nie überschreiben) → `sortAudio` richtet `jobs.audio_path` nach dem Ort der Datei (auch nach Umhängen auf einen neuen Pfad).
+

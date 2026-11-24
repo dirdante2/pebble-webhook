@@ -58,6 +58,8 @@ func (s *System) Handler() http.Handler {
 	mux.HandleFunc("GET /api/eintraege/extern", m((*App).handleExternKnown))
 	mux.HandleFunc("GET /api/eintraege/{id}", m((*App).handleJob))
 	mux.HandleFunc("GET /api/eintraege/{id}/audio", u((*App).handleAudio))
+	mux.HandleFunc("GET /api/bilder/{name}", u((*App).handleImage))
+	mux.HandleFunc("POST /api/medien/trailer-nachtragen", u((*App).handleTrailerBackfill))
 	mux.HandleFunc("POST /api/eintraege/{id}/neustart", u((*App).handleRestart))
 	mux.HandleFunc("POST /api/eintraege/{id}/umhaengen", u((*App).handleReassign))
 	mux.HandleFunc("POST /api/eintraege/{id}/liste", m((*App).handleJobToList))
@@ -186,7 +188,7 @@ func securityHeaders(mux http.Handler) http.Handler {
 		h.Set("X-Content-Type-Options", "nosniff")
 		h.Set("Referrer-Policy", "no-referrer")
 		h.Set("X-Frame-Options", "DENY")
-		h.Set("Content-Security-Policy", "default-src 'self'; img-src 'self' data:; media-src 'self' blob:; frame-src https://ko-fi.com; "+
+		h.Set("Content-Security-Policy", "default-src 'self'; img-src 'self' data: https://i.ytimg.com; media-src 'self' blob:; frame-src https://ko-fi.com https://www.youtube-nocookie.com; "+
 			"object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'")
 		h.Set("Permissions-Policy", "microphone=(self), camera=(), geolocation=()")
 		mux.ServeHTTP(w, r)

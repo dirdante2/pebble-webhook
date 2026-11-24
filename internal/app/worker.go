@@ -20,6 +20,7 @@ var backoff = []time.Duration{30 * time.Second, 2 * time.Minute, 10 * time.Minut
 // ein Neustart setzt also beim letzten fertigen Schritt fort.
 func (a *App) Run(ctx context.Context) {
 	a.initRing() // vor sortAudio: die Pfade der Einträge stimmen noch
+	a.migrateMedia()
 	a.sortAudio()
 	a.fixItemYears()
 	a.fixNoteFilms()
@@ -178,6 +179,11 @@ func (a *App) step(ctx context.Context, j *store.Job) error {
 		j.State = store.StateProcessed
 		return nil
 	case store.StateProcessed:
+		// Medien (Bilder, Trailer) erst nach dem gespeicherten Ergebnis: es ist schon sichtbar, ein Fehler hier kostet
+		// keine neue Auswertung. Was scheitert, steht am Medium.
+		if err := a.resolveJobMedia(ctx, j); err != nil {
+			return err
+		}
 		if a.Notes != nil {
 			if err := a.pushJob(j); err != nil {
 				return err
@@ -445,4 +451,6 @@ func (a *App) Cleanup() {
 	a.trashExpired()
 	a.scanAudio()
 	a.removeEmptyDirs(a.audioRoot())
+	a.cleanImages()
+	a.removeEmptyDirs(a.imageRoot())
 }

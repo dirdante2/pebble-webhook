@@ -28,6 +28,8 @@ type Plan struct {
 	Annahmen         []string   `json:"annahmen"`
 	OffeneFragen     []Question `json:"offene_fragen"`
 	Quellen          []Source   `json:"quellen"`
+	// Medien: Diagramme, Bilder, Trailer; Marker [[medium:N]] in Ergebnisse. Fehlt bei älteren Ständen.
+	Medien []Medium `json:"medien,omitempty"`
 }
 
 // Fact ist ein Eckdatum: kurzer Name und kurzer Wert.
@@ -116,7 +118,7 @@ func parsePlan(s string) *Plan {
 
 var planSchema = map[string]any{
 	"type": "object", "additionalProperties": false,
-	"required": []string{"titel", "vorhaben", "notiz", "eckdaten", "ergebnisse", "tipps", "annahmen", "offene_fragen", "quellen", "tags", "neue_tags", "merken"},
+	"required": []string{"titel", "vorhaben", "notiz", "eckdaten", "ergebnisse", "tipps", "annahmen", "offene_fragen", "quellen", "medien", "tags", "neue_tags", "merken"},
 	"properties": map[string]any{
 		"titel":      map[string]any{"type": "string"},
 		"vorhaben":   map[string]any{"type": "string"},
@@ -132,6 +134,7 @@ var planSchema = map[string]any{
 		"tags":      map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
 		"neue_tags": map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
 		"quellen":   sourcesSchema,
+		"medien":    mediaSchema,
 		"merken":    memorySchema,
 	},
 }
@@ -143,11 +146,12 @@ Felder:
 - vorhaben: die Kernfrage des Nutzers, genau ein Satz.
 - notiz: was der Nutzer über alle Runden gesagt hat, bereinigt: höchstens 6 kurze, saubere Sätze ohne Füllwörter und Wiederholungen. Nur Gesagtes – kein Rechercheergebnis, kein Zusatzwissen.
 - eckdaten: 3–8 Paare name/wert: die Kurzantwort auf einen Blick, sie steht in der Anzeige ganz oben (z. B. Antwort, Empfehlung, Kosten, Dauer, Aufwand). name höchstens 3 Wörter, wert höchstens 8 Wörter. Nur Belegtes oder klar als „ca.“ Gekennzeichnetes.
-- ergebnisse: das Hintergrundwissen als Markdown, gegliedert in 3–6 Abschnitte mit kurzen Zwischenüberschriften (###). Je Abschnitt ein bis drei kurze Absätze aus je 2–4 Sätzen, keine Stichpunktlisten. Erkläre Zusammenhänge und Gründe so, dass man die Sache versteht, mit konkreten Zahlen, Namen und Beispielen statt Allgemeinplätzen. Eine kleine Tabelle nur für einen echten Vergleich. Die Eckdaten nicht wörtlich wiederholen.
+- ergebnisse: das Hintergrundwissen als Markdown, gegliedert in 3–6 Abschnitte mit kurzen Zwischenüberschriften (###). Je Abschnitt ein bis drei kurze Absätze aus je 2–4 Sätzen, keine Stichpunktlisten. Erkläre Zusammenhänge und Gründe so, dass man die Sache versteht, mit konkreten Zahlen, Namen und Beispielen statt Allgemeinplätzen. Vergleiche mehrerer Möglichkeiten (Preise, Eigenschaften, Vor- und Nachteile) als kleine Markdown-Tabelle (höchstens 4 Spalten, kurze Zellen). Die Eckdaten nicht wörtlich wiederholen.
 - tipps: 3–6 praktische Tipps, Hinweise oder typische Fehler, die zur Frage passen; jeder Tipp 1–3 Sätze, wichtigster zuerst.
 - annahmen: höchstens 4; jede Annahme, die du wegen fehlender Angaben getroffen hast, und alles Unklare.
 - offene_fragen: meist leer. Höchstens 3 Fragen, und nur, wenn ohne die Antwort die konkrete Frage des Nutzers nicht richtig beantwortet werden kann (etwa eine fehlende Rahmenbedingung, die die Antwort umdreht). Keine Fragen zu Umsetzungsdetails, Vorlieben, Zeitplänen oder zum Weiterplanen; lieber zurückhaltend annehmen und unter annahmen nennen. Je Frage: frage = eine kurze, einzeln beantwortbare Frage; antworten = genau 3 naheliegende, unterschiedliche Antwortvorschläge, je höchstens 6 Wörter.
 - quellen: die tatsächlich verwendeten Webseiten mit Titel und vollständiger URL. Nichts erfinden.
+- ` + mediaRules + ` Marker nur in ergebnisse. Bei Planungen Bilder bevorzugen: jede Planung hat mindestens ein Bild, außer das Thema ist rein abstrakt (Recht, Steuern, Begriffe). Zu Abschnitten, die Aufbau, Funktionsweise, Aussehen, Geräte, Orte oder einen Vergleich von Dingen erklären, ein passendes Bild – bild_extern mit echtem Foto bzw. Abbildung aus der Websuche, sonst bild_erzeugen als erklärende Skizze; meist 2–4 Bilder. Diagramme (alle Arten) zusätzlich, wo sie Sinn machen. Bei einer Fortsetzung bleiben passende Medien des bisherigen Stands mit gleichem Inhalt (prompt, url, suche) erhalten.
 - ` + tagRules + `
 - ` + memoryRules + ` Besonders aus Antworten des Nutzers auf Rückfragen, wenn sie über dieses Thema hinaus gelten.
 
@@ -353,8 +357,17 @@ func (a *App) research(ctx context.Context, j *store.Job, p *store.Planning) err
 	}
 	var in strings.Builder
 	fmt.Fprintf(&in, "Heute ist der %s.\n%s\n\n%s\n\n", time.Now().Format("02.01.2006"), a.tagHint(), a.memoryHint())
+	var prevMedia []Medium
 	if prev := parsePlan(p.Plan); prev != nil {
-		data, _ := json.MarshalIndent(prev, "", " ")
+		prevMedia = prev.Medien
+		// Die KI sieht die Medien ohne das, was der Server ergänzt hat (Dateinamen, Fehler).
+		shown := *prev
+		shown.Medien = nil
+		for _, m := range prev.Medien {
+			m.Bild, m.Quelle, m.Video, m.Fehler = "", "", "", ""
+			shown.Medien = append(shown.Medien, m)
+		}
+		data, _ := json.MarshalIndent(shown, "", " ")
 		fmt.Fprintf(&in, "Bisheriger Stand der Planung:\n%s\n\nBisherige Transkripte:\n", data)
 		for _, r := range rounds {
 			if r.ID != j.ID && r.RoundNo < j.RoundNo {
@@ -444,6 +457,7 @@ func (a *App) research(ctx context.Context, j *store.Job, p *store.Planning) err
 		questions = []Question{} // nachträglich importiert: eine Runde ohne Rückfragen
 	}
 	plan.OffeneFragen = questions
+	plan.Medien = normalizeMedia(plan.Medien, prevMedia)
 	data, _ := json.Marshal(plan)
 	j.Result = string(data)
 	j.Title = plan.Titel
@@ -489,7 +503,7 @@ func (a *App) renderPlan(plan *Plan, rounds []*store.Job) string {
 	}
 	fmt.Fprintf(&b, "%s\n\n", strings.TrimSpace(plan.Vorhaben))
 	writeFacts(&b, plan.Eckdaten)
-	if s := strings.TrimSpace(plan.Ergebnisse); s != "" {
+	if s := stripMediaMarkers(plan.Ergebnisse); s != "" {
 		fmt.Fprintf(&b, a.T("## Hintergrund\n\n%s\n\n"), s)
 	}
 	list("Tipps", plan.Tipps, "- ")
@@ -504,6 +518,7 @@ func (a *App) renderPlan(plan *Plan, rounds []*store.Job) string {
 	}
 	list("Offene Fragen", questions, "- ")
 	list("Annahme / unklar", plan.Annahmen, "- ")
+	writeTrailers(&b, plan.Medien)
 	writeSources(&b, plan.Quellen)
 	b.WriteString(a.T("---\n\n## Verlauf\n\n"))
 	for _, r := range rounds {
@@ -548,6 +563,28 @@ func writeSources(b *strings.Builder, sources []Source) {
 	b.WriteString("\n")
 }
 
+// writeTrailers: Trailer als Links (Joplin zeigt keine eingebetteten Videos; Bilder und Diagramme bleiben in der Web-App).
+func writeTrailers(b *strings.Builder, media []Medium) {
+	first := true
+	for _, m := range media {
+		if m.Art != "trailer" || m.Video == "" {
+			continue
+		}
+		if first {
+			b.WriteString(i18n.T("## Trailer\n\n"))
+			first = false
+		}
+		title := strings.TrimSpace(m.Titel)
+		if title == "" {
+			title = m.Suche
+		}
+		fmt.Fprintf(b, "- [%s](https://www.youtube.com/watch?v=%s)\n", strings.NewReplacer("[", "(", "]", ")").Replace(title), m.Video)
+	}
+	if !first {
+		b.WriteString("\n")
+	}
+}
+
 // renderDictation baut den Notiztext eines Diktats: Eckdaten und Hinweise der Auswertung,
 // dann der Text wortgetreu, darunter die Herkunft.
 func renderDictation(j *store.Job) string {
@@ -565,6 +602,7 @@ func renderDictation(j *store.Job) string {
 			b.WriteString(i18n.T("## Wortlaut\n\n"))
 		}
 		fmt.Fprintf(&b, "%s\n\n", strings.TrimSpace(j.Transcript))
+		writeTrailers(&b, d.Medien)
 		writeSources(&b, d.Quellen)
 	} else {
 		fmt.Fprintf(&b, "%s\n\n", strings.TrimSpace(j.Transcript))

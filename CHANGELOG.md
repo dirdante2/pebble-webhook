@@ -9,6 +9,29 @@ Version numbers X.Y.Z:
 
 Own builds show X.Y.Z.A: **A** is a local build counter (one per deployed change, starting at 1 for every new X.Y.Z); it never appears in Git or releases, so one version can collect several changes.
 
+## [4.0.0] - 2026-11-24
+
+### New
+- Notes and plannings: charts (bar, horizontal, stacked, line, pie, flow), tables, images (AI-generated or from the web) and YouTube trailers in the text; plannings prefer images and charts.
+- Films and series: trailer in app language, English as fallback (YouTube API key or AI web search).
+- Images stored encrypted per user, loaded on demand, kept offline for at most 7 days.
+- Status: "Add 5" trailers to older film and series notes.
+- Settings: YouTube API key, image model, image generation on/off, image price.
+- New note from a group or list page: modal shows "Recorded in group/list" (removable with ×); sent to the AI as a sorting hint.
+- CLI `verzeichnisse`: create folders and set owner/modes (runs before every start).
+
+### Changed
+- Media folder MEDIA_DIR/<id>/audio|bilder replaces AUDIO_DIR/<id>; recordings move on start.
+- Backup format 3: recordings and images under medien/; format 2 backups still restorable.
+- Docs: own mounts recommended for users/, media and backups (1 GB each).
+- Sidebar: personal settings on top, admin items (updates, backups, users) in own group "System".
+
+### Fixed
+- Start and install: folders (DATA_DIR/users, MEDIA_DIR, BACKUP_DIR, KEY_DIR) get owner pebble and modes; service refuses to start if one is not writable.
+- Installer: restore and rollback work when DATA_DIR/users is a mount of its own.
+- Status → Storage: free space per storage location from its own file system.
+- AI instructions and answers: relative dates ("tomorrow") count from when they were given, not from the recording; shown with timestamp.
+
 ## [3.1.0] - 2026-11-24
 
 ### New

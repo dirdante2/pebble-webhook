@@ -891,6 +891,11 @@ func (a *App) handleWebNote(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "leer", "Notiz ist leer")
 		return
 	}
+	// Kontext: in der Web-App gerade offene Gruppe/Liste („Gruppe X · Liste L8 Y“), Hinweis fürs Einsortieren.
+	// Vor dem Einfügen ablegen, damit die Auswertung ihn sicher sieht.
+	if k := store.Preview(strings.TrimSpace(r.FormValue("kontext")), 200); k != "" {
+		a.DB.Set(contextKey(j.ID), k)
+	}
 	a.insertWebJob(w, j)
 }
 
@@ -927,8 +932,8 @@ func (a *App) handleStatus(w http.ResponseWriter, r *http.Request) {
 		m := map[string]any{"name": name, "pfad": path}
 		// Frei/gesamt vom Dateisystem; Datenbank und App-Versionen liegen in DATA_DIR (releases/ gibt es evtl. noch nicht).
 		fs := path
-		if size != nil {
-			fs = a.Cfg.DataDir
+		if _, err := os.Stat(path); err != nil && size != nil {
+			fs = a.Cfg.DataDir // z. B. releases/ gibt es noch nicht
 		}
 		free, total, err := diskSpace(fs)
 		if err != nil {
@@ -953,9 +958,10 @@ func (a *App) handleStatus(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	own := UserDB(a.Cfg.DataDir, a.UserID)
-	audioRoot := a.audioRoot()
+	audioRoot, imageRoot := a.audioRoot(), a.imageRoot()
 	speicher := []map[string]any{disk("Deine Daten", own, files(own, own+"-wal", own+"-shm")),
-		disk("Deine Aufnahmen", audioRoot, func() int64 { return dirSize(audioRoot) })}
+		disk("Deine Aufnahmen", audioRoot, func() int64 { return dirSize(audioRoot) }),
+		disk("Deine Bilder", imageRoot, func() int64 { return dirSize(imageRoot) })}
 	if a.isAdmin() {
 		sysDB := filepath.Join(a.Cfg.DataDir, "system.db")
 		users := filepath.Join(a.Cfg.DataDir, "users")
@@ -963,7 +969,7 @@ func (a *App) handleStatus(w http.ResponseWriter, r *http.Request) {
 		speicher = append(speicher,
 			disk("Datenbanken (alle Nutzer)", users, func() int64 { return files(sysDB, sysDB+"-wal", sysDB+"-shm")() + dirSize(users) }),
 			disk("App-Versionen", releases, func() int64 { return dirSize(releases) }),
-			disk("Aufnahmen (alle Nutzer)", a.Cfg.AudioDir, nil), disk("Backups", a.Cfg.BackupDir, nil))
+			disk("Medien (alle Nutzer)", a.Cfg.MediaDir, nil), disk("Backups", a.Cfg.BackupDir, nil))
 		cb, cr, cbb, crb := a.cleanupPlan()
 		out["aufraeumen"] = map[string]any{"backups": len(cb), "backups_groesse": cbb, "versionen": len(cr), "versionen_groesse": crb}
 	}

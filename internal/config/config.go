@@ -22,7 +22,7 @@ type Config struct {
 	Listen       string
 	PublicURL    string // https://host, ohne Slash am Ende
 	DataDir      string
-	AudioDir     string
+	MediaDir     string
 	BackupDir    string // Ablage der Backups (Startwert BACKUP_DIR, vom Installer freigegeben)
 	KeyDir       string // Schlüssel je Nutzer (Startwert KEY_DIR, nie im Backup)
 	TrustedProxy string
@@ -51,6 +51,10 @@ type Config struct {
 	PriceTitleIn         *float64 // Kurztitel/Zuordnung, USD je 1 Mio. Tokens
 	PriceTitleOut        *float64
 	PriceTranscribeMin   *float64 // Transkription, USD je Minute
+	PriceImage           *float64 // erzeugtes Bild, USD je Bild
+	ImageModel           string   // Bilderzeugung (Images-API)
+	ImagesEnabled        bool     // KI darf Bilder erzeugen
+	YouTubeKey           string   // YouTube Data API v3 (Trailer); leer = Suche über die KI-Websuche
 	ResearchLimitUSD     float64
 	ResearchMaxOutTokens int
 
@@ -117,7 +121,7 @@ func LoadFile(path string) error {
 type Bootstrap struct {
 	Listen    string
 	DataDir   string
-	AudioDir  string
+	MediaDir  string
 	BackupDir string
 	KeyDir    string // Schlüssel je Nutzer (nie im Backup)
 }
@@ -130,7 +134,7 @@ func LoadBootstrap() Bootstrap {
 		return def
 	}
 	return Bootstrap{Listen: get("LISTEN", "0.0.0.0:8080"), DataDir: get("DATA_DIR", "/var/lib/pebble-webhook"),
-		AudioDir: get("AUDIO_DIR", "/srv/pebble-audio"), BackupDir: get("BACKUP_DIR", "/srv/pebble-backup"),
+		MediaDir: get("MEDIA_DIR", get("AUDIO_DIR", "/srv/pebble-medien")), BackupDir: get("BACKUP_DIR", "/srv/pebble-backup"),
 		KeyDir: get("KEY_DIR", "/etc/pebble-webhook/keys")}
 }
 
@@ -230,7 +234,7 @@ func FromValues(boot Bootstrap, lookup func(string) string) (*Config, error) {
 		Listen:       boot.Listen,
 		PublicURL:    strings.TrimRight(need("PUBLIC_URL"), "/"),
 		DataDir:      boot.DataDir,
-		AudioDir:     boot.AudioDir,
+		MediaDir:     boot.MediaDir,
 		BackupDir:    boot.BackupDir,
 		KeyDir:       boot.KeyDir,
 		TrustedProxy: str("TRUSTED_PROXY", ""),
@@ -259,6 +263,10 @@ func FromValues(boot Bootstrap, lookup func(string) string) (*Config, error) {
 		PriceTitleIn:         price("PRICE_TITLE_INPUT_PER_MTOK"),
 		PriceTitleOut:        price("PRICE_TITLE_OUTPUT_PER_MTOK"),
 		PriceTranscribeMin:   price("PRICE_TRANSCRIBE_PER_MIN"),
+		PriceImage:           price("PRICE_IMAGE_PER_PICTURE"),
+		ImageModel:           str("OPENAI_IMAGE_MODEL", "gpt-image-1-mini"),
+		ImagesEnabled:        str("IMAGES_GENERATE", "aktiv") == "aktiv",
+		YouTubeKey:           str("YOUTUBE_API_KEY", ""),
 		ResearchMaxOutTokens: num("RESEARCH_MAX_OUTPUT_TOKENS", 6000),
 
 		TrashRetentionDays: num("TRASH_RETENTION_DAYS", 183),

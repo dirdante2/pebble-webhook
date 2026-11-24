@@ -23,7 +23,7 @@ import (
 
 // Mehrere Nutzer: System hält, was alle teilen (system.db, Einstellungen, Anmeldung, Updates, Backups); je Nutzer
 // gibt es eine App mit eigener, verschlüsselter Datenbank users/<id>/daten.db, eigenem Worker, eigenen Live-Meldungen
-// und Aufnahmen unter AUDIO_DIR/<id>/. Handler der Web-App laufen immer auf der App des angemeldeten Nutzers –
+// und Medien unter MEDIA_DIR/<id>/ (audio/, bilder/). Handler der Web-App laufen immer auf der App des angemeldeten Nutzers –
 // fremde Daten erreicht keine Route, auch nicht als Admin.
 
 // System: geteilter Teil des Dienstes.
@@ -77,6 +77,7 @@ type App struct {
 	stopped chan struct{}
 
 	trainNow  atomic.Bool    // Lernlauf von Hand angefordert
+	mediaBusy atomic.Bool    // Trailer werden gerade nachgetragen
 	sortFails map[string]int // Planung → gescheiterte Versuche beim Einsortieren (nur im Worker)
 	joplinErr string
 	joplinAt  int64
@@ -204,7 +205,7 @@ func (s *System) userConfig(db *store.Store) (*config.Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	boot := config.Bootstrap{Listen: s.Cfg.Listen, DataDir: s.Cfg.DataDir, AudioDir: s.Cfg.AudioDir, BackupDir: s.Cfg.BackupDir, KeyDir: s.Cfg.KeyDir}
+	boot := config.Bootstrap{Listen: s.Cfg.Listen, DataDir: s.Cfg.DataDir, MediaDir: s.Cfg.MediaDir, BackupDir: s.Cfg.BackupDir, KeyDir: s.Cfg.KeyDir}
 	return config.FromValues(boot, func(k string) string {
 		if f, ok := config.FieldByKey(k); ok && f.Personal {
 			if v, set := own[k]; set {

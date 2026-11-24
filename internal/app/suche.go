@@ -14,7 +14,8 @@ import (
 type searchField struct{ name, text string }
 
 // skipKeys: Felder der Auswertung, die die Suche nicht als Text zählt (URLs; Tags zählen nur über die Tags-Spalte).
-var skipKeys = map[string]bool{"url": true, "tags": true, "neue_tags": true}
+var skipKeys = map[string]bool{"url": true, "tags": true, "neue_tags": true,
+	"prompt": true, "bild": true, "quelle": true, "video": true, "fehler": true, "suche": true, "art": true, "typ": true}
 
 // jsonStrings sammelt alle Texte einer gespeicherten Auswertung (ohne URLs und Tags), in Dokumentreihenfolge.
 func jsonStrings(raw string) []string {
@@ -27,7 +28,7 @@ func jsonStrings(raw string) []string {
 	walk = func(key string, v any) {
 		switch x := v.(type) {
 		case string:
-			if !skipKeys[key] && strings.TrimSpace(x) != "" {
+			if x = stripMediaMarkers(x); !skipKeys[key] && x != "" {
 				out = append(out, x)
 			}
 		case []any:

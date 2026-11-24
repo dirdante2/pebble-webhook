@@ -86,8 +86,9 @@ func (a *System) handleBackupUpload(w http.ResponseWriter, r *http.Request) {
 }
 
 // checkBackupArchive prüft ein hochgeladenes Archiv gegen die Form von writeArchive: meta.json, env, dann die Daten –
-// Format 1: pebble.db; Format 2: system.db und je Nutzer users/<id>/daten.db (verschlüsselt) –, dann nur bei „-audio“
-// Dateien unter audio/ (Format 2: audio/<id>/….enc); nur normale Dateien, keine Ordner, Links oder fremden Namen.
+// Format 1: pebble.db; ab Format 2: system.db und je Nutzer users/<id>/daten.db (verschlüsselt) –, dann nur bei
+// „-audio“ die Medien (Format 2: audio/<id>/….enc, Format 3: medien/<id>/audio|bilder/….enc); nur normale Dateien,
+// keine Ordner, Links oder fremden Namen.
 // m ist der Treffer von archiveNameRe auf den Dateinamen.
 func checkBackupArchive(p string, m []string, tmpDir string) error {
 	f, err := os.Open(p)
@@ -119,7 +120,7 @@ func checkBackupArchive(p string, m []string, tmpDir string) error {
 			if h.Name != order[n] {
 				return fmt.Errorf("erwartet %s, gefunden %s", order[n], h.Name)
 			}
-		case format == 2 && userFileRe.MatchString(h.Name):
+		case format >= 2 && userFileRe.MatchString(h.Name):
 			if err := checkSealedDB(tr, h.Name); err != nil {
 				return err
 			}
@@ -130,9 +131,13 @@ func checkBackupArchive(p string, m []string, tmpDir string) error {
 			continue
 		case !audio:
 			return fmt.Errorf("unerwartete Datei %s", h.Name)
-		case !strings.HasPrefix(h.Name, "audio/") || path.Clean(h.Name) != h.Name || strings.Contains(h.Name, "\\") || strings.Contains(h.Name, ".."):
+		case path.Clean(h.Name) != h.Name || strings.Contains(h.Name, "\\") || strings.Contains(h.Name, ".."):
+			return fmt.Errorf("unerwartete Datei %s", h.Name)
+		case format <= 2 && !strings.HasPrefix(h.Name, "audio/"):
 			return fmt.Errorf("unerwartete Datei %s", h.Name)
 		case format == 2 && (!audioFileRe.MatchString(h.Name) || !strings.HasSuffix(h.Name, schluessel.AudioExt)):
+			return fmt.Errorf("unerwartete Datei %s", h.Name)
+		case format == 3 && (!mediaFileRe.MatchString(h.Name) || !strings.HasSuffix(h.Name, schluessel.AudioExt)):
 			return fmt.Errorf("unerwartete Datei %s", h.Name)
 		}
 		switch h.Name {
@@ -146,11 +151,11 @@ func checkBackupArchive(p string, m []string, tmpDir string) error {
 			if err := dec.Decode(&meta); err != nil {
 				return errors.New("meta.json nicht lesbar")
 			}
-			if (meta.Format != 1 && meta.Format != 2) || meta.Version != m[1] || meta.Channel != m[2] || meta.Kind != m[4] || meta.Audio != audio {
+			if meta.Format < 1 || meta.Format > 3 || meta.Version != m[1] || meta.Channel != m[2] || meta.Kind != m[4] || meta.Audio != audio {
 				return errors.New("meta.json passt nicht zum Dateinamen")
 			}
 			format = meta.Format
-			if format == 2 {
+			if format >= 2 {
 				order[2] = "system.db"
 			}
 		case "env":
@@ -163,13 +168,13 @@ func checkBackupArchive(p string, m []string, tmpDir string) error {
 				if strings.HasPrefix(line, "#") {
 					continue
 				}
-				if !ok || (k != "LISTEN" && k != "DATA_DIR" && k != "AUDIO_DIR" && k != "BACKUP_DIR") {
+				if !ok || (k != "LISTEN" && k != "DATA_DIR" && k != "AUDIO_DIR" && k != "MEDIA_DIR" && k != "BACKUP_DIR") {
 					return errors.New("env enthält fremde Werte")
 				}
 			}
 		case "pebble.db", "system.db":
 			want := "jobs"
-			if format == 2 {
+			if format >= 2 {
 				want = "users"
 			}
 			if h.Name != order[2] {
@@ -184,7 +189,7 @@ func checkBackupArchive(p string, m []string, tmpDir string) error {
 	if n < len(order) {
 		return errors.New("unvollständig (meta.json, env, Datenbank)")
 	}
-	if format == 2 && users == 0 {
+	if format >= 2 && users == 0 {
 		return errors.New("unvollständig (keine Nutzerdaten)")
 	}
 	// Nach dem Ende-Block des Archivs darf nur noch Füllung (Nullen) folgen – auch keine angehängten gzip-Teile.
@@ -251,3 +256,6 @@ func checkSealedDB(r io.Reader, name string) error {
 
 var userFileRe = regexp.MustCompile(`^users/[1-9][0-9]{0,8}/daten\.db(-wal)?$`)
 var audioFileRe = regexp.MustCompile(`^audio/[1-9][0-9]{0,8}/`)
+
+// mediaFileRe: Medien im Archiv ab Format 3 (medien/<id>/audio/… oder medien/<id>/bilder/…).
+var mediaFileRe = regexp.MustCompile(`^medien/[1-9][0-9]{0,8}/(audio|bilder)/`)

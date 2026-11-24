@@ -46,7 +46,10 @@ command -v systemctl >/dev/null || { echo "systemd is required" >&2; exit 1; }
 
 # Start values from the env file (defaults for a fresh install).
 envval() { local v; v="$(grep -oP "^$1=\K.*" /etc/pebble-webhook/env 2>/dev/null | tail -n1 || true)"; v="${v%\"}"; v="${v#\"}"; echo "${v:-$2}"; }
-AUDIO_DIR="$(envval AUDIO_DIR "$DATA_DIR/audio")"
+# Media (recordings and images, from 4.0 MEDIA_DIR/<id>/audio|bilder); until 3.x the env file named it AUDIO_DIR.
+MEDIA_DEFAULT=/srv/pebble-medien
+[ -f /etc/pebble-webhook/env ] && [ -d /srv/pebble-audio ] && [ ! -d /srv/pebble-medien ] && MEDIA_DEFAULT=/srv/pebble-audio   # program default until 3.x
+MEDIA_DIR="$(envval MEDIA_DIR "$(envval AUDIO_DIR "$MEDIA_DEFAULT")")"
 BACKUP_DIR="$(envval BACKUP_DIR /srv/pebble-backup)"
 ARCHIVE_RE='^pebble-[0-9A-Za-z.+-]+-(stable|beta|nightly|lokal)-[0-9]{8}-[0-9]{6}-(update|plan|manuell)(-audio)?\.tar\.gz$'
 RELEASE_RE='^[0-9]+\.[0-9]+\.[0-9]+(-(stable|beta|nightly)(\.[0-9]+)?)?$'
@@ -60,13 +63,14 @@ schema_file() { if [ -f "$1/system.db" ]; then echo "$1/system.db"; elif [ -f "$
 copy_data() {   # $1 → $2 (directories)
     local f
     for f in $DB_FILES; do [ -f "$1/$f" ] && cp -p "$1/$f" "$2/"; done
-    [ -d "$1/users" ] && cp -a "$1/users" "$2/"
+    # users/ may be a mount point of its own: copy into it, never replace the directory itself.
+    if [ -d "$1/users" ]; then install -d -m 0750 "$2/users" && cp -a "$1/users/." "$2/users/"; fi
     return 0
 }
 replace_data() {   # DATA_DIR gets exactly the data set from $1
     local f
     for f in $DB_FILES; do rm -f "$DATA_DIR/$f"; done
-    rm -rf "$DATA_DIR/users"
+    [ -d "$DATA_DIR/users" ] && find "$DATA_DIR/users" -mindepth 1 -delete
     copy_data "$1" "$DATA_DIR"
     for f in $DB_FILES; do [ -f "$DATA_DIR/$f" ] && { chown pebble:pebble "$DATA_DIR/$f"; chmod 0640 "$DATA_DIR/$f"; }; done
     [ -d "$DATA_DIR/users" ] && chown -R pebble:pebble "$DATA_DIR/users"
@@ -222,7 +226,7 @@ fi
 
 # --- 2. user, directories, start values ---
 id pebble >/dev/null 2>&1 || useradd --system --home-dir "$DATA_DIR" --shell /usr/sbin/nologin pebble
-install -d -o pebble -g pebble -m 0750 "$DATA_DIR" "$DATA_DIR/audio" "$BACKUP_DIR"
+install -d -o pebble -g pebble -m 0750 "$DATA_DIR" "$DATA_DIR/users" "$MEDIA_DIR" "$BACKUP_DIR"
 [ -d "$DATA_DIR/releases" ] && chown -R pebble:pebble "$DATA_DIR/releases"
 install -d -o root -g pebble -m 0750 /etc/pebble-webhook
 install -d -o pebble -g pebble -m 0700 "$KEY_DIR"
@@ -232,7 +236,7 @@ if [ ! -f /etc/pebble-webhook/env ]; then
 # pebble-webhook start values. Everything else is configured in the web app (setup wizard, Status → Einstellungen).
 LISTEN=0.0.0.0:8080
 DATA_DIR=$DATA_DIR
-AUDIO_DIR=$DATA_DIR/audio
+MEDIA_DIR=$MEDIA_DIR
 # Backups (database, settings, version, channel; optionally recordings). After changing it run this script again,
 # it creates the folder and allows the service to write there.
 BACKUP_DIR=$BACKUP_DIR
@@ -241,6 +245,14 @@ EOF
     chmod 0640 /etc/pebble-webhook/env
 elif ! grep -q '^BACKUP_DIR=' /etc/pebble-webhook/env; then
     printf '\n# Backups (database, settings, version, channel; optionally recordings). After changing it run install.sh again.\nBACKUP_DIR=%s\n' "$BACKUP_DIR" >> /etc/pebble-webhook/env
+fi
+# From 4.0 the start value is MEDIA_DIR (recordings and images); an AUDIO_DIR line of 3.x is renamed in place.
+if ! grep -q '^MEDIA_DIR=' /etc/pebble-webhook/env; then
+    if grep -q '^AUDIO_DIR=' /etc/pebble-webhook/env; then
+        sed -i 's/^AUDIO_DIR=/MEDIA_DIR=/' /etc/pebble-webhook/env
+    else
+        printf '\n# Media: recordings and images per user (MEDIA_DIR/<id>/audio|bilder).\nMEDIA_DIR=%s\n' "$MEDIA_DIR" >> /etc/pebble-webhook/env
+    fi
 fi
 
 # --- 3. back up the running state before replacing it: an archive in BACKUP_DIR with database (incl. all settings),
@@ -268,11 +280,11 @@ if data_present "$DATA_DIR" && [ -x /usr/local/bin/pebble-webhook ]; then
   "art": "update",
   "audio": false,
   "data_dir": "$DATA_DIR",
-  "audio_dir": "$AUDIO_DIR"
+  "media_dir": "$MEDIA_DIR"
 }
 EOF
     { echo "# Start values at the time of the backup (/etc/pebble-webhook/env)"
-      grep -E '^(LISTEN|DATA_DIR|AUDIO_DIR|BACKUP_DIR)=' /etc/pebble-webhook/env 2>/dev/null || true; } > "$TMP/old/env"
+      grep -E '^(LISTEN|DATA_DIR|MEDIA_DIR|BACKUP_DIR)=' /etc/pebble-webhook/env 2>/dev/null || true; } > "$TMP/old/env"
     NAME="pebble-$OLD-$OLD_CH-$(date +%Y%m%d-%H%M%S)-update.tar.gz"
     install -d -o pebble -g pebble -m 0750 "$BACKUP_DIR"
     tar -czf "$BACKUP_DIR/.$NAME.tmp" -C "$TMP/old" .   # users/ holds only encrypted files
@@ -287,11 +299,23 @@ fi
 if [ -n "${RESTORE_DATA:-}" ]; then
     systemctl stop pebble-webhook 2>/dev/null || true
     replace_data "$TMP/restore"
-    if [ -d "$TMP/restore/audio" ]; then
-        install -d -o pebble -g pebble -m 0750 "$AUDIO_DIR"
-        cp -R "$TMP/restore/audio/." "$AUDIO_DIR/"
-        chown -R pebble:pebble "$AUDIO_DIR"
+    install -d -o pebble -g pebble -m 0750 "$MEDIA_DIR"
+    if [ -d "$TMP/restore/medien" ]; then   # from 4.0: medien/<id>/audio|bilder/…
+        cp -R "$TMP/restore/medien/." "$MEDIA_DIR/"
     fi
+    if [ -d "$TMP/restore/audio" ]; then    # 3.x: audio/<id>/… → MEDIA_DIR/<id>/audio/…; up to 2.x: audio/<diktat|planung>/…
+        for d in "$TMP/restore/audio"/*/; do
+            [ -d "$d" ] || continue
+            n="$(basename "$d")"
+            if [[ "$n" =~ ^[1-9][0-9]*$ ]]; then
+                install -d -o pebble -g pebble -m 0750 "$MEDIA_DIR/$n/audio"
+                cp -R "$d." "$MEDIA_DIR/$n/audio/"
+            else
+                cp -R "$d" "$MEDIA_DIR/"
+            fi
+        done
+    fi
+    chown -R pebble:pebble "$MEDIA_DIR"
     echo "Data restored from $ARCHIVE"
 fi
 if [ "$MODE" = restore ]; then
@@ -316,6 +340,14 @@ elif [ -f "${BASH_SOURCE[0]:-/nonexistent}" ] && [ "$(readlink -f "${BASH_SOURCE
     install -m 0755 "${BASH_SOURCE[0]}" "$LIB_DIR/install.sh"
 fi
 
+# Folders (own mounts recommended: DATA_DIR/users, MEDIA_DIR, BACKUP_DIR) often belong to root after creating or
+# restoring a mount: set owner and modes now and before every start (programs from 4.0 know the command).
+DIRS_PRE=""
+if /usr/local/bin/pebble-webhook verzeichnisse --kann >/dev/null 2>&1; then
+    PEBBLE_ENV_FILE=/etc/pebble-webhook/env /usr/local/bin/pebble-webhook verzeichnisse
+    DIRS_PRE="ExecStartPre=+/usr/local/bin/pebble-webhook verzeichnisse"
+fi
+
 cat > /etc/systemd/system/pebble-webhook.service <<EOF
 [Unit]
 Description=pebble-webhook (voice notes from the Pebble Index 01)
@@ -328,6 +360,7 @@ User=pebble
 Group=pebble
 EnvironmentFile=/etc/pebble-webhook/env
 Environment=PEBBLE_ENV_FILE=/nonexistent
+$DIRS_PRE
 ExecStart=/usr/local/bin/pebble-webhook serve
 Restart=always
 RestartSec=3
@@ -335,7 +368,7 @@ TimeoutStopSec=30
 StateDirectory=pebble-webhook
 StateDirectoryMode=0750
 UMask=0027
-ReadWritePaths=-/srv/pebble-audio -$AUDIO_DIR -$BACKUP_DIR -$KEY_DIR
+ReadWritePaths=-/srv/pebble-audio -/srv/pebble-medien -$MEDIA_DIR -$BACKUP_DIR -$KEY_DIR
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true

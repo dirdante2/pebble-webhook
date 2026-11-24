@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -44,12 +45,33 @@ var appointmentSchema = map[string]any{
 	},
 }
 
-const appointmentRules = `termin: nur bei art termin, sonst beginn "", ganztag false, ort "", vorlauf_minuten -1, in_minuten -1. beginn = Zeitpunkt des Termins immer als "JJJJ-MM-TTTHH:MM". Ohne genaue Uhrzeit gilt 07:00 („Montag“, „Montag früh“, „morgens“ → 07:00); andere Tageszeiten: vormittags 10:00, mittags 12:00, nachmittags 15:00, abends 18:00, nachts 22:00. ganztag = true nur, wenn ausdrücklich „ganztägig“ oder „den ganzen Tag“ gesagt ist (dann beginn mit 00:00), sonst false. Relative Angaben („morgen“, „Dienstag“, „in einer Woche“) beziehen sich auf den Aufnahmezeitpunkt, ein Wochentag ohne Datum ist der nächste kommende. Leer, wenn nur „erinnere mich in N Minuten“ ohne eigenen Zeitpunkt gesagt ist. ort = genannter Ort, sonst leer. vorlauf_minuten = gesagte Vorlaufzeit der Erinnerung („10 Minuten vorher“ → 10, „einen Tag vorher“ → 1440); 0, wenn der Zeitpunkt selbst die gewünschte Erinnerung ist („erinnere mich um 7“, „Erinnerung für 19 Uhr“, „um 8 Tabletten nehmen“) oder keine genaue Uhrzeit genannt ist (07:00 oder Tageszeit); sonst -1. in_minuten = „erinnere mich in N Minuten/Stunden“ ab Aufnahme in Minuten, sonst -1.`
+const appointmentRules = `termin: nur bei art termin, sonst beginn "", ganztag false, ort "", vorlauf_minuten -1, in_minuten -1. beginn = Zeitpunkt des Termins immer als "JJJJ-MM-TTTHH:MM". Ohne genaue Uhrzeit gilt 07:00 („Montag“, „Montag früh“, „morgens“ → 07:00); andere Tageszeiten: vormittags 10:00, mittags 12:00, nachmittags 15:00, abends 18:00, nachts 22:00. ganztag = true nur, wenn ausdrücklich „ganztägig“ oder „den ganzen Tag“ gesagt ist (dann beginn mit 00:00), sonst false. Relative Angaben („morgen“, „Dienstag“, „in einer Woche“) beziehen sich im Diktat auf den Aufnahmezeitpunkt, in Antworten und Anweisungen des Nutzers auf deren jeweils angegebenen Zeitpunkt, ein Wochentag ohne Datum ist der nächste kommende. Leer, wenn nur „erinnere mich in N Minuten“ ohne eigenen Zeitpunkt gesagt ist. ort = genannter Ort, sonst leer. vorlauf_minuten = gesagte Vorlaufzeit der Erinnerung („10 Minuten vorher“ → 10, „einen Tag vorher“ → 1440); 0, wenn der Zeitpunkt selbst die gewünschte Erinnerung ist („erinnere mich um 7“, „Erinnerung für 19 Uhr“, „um 8 Tabletten nehmen“) oder keine genaue Uhrzeit genannt ist (07:00 oder Tageszeit); sonst -1. in_minuten = „erinnere mich in N Minuten/Stunden“ ab Aufnahme in Minuten, sonst -1.`
 
 // appointmentHint steht in der Eingabe: Bezugspunkt für relative Zeitangaben.
 func appointmentHint(recordedAt int64) string {
-	t := time.UnixMilli(recordedAt)
-	return fmt.Sprintf("Aufgenommen am %s, %s um %s Uhr.", weekdayDE[t.Weekday()], t.Format("02.01.2006"), t.Format("15:04"))
+	return "Aufgenommen am " + dayTime(recordedAt) + "."
+}
+
+// givenHint: Zeitpunkt einer Antwort oder Anweisung als Bezug für relative Angaben darin.
+func givenHint(at int64) string {
+	if at <= 0 {
+		return "Zeitpunkt unbekannt"
+	}
+	return "gegeben am " + dayTime(at)
+}
+
+func dayTime(ms int64) string {
+	t := time.UnixMilli(ms)
+	return fmt.Sprintf("%s, %s um %s Uhr", weekdayDE[t.Weekday()], t.Format("02.01.2006"), t.Format("15:04"))
+}
+
+// clientTime: vom Gerät gemeldeter Zeitpunkt (ms, Ausgang); ungültig oder in der Zukunft → jetzt.
+func clientTime(v string) int64 {
+	now := store.Now()
+	if ms, err := strconv.ParseInt(v, 10, 64); err == nil && ms > 0 && ms <= now {
+		return ms
+	}
+	return now
 }
 
 var weekdayDE = [...]string{"Sonntag", "Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag"}

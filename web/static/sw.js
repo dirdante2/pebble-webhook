@@ -2,6 +2,10 @@
 // Die Hülle gehört zu genau einer App-Version (__V__): sie kommt immer aus dem Cache und wird nur mit einem
 // neuen Service Worker (= neue Version) einmal neu geladen. Danach lädt die Seite beim nächsten Wechsel neu.
 const CACHE = 'sprachnotizen-__V__';
+// Bilder aus Notizen und Planungen: eigener Speicher über Versionen hinweg, jedes Bild höchstens 7 Tage ab dem Laden.
+const BILDER = 'bilder';
+const BILD_FRIST = 7 * 24 * 3600 * 1000;
+let bilderGeprueft = 0;
 const HUELLE = ['/', '/app.js?v=__V__', '/app.css?v=__V__', '/theme.js?v=__V__', '/manifest.webmanifest', '/icon.svg', '/icon-192.png', '/icon-512.png'];
 
 self.addEventListener('install', (e) => {
@@ -10,11 +14,42 @@ self.addEventListener('install', (e) => {
 });
 
 self.addEventListener('activate', (e) => {
-  e.waitUntil(caches.keys().then((ks) => Promise.all(ks.filter((k) => k !== CACHE).map((k) => caches.delete(k)))).then(() => self.clients.claim()));
+  e.waitUntil(caches.keys().then((ks) => Promise.all(ks.filter((k) => k !== CACHE && k !== BILDER).map((k) => caches.delete(k))))
+    .then(bilderAufraeumen).then(() => self.clients.claim()));
 });
+
+// Abgelaufene Bilder entfernen (beim Aktivieren und höchstens stündlich beim Laden eines Bildes).
+async function bilderAufraeumen() {
+  bilderGeprueft = Date.now();
+  const c = await caches.open(BILDER);
+  for (const req of await c.keys()) {
+    const a = await c.match(req);
+    if (!a || Date.now() - Number(a.headers.get('x-geladen') || 0) > BILD_FRIST) await c.delete(req);
+  }
+}
+
+async function bildHolen(req) {
+  const c = await caches.open(BILDER);
+  const treffer = await c.match(req);
+  if (treffer && Date.now() - Number(treffer.headers.get('x-geladen') || 0) <= BILD_FRIST) return treffer;
+  const antwort = await fetch(req);
+  if (antwort.ok) {
+    const kopf = new Headers(antwort.headers);
+    kopf.set('x-geladen', String(Date.now()));
+    const kopie = new Response(await antwort.blob(), { status: 200, headers: kopf });
+    await c.put(req, kopie.clone());
+    return kopie;
+  }
+  return antwort;
+}
 
 self.addEventListener('fetch', (e) => {
   const url = new URL(e.request.url);
+  if (e.request.method === 'GET' && url.origin === location.origin && url.pathname.startsWith('/api/bilder/')) {
+    if (Date.now() - bilderGeprueft > 3600 * 1000) e.waitUntil(bilderAufraeumen().catch(() => {}));
+    e.respondWith(bildHolen(e.request).catch(() => Response.error())); // offline und abgelaufen: kein Bild
+    return;
+  }
   if (e.request.method !== 'GET' || url.origin !== location.origin || url.pathname.startsWith('/api/') || url.pathname.startsWith('/oauth/') || url.pathname.startsWith('/kalender/') || url.pathname.startsWith('/.well-known/') || url.pathname === '/mcp' || url.pathname === '/hook' || url.pathname === '/sw') return;
   const seite = e.request.mode === 'navigate';
   const key = seite ? '/' : url.pathname + url.search;

@@ -138,7 +138,8 @@ async function api(pfad, opt = {}) {
 }
 
 // Kleines, sicheres Markdown für Rechercheergebnisse: erst maskieren, dann wenige Muster.
-function md(text) {
+// Mit medien: eine Zeile [[medium:N]] zeigt dort das Medium N; nicht platzierte Medien stehen am Ende.
+function md(text, medien = null) {
   const inline = (s) => esc(s)
     .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
     .replace(/`([^`]+)`/g, '<code>$1</code>')
@@ -149,13 +150,20 @@ function md(text) {
     if (liste) { aus.push(`<${liste.art}>${liste.punkte.map((p) => T`<li>${p}</li>`).join('')}</${liste.art}>`); liste = null; }
     if (tabelle) {
       const [kopf, ...rest] = tabelle;
-      aus.push(T`<table><thead><tr>${kopf.map((z) => T`<th>${z}</th>`).join('')}</tr></thead><tbody>${rest.map((r) => T`<tr>${r.map((z) => T`<td>${z}</td>`).join('')}</tr>`).join('')}</tbody></table>`);
+      aus.push(T`<div class="tabelle"><table><thead><tr>${kopf.map((z) => T`<th>${z}</th>`).join('')}</tr></thead><tbody>${rest.map((r) => T`<tr>${r.map((z) => T`<td>${z}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`);
       tabelle = null;
     }
   };
+  const gezeigt = new Set();
   for (const roh of String(text || '').split('\n')) {
-    const z = roh.trim();
     let m;
+    if ((m = roh.trim().match(/^\[\[medium:(\d+)\]\]$/))) {
+      zu();
+      const me = (medien || []).find((x) => x.nr === Number(m[1]));
+      if (me && !gezeigt.has(me)) { gezeigt.add(me); aus.push(mediumHtml(me)); }
+      continue;
+    }
+    const z = roh.replace(/\s*\[\[medium:\d+\]\]/g, '').trim();
     if (!z) { zu(); continue; }
     if (z.startsWith('|')) {
       if (liste) zu();
@@ -179,8 +187,145 @@ function md(text) {
     aus.push(`<p>${inline(z)}</p>`);
   }
   zu();
+  for (const me of medien || []) if (!gezeigt.has(me)) aus.push(mediumHtml(me));
   return aus.join('');
 }
+
+// ---------- Medien: Bild, Trailer, Diagramm (nur Anzeige) ----------
+
+// Bilder kommen erst beim Anzeigen (loading=lazy) und offline höchstens 7 Tage aus dem Speicher (sw.js).
+// Trailer: nur das Vorschaubild; das YouTube-Video lädt erst beim Tippen.
+function mediumHtml(m) {
+  const titel = m.titel || (m.art === 'trailer' ? tx('Trailer') : '');
+  const unter = (quelle) => {
+    const teile = [titel ? T`<strong>${esc(titel)}</strong>` : '', m.unterschrift ? esc(m.unterschrift) : '', quelle || ''].filter(Boolean);
+    return teile.length ? T`<figcaption>${teile.join(' · ')}</figcaption>` : '';
+  };
+  if (m.fehler) return T`<figure class="medium fehlt"><figcaption>${titel ? T`<strong>${esc(titel)}</strong> · ` : ''}<span class="leise">${esc(m.art === 'trailer' ? tx('Kein Trailer gefunden') : tx('Nicht verfügbar'))}: ${esc(m.fehler)}</span></figcaption></figure>`;
+  if (m.art === 'diagramm') return T`<figure class="medium">${diagrammHtml(m)}${unter('')}</figure>`;
+  if (m.art === 'trailer' && m.video) {
+    return T`<figure class="medium"><button class="trailer" data-video="${esc(m.video)}" aria-label="${esc(tx('Trailer abspielen: {0}', m.suche || titel))}"><img src="https://i.ytimg.com/vi/${esc(m.video)}/hqdefault.jpg" alt="" loading="lazy"><span class="abspielen" aria-hidden="true"></span></button>${unter(T`<a href="https://www.youtube.com/watch?v=${esc(m.video)}" target="_blank" rel="noopener noreferrer">YouTube</a>`)}</figure>`;
+  }
+  if (m.bild) {
+    let quelle = '';
+    if (m.quelle) { try { quelle = T`<a href="${esc(m.quelle)}" target="_blank" rel="noopener noreferrer">${esc(new URL(m.quelle).hostname.replace(/^www\./, ''))}</a>`; } catch { /* ohne Quelle */ } }
+    else if (m.art === 'bild_erzeugen') quelle = T`<span class="leise">KI-Bild</span>`;
+    return T`<figure class="medium"><a class="bild" href="/api/bilder/${esc(m.bild)}" target="_blank"><img src="/api/bilder/${esc(m.bild)}" alt="${esc(titel)}" loading="lazy"></a>${unter(quelle)}</figure>`;
+  }
+  return T`<figure class="medium wartet"><figcaption>${titel ? T`<strong>${esc(titel)}</strong> · ` : ''}<span class="leise">${esc(m.art === 'trailer' ? tx('Trailer wird gesucht …') : tx('Bild wird geladen …'))}</span></figcaption></figure>`;
+}
+
+// Diagramm aus den Daten der KI als SVG (Balken, Linie, Kreis); darunter die Werte zum Nachlesen.
+// Farben über Klassen (die CSP erlaubt keine style-Attribute).
+function diagrammHtml(m) {
+  const d = m.diagramm || {};
+  const namen = d.beschriftungen || [], reihen = d.reihen || [];
+  const aria = esc(m.titel || tx('Diagramm'));
+  if (d.typ === 'ablauf') {
+    // Schritte untereinander mit Pfeilen; Text bricht in bis zu zwei Zeilen um.
+    const zeilen = (t) => { const w = t.split(/\s+/); const a = []; let z = ''; for (const x of w) { if ((`${z} ${x}`).trim().length > 34 && z) { a.push(z); z = x; } else z = `${z} ${x}`.trim(); } a.push(z); return a.length > 2 ? [a[0], `${a.slice(1).join(' ').slice(0, 33)}…`] : a; };
+    const hoehe = 40, abstand = 18;
+    const kaesten = namen.map((t, i) => {
+      const y = i * (hoehe + abstand), z = zeilen(t);
+      const text = z.map((zz, k) => `<text class="schritt" x="160" y="${(y + hoehe / 2 + (k - (z.length - 1) / 2) * 13 + 4).toFixed(1)}" text-anchor="middle">${esc(zz)}</text>`).join('');
+      const pfeil = i < namen.length - 1 ? `<path class="pfeil" d="M160 ${y + hoehe + 2} V${y + hoehe + abstand - 4} M154 ${y + hoehe + abstand - 9} L160 ${y + hoehe + abstand - 3} L166 ${y + hoehe + abstand - 9}"/>` : '';
+      return `<rect class="kasten k${i % 8}" x="20" y="${y}" width="280" height="${hoehe}" rx="8"/><circle class="nummer" cx="20" cy="${y + hoehe / 2}" r="10"/><text class="nummerzahl" x="20" y="${y + hoehe / 2 + 4}" text-anchor="middle">${i + 1}</text>${text}${pfeil}`;
+    }).join('');
+    return T`<svg class="diagramm ablauf" viewBox="0 -2 320 ${namen.length * (hoehe + abstand) - abstand + 4}" role="img" aria-label="${aria}">${kaesten}</svg>`;
+  }
+  if (!namen.length || !reihen.length) return '';
+  const zahl = (v) => `${Number(v).toLocaleString(LOCALE, { maximumFractionDigits: 2 })}${d.einheit ? ` ${d.einheit}` : ''}`;
+  const kurz = (t, n) => (t.length > n ? `${t.slice(0, n - 1)}…` : t);
+  const legende = (eintraege) => T`<ul class="legende">${eintraege.map(([k, t]) => T`<li><i class="${k}"></i>${esc(t)}</li>`).join('')}</ul>`;
+  const werte = T`<details class="werte"><summary>Werte</summary><div class="tabelle"><table class="werte"><thead><tr><th></th>${reihen.map((r) => T`<th>${esc(r.name)}</th>`).join('')}</tr></thead>
+    <tbody>${namen.map((n, i) => T`<tr><td>${esc(n)}</td>${reihen.map((r) => T`<td>${esc(zahl(r.werte[i]))}</td>`).join('')}</tr>`).join('')}</tbody></table></div></details>`;
+  if (d.typ === 'kreis') {
+    const w = reihen[0].werte.map((v) => Math.max(0, Number(v) || 0));
+    const summe = w.reduce((a, b) => a + b, 0);
+    if (!summe) return '';
+    let winkel = -Math.PI / 2;
+    const stuecke = w.map((v, i) => {
+      const anteil = v / summe, a2 = winkel + anteil * 2 * Math.PI;
+      const p = (a) => `${(60 + 55 * Math.cos(a)).toFixed(2)} ${(60 + 55 * Math.sin(a)).toFixed(2)}`;
+      const pfad = anteil >= 0.9999 ? '<circle cx="60" cy="60" r="55"/>' : `<path d="M60 60 L${p(winkel)} A55 55 0 ${anteil > 0.5 ? 1 : 0} 1 ${p(a2)} Z"/>`;
+      winkel = a2;
+      return pfad.replace(/^<(\w+)/, `<$1 class="k${i % 8}"`);
+    }).join('');
+    return T`<svg class="diagramm kreis" viewBox="0 0 120 120" role="img" aria-label="${aria}">${stuecke}</svg>
+      ${legende(namen.map((n, i) => [`k${i % 8}`, `${n}: ${zahl(w[i])} (${Math.round((w[i] / summe) * 100)} %)`]))}`;
+  }
+  if (d.typ === 'balken_quer') {
+    // Rangfolge: eine Zeile je Beschriftung, Name links, Balken rechts, Wert am Balkenende.
+    const zeile = 16 * reihen.length + 8, LB = 104, BB = 320 - LB - 52;
+    const maxW = Math.max(...reihen.flatMap((r) => r.werte.map((v) => Math.abs(Number(v) || 0))), 1);
+    const inhalt = namen.map((t, i) => {
+      const y = i * zeile;
+      return `<text class="achse" x="${LB - 6}" y="${y + zeile / 2 + 3}" text-anchor="end">${esc(kurz(t, 18))}</text>${reihen.map((r, k) => {
+        const w = (Math.abs(Number(r.werte[i]) || 0) / maxW) * BB, yy = y + 4 + k * 16;
+        return `<rect class="s${k + 1}" x="${LB}" y="${yy}" width="${Math.max(1, w).toFixed(1)}" height="13" rx="1.5"/><text class="achse" x="${(LB + w + 4).toFixed(1)}" y="${yy + 10}">${esc(zahl(r.werte[i]))}</text>`;
+      }).join('')}`;
+    }).join('');
+    return T`<svg class="diagramm" viewBox="0 0 320 ${namen.length * zeile}" role="img" aria-label="${aria}">${inhalt}</svg>
+      ${reihen.length > 1 ? legende(reihen.map((r, k) => [`s${k + 1}`, r.name])) : ''}${werte}`;
+  }
+  // Achsen: Balken, gestapelte Balken und Linie teilen Raster und Beschriftung.
+  const B = 320, H = 196, L = 44, R = 8, O = 14, U = 34;
+  const gestapelt = d.typ === 'gestapelt' && reihen.length > 1;
+  const alle = gestapelt ? namen.flatMap((_, i) => [reihen.reduce((a, r) => a + Math.max(0, Number(r.werte[i]) || 0), 0), Math.min(0, ...reihen.map((r) => Number(r.werte[i]) || 0))]) : reihen.flatMap((r) => r.werte.map(Number));
+  let lo = Math.min(0, ...alle), hi = Math.max(0, ...alle);
+  if (hi === lo) hi = lo + 1;
+  const schritt = (() => { const roh = (hi - lo) / 4, e = 10 ** Math.floor(Math.log10(roh)), f = roh / e; return (f <= 1 ? 1 : f <= 2 ? 2 : f <= 5 ? 5 : 10) * e; })();
+  lo = Math.floor(lo / schritt) * schritt; hi = Math.ceil(hi / schritt) * schritt;
+  const y = (v) => O + (H - O - U) * (1 - (v - lo) / (hi - lo));
+  const breite = (B - L - R) / namen.length;
+  let gitter = '';
+  for (let v = lo; v <= hi + schritt / 2; v += schritt) {
+    gitter += `<line class="gitter" x1="${L}" x2="${B - R}" y1="${y(v).toFixed(1)}" y2="${y(v).toFixed(1)}"/><text class="achse" x="${L - 4}" y="${(y(v) + 3).toFixed(1)}" text-anchor="end">${esc(Number(v.toFixed(10)).toLocaleString(LOCALE, { notation: Math.abs(hi) >= 1e5 ? 'compact' : 'standard', maximumFractionDigits: 2 }))}</text>`;
+  }
+  const achseX = namen.map((t, i) => `<text class="achse" x="${(L + breite * (i + 0.5)).toFixed(1)}" y="${H - U + 13}" text-anchor="middle">${esc(kurz(t, namen.length > 6 ? 6 : 12))}</text>`).join('');
+  let marken = '';
+  if (d.typ === 'linie') {
+    marken = reihen.map((r, k) => {
+      const pkt = r.werte.map((v, i) => [L + breite * (i + 0.5), y(Number(v))]);
+      return `<polyline class="linie l${k + 1}" points="${pkt.map(([a, b]) => `${a.toFixed(1)},${b.toFixed(1)}`).join(' ')}"/>${pkt.map(([a, b]) => `<circle class="s${k + 1}" cx="${a.toFixed(1)}" cy="${b.toFixed(1)}" r="2.6"/>`).join('')}`;
+    }).join('');
+  } else if (gestapelt) {
+    const bb = breite * 0.6;
+    marken = namen.map((_, i) => {
+      let basis = 0;
+      return reihen.map((r, k) => {
+        const v = Math.max(0, Number(r.werte[i]) || 0), y0 = y(basis), y1 = y(basis + v);
+        basis += v;
+        return `<rect class="s${k + 1}" x="${(L + breite * i + (breite - bb) / 2).toFixed(1)}" y="${y1.toFixed(1)}" width="${bb.toFixed(1)}" height="${Math.max(0, y0 - y1).toFixed(1)}"/>`;
+      }).join('');
+    }).join('');
+  } else {
+    const innen = breite * 0.78, bb = innen / reihen.length;
+    marken = reihen.map((r, k) => r.werte.map((v, i) => {
+      const x = L + breite * i + (breite - innen) / 2 + bb * k, y0 = y(0), y1 = y(Number(v));
+      return `<rect class="s${k + 1}" x="${x.toFixed(1)}" y="${Math.min(y0, y1).toFixed(1)}" width="${Math.max(1, bb - 1).toFixed(1)}" height="${Math.max(0.5, Math.abs(y1 - y0)).toFixed(1)}" rx="1.5"/>`;
+    }).join('')).join('');
+  }
+  const einheit = d.einheit ? `<text class="achse" x="2" y="${O - 3}">${esc(d.einheit)}</text>` : '';
+  return T`<svg class="diagramm" viewBox="0 0 ${B} ${H}" role="img" aria-label="${aria}">${gitter}${marken}${achseX}${einheit}</svg>
+    ${reihen.length > 1 ? legende(reihen.map((r, k) => [`s${k + 1}`, r.name])) : ''}${werte}`;
+}
+
+document.addEventListener('click', (e) => {
+  const t = e.target.closest('button.trailer[data-video]');
+  if (!t) return;
+  const id = t.dataset.video;
+  if (!/^[A-Za-z0-9_-]{11}$/.test(id)) return;
+  const f = document.createElement('iframe');
+  f.className = 'trailer';
+  f.src = `https://www.youtube-nocookie.com/embed/${id}?autoplay=1&rel=0&hl=${SPRACHE}&cc_lang_pref=${SPRACHE}`;
+  f.title = t.getAttribute('aria-label') || 'YouTube';
+  f.allow = 'autoplay; encrypted-media; picture-in-picture; fullscreen';
+  f.allowFullscreen = true;
+  // YouTube verlangt beim Einbetten den Referrer (sonst Fehler 153); die Seite selbst sendet keinen.
+  f.referrerPolicy = 'strict-origin-when-cross-origin';
+  t.replaceWith(f);
+});
 
 // ---------- IndexedDB: Verlauf, Einträge, Ausgang (vorgemerkte Aktionen), Antworten weiterer Ansichten ----------
 
@@ -263,12 +408,13 @@ async function sendeAusgang() {
           const form = new FormData();
           form.set('client_id', p.client_id);
           form.set('zeit', String(p.zeit));
+          if (p.kontext) form.set('kontext', p.kontext);
           if (p.audio) form.set('audio', p.audio, p.typ);
           else form.set('text', p.text);
           await api(p.typ === 'notiz' ? '/api/notizen' : T`/api/eintraege/${p.eintrag}/anweisung`, { method: 'POST', body: form });
           if (p.typ === 'anweisung') { ladeZaehler(); aktuell?.neuLaden?.(); }
         } else if (p.typ === 'notizantwort') {
-          await api(T`/api/eintraege/${p.eintrag}/antwort`, { method: 'POST', body: { antworten: p.antworten } });
+          await api(T`/api/eintraege/${p.eintrag}/antwort`, { method: 'POST', body: { antworten: p.antworten, zeit: p.zeit } });
         } else if (p.typ === 'schliessen') {
           await api(T`/api/planungen/${p.planung}/schliessen`, { method: 'POST' });
         } else if (p.typ === 'neustart') {
@@ -318,6 +464,7 @@ async function vergissGeraet() {
   try { (await dbZusage)?.close(); } catch { /* nie geöffnet */ }
   dbZusage = null;
   await new Promise((ok) => { const r = indexedDB.deleteDatabase('sprachnotizen'); r.onsuccess = r.onerror = r.onblocked = () => ok(); });
+  try { await caches.delete('bilder'); } catch { /* ohne Cache-API */ }
 }
 
 // ---------- Router ----------
@@ -386,6 +533,8 @@ function geheZu(pfad, ersetzen = false) {
 let verlaufStand = null;
 // Liste, aus der die gerade offene Notiz oder Planung aufgerufen wurde (Pfad), sonst null.
 let herkunft = null;
+// aufnahmeKontext: gerade offene Gruppe bzw. Liste als Text („Gruppe X · Liste L8 Y“); geht mit einer neuen Notiz an die KI.
+let aufnahmeKontext = null;
 // Suche, aus der die offene Notiz oder Planung kommt (Suchtext), sonst null; suchStand = geladene Treffer und Scrollstand.
 let sucheHerkunft = null, suchStand = null;
 const DETAIL = ['eintrag', 'planung', 'tags', 'antwort', 'umhaengen', 'einsortieren'];
@@ -404,6 +553,7 @@ async function zeige() {
     const m = pfad.match(muster);
     if (!m) continue;
     aktuell = { name, arg: m[1] };
+    aufnahmeKontext = null;
     if (name === 'verlauf' || name === 'suche') aktuell.zurueck = DETAIL.includes(vorher);
     // Aus der Suche geöffnet: Brotkrumen zurück zur Suche, Suchwörter auf der Detailseite markiert.
     if (name === 'eintrag' || name === 'planung') { if (vorher === 'suche') sucheHerkunft = suchStand?.q || null; else if (!DETAIL.includes(vorher)) sucheHerkunft = null; } else if (!DETAIL.includes(name)) sucheHerkunft = null;
@@ -1488,7 +1638,7 @@ const notizHtml = (text) => (text ? T`<div class="notiztext">${esc(text)}</div>`
 // Stand einer Planung in fester Reihenfolge: Eckdaten, Notiz, Details (Hintergrund, Tipps, Fragen), Quellen eingeklappt.
 function planHtml(plan, fragenKnopf = '') {
   const liste = (titel, punkte) => (punkte?.length ? T`<h3>${titel}</h3><ul>${punkte.map((p) => T`<li>${md(p).replace(/^<p>|<\/p>$/g, '')}</li>`).join('')}</ul>` : '');
-  const planung = `${plan.ergebnisse ? T`<h3>Hintergrund</h3><div class="md">${md(plan.ergebnisse)}</div>` : ''}
+  const planung = `${plan.ergebnisse || plan.medien?.length ? T`<h3>Hintergrund</h3><div class="md">${md(plan.ergebnisse, plan.medien || [])}</div>` : ''}
     ${liste(tx('Tipps'), plan.tipps)}
     ${liste(tx('Nächste Schritte'), plan.naechste_schritte)}
     ${plan.offene_fragen?.length ? T`<h3>Offene Fragen</h3><ul>${plan.offene_fragen.map((f) => T`<li>${esc(frageText(f))}</li>`).join('')}</ul>${fragenKnopf}` : ''}
@@ -1507,7 +1657,7 @@ function analyseHtml(e, aufnahme = '') {
     html += T`<div class="hinweis warn"><strong>Die KI hat ${fragenText(e.fragen)} zu dieser Notiz:</strong><ul>${an.rueckfragen.map((f) => T`<li>${esc(f.frage)}</li>`).join('')}</ul>
       <div class="leiste"><button class="btn haupt" data-fragen="${e.id}" data-ftyp="eintrag">${tx('{0} beantworten', fragenText(e.fragen))}</button></div></div>`;
   }
-  if (an?.antworten?.length) html += T`<h2>Deine Antworten</h2><dl>${an.antworten.map((x) => T`<dt>${esc(x.frage)}</dt><dd>${esc(x.antwort)}</dd>`).join('')}</dl>`;
+  if (an?.antworten?.length) html += T`<h2>Deine Antworten</h2><dl>${an.antworten.map((x) => T`<dt>${esc(x.frage)}</dt><dd><span class="leise">${x.zeit ? zeit(x.zeit) : tx('Zeit unbekannt')}</span> ${esc(x.antwort)}</dd>`).join('')}</dl>`;
   // Eckdaten zuerst (bei mehreren Punkten je Punkt mit Namen), darunter getrennt der Listenbezug mit Erledigt-Haken.
   const lp = e.liste?.punkte || [];
   const mehrere = lp.length > 1;
@@ -1521,7 +1671,7 @@ function analyseHtml(e, aufnahme = '') {
   if (e.bezug) html += T`<p class="leise bezug">Fortsetzung von <a href="/eintrag/${e.bezug.id}">#${e.bezug.nr} ${esc(e.bezug.titel || '')}</a></p>`;
   if (!an) return html + aufnahme;
   // Details: Zusatzwissen (z. B. Inhalt eines Films), Hinweise, Links. Die Aufnahme steht als eigene Karte am Ende.
-  const mehr = `${an.beschreibung ? T`<div class="beschreibung">${esc(an.beschreibung)}</div>` : ''}${an.hinweise?.length ? T`<ul>${an.hinweise.map((h) => T`<li>${md(h).replace(/^<p>|<\/p>$/g, '')}</li>`).join('')}</ul>` : ''}${an.quellen?.length ? T`<h3>Links</h3>${linksHtml(an.quellen)}` : ''}`;
+  const mehr = `${an.beschreibung || an.medien?.length ? T`<div class="beschreibung md">${md(an.beschreibung, an.medien || [])}</div>` : ''}${an.hinweise?.length ? T`<ul>${an.hinweise.map((h) => T`<li>${md(h).replace(/^<p>|<\/p>$/g, '')}</li>`).join('')}</ul>` : ''}${an.quellen?.length ? T`<h3>Links</h3>${linksHtml(an.quellen)}` : ''}`;
   return html + block(tx('Details'), mehr, 'zusatz') + aufnahme;
 }
 
@@ -1600,8 +1750,8 @@ function eintragHtml(e, offline) {
   }
 
   // Anweisungen an die KI: ganz unten, eingeklappt.
-  const anw = e.analyse?.anweisungen || [];
-  if (anw.length) html += T`<details class="einklapp anweisungen"><summary>Deine Anweisungen an die KI (${anw.length})</summary><ul>${anw.map((x) => T`<li>${esc(x)}</li>`).join('')}</ul></details>`;
+  const anw = e.analyse?.anweisungen || [], anwZeit = e.analyse?.anweisungen_zeit || [];
+  if (anw.length) html += T`<details class="einklapp anweisungen"><summary>Deine Anweisungen an die KI (${anw.length})</summary><ul>${anw.map((x, k) => T`<li><span class="leise">${anwZeit[k] ? zeit(anwZeit[k]) : tx('Zeit unbekannt')}</span> ${esc(x)}</li>`).join('')}</ul></details>`;
 
   const details = [];
   if (e.zuordnung) details.push([tx('Zuordnung'), ZUORDNUNG[e.zuordnung] || e.zuordnung]);
@@ -2010,7 +2160,7 @@ const mmss = (sek) => { const s = Math.max(0, Math.round(sek)); return `${Math.f
 // oeffneEingabe: ein Fenster für alle Eingaben (neue Notiz, KI-Anweisung, Antwort auf eine Planung): oben Text, darunter
 // der Aufnahmeknopf (bis maxSek, tippen = Start, nochmal = Senden). Mit Text im Feld ist die Aufnahme gesperrt –
 // entweder tippen oder sprechen. senden({text} | {audio}) legt den Posten in den Ausgang und liefert true = gesendet.
-function oeffneEingabe({ titel, hinweis = '', platzhalter = '', maxText = 4000, maxSek = NOTIZ_MAX_SEK, entwurf = '', senden }) {
+function oeffneEingabe({ titel, hinweis = '', kontext = '', platzhalter = '', maxText = 4000, maxSek = NOTIZ_MAX_SEK, entwurf = '', senden }) {
   if (document.querySelector('dialog.drawer')) return;
   const d = document.createElement('dialog');
   d.className = 'drawer aufnahmedrawer';
@@ -2018,6 +2168,7 @@ function oeffneEingabe({ titel, hinweis = '', platzhalter = '', maxText = 4000, 
   const kann = !!(navigator.mediaDevices?.getUserMedia && window.MediaRecorder);
   d.innerHTML = T`<div class="griff" aria-hidden="true"></div><div class="zeile"><h2>${esc(titel)}</h2><button class="btn klein rund" data-d="zu" aria-label="Schließen">×</button></div>
     ${hinweis ? T`<p class="leise">${esc(hinweis)}</p>` : ''}
+    ${kontext ? T`<div class="hinweis kontextzeile" data-kontext><div><div class="leise klein">Aufgenommen in</div><strong>${esc(kontext)}</strong></div><button type="button" class="btn klein rund haupt" data-d="kontext-weg" aria-label="Kontext entfernen">×</button></div>` : ''}
     <textarea class="eingabetext" rows="2" maxlength="${maxText}" placeholder="${esc(platzhalter)}" aria-label="Text"></textarea>
     <div class="eingabeleiste" hidden><button type="button" class="btn haupt" data-d="text">Senden</button></div>
     ${kann ? T`<button type="button" class="aufnahmeknopf" data-d="knopf" aria-label="Aufnahme starten">
@@ -2047,6 +2198,7 @@ function oeffneEingabe({ titel, hinweis = '', platzhalter = '', maxText = 4000, 
   const abschicken = async (posten) => {
     fertigGesendet = true;
     let gesendet;
+    if (kontext) posten.kontext = kontext;
     try { gesendet = await senden(posten); } catch (f) { fertigGesendet = false; return melde(f.message); }
     try { if (entwurf) localStorage.removeItem(entwurf); } catch { /* nur Komfort */ }
     d.close();
@@ -2069,6 +2221,7 @@ function oeffneEingabe({ titel, hinweis = '', platzhalter = '', maxText = 4000, 
     const b = ev.target.closest('[data-d]');
     if (!b) return;
     if (b.dataset.d === 'zu') return d.close();
+    if (b.dataset.d === 'kontext-weg') { kontext = ''; d.querySelector('[data-kontext]')?.remove(); return; }
     if (b.dataset.d === 'text') {
       const text = feld.value.trim();
       if (!text || fertigGesendet) return;
@@ -2098,7 +2251,7 @@ function oeffneEingabe({ titel, hinweis = '', platzhalter = '', maxText = 4000, 
 
 // Die drei Eingaben über dasselbe Fenster.
 function eingabeNotiz() {
-  oeffneEingabe({ titel: tx('Neue Notiz'), platzhalter: tx('Notiz tippen …'), entwurf: 'entwurf:notiz',
+  oeffneEingabe({ titel: tx('Neue Notiz'), kontext: aufnahmeKontext || '', platzhalter: tx('Notiz tippen …'), entwurf: 'entwurf:notiz',
     senden: (x) => merkeVor({ typ: 'notiz', ...x }) });
 }
 function eingabeAnweisung(eintrag) {
@@ -2206,6 +2359,7 @@ async function oeffneFragen(planung, typ = 'planung') {
 const LISTE_PUNKTE_SCHRITT = 10;
 
 async function zeigeListen(filter) {
+  if (filter && filter !== '-') aufnahmeKontext = `Gruppe ${filter}`;
   seite.innerHTML = T('<p class="leer">Lädt …</p>');
   // alle: Punkte sämtlicher Listen, erst geholt, wenn „Vergangene“ aufgeklappt wird (die Übersicht lädt nur aktive Punkte).
   let d = null, vergangeneZeigen = false, alle = null;
@@ -2393,7 +2547,11 @@ async function zeigeListe(id) {
   };
   const laden = async (vorab) => {
     const hier = () => aktuell?.name === 'liste' && aktuell.arg === id;
-    try { l = await apiAbgelegt(T`/api/listen/${id}`, vorab); male(); } catch (f) {
+    try {
+      l = await apiAbgelegt(T`/api/listen/${id}`, vorab);
+      if (aktuell?.name === 'liste' && aktuell.arg === id) aufnahmeKontext = `${l.projekt && l.projekt !== '-' ? `Gruppe ${l.projekt} · ` : ''}Liste ${l.nr ? `L${l.nr} ` : ''}${l.name}`;
+      male();
+    } catch (f) {
       if (vorab) return;
       if (f instanceof NetzFehler) { if (!l && hier()) seite.innerHTML = T('<p class="leer">Offline – diese Liste ist noch nicht gespeichert.</p>'); }
       else if (f instanceof ApiFehler && f.status === 404) { if (hier()) seite.innerHTML = T('<p class="leer">Liste nicht gefunden.</p><p class="mitte"><a class="btn" href="/listen">Alle Listen</a></p>'); }
@@ -2679,6 +2837,8 @@ async function zeigeStatus() {
         <div class="leise">verbunden ${zeit(x.angelegt)}${x.zuletzt ? T` · zuletzt genutzt ${zeit(x.zuletzt)}` : ''}</div></div>`).join('') : T('<p class="leise">Keine. Claude, ChatGPT & Co. verbinden sich über die Adresse <code>/mcp</code> dieses Dienstes und fragen hier nach Freigabe.</p>')}
       <h2>${esc(tx('Kalender-Abo'))}</h2>
       <a class="karte" href="/status/kalender"><strong>${esc(tx('Termine in Google, Apple oder Outlook abonnieren'))}</strong><br><span class="leise">${esc(tx('Link und Anleitung'))}</span></a>
+      <h2>Trailer</h2>
+      <div class="karte"><div class="zeile"><span>${esc(tx('Trailer für ältere Film- und Serien-Notizen suchen'))}</span><button class="btn klein" data-a="trailer">${esc(tx('5 nachtragen'))}</button></div></div>
       <h2>Zugang und Sicherheit</h2>
       <a class="karte" href="/status/zugang"><strong>API-Token und Wiederherstellungscode</strong><br><span class="leise">Maschinenzugang für Skripte, Code für deine verschlüsselten Daten</span></a>
       <div class="leiste"><button class="btn gefahr" data-a="abmelden">Abmelden</button></div>
@@ -2719,6 +2879,13 @@ async function zeigeStatus() {
         return laden();
       }
       switch (b.dataset.a) {
+        case 'trailer': {
+          b.disabled = true;
+          const d = await api('/api/medien/trailer-nachtragen?max=5', { method: 'POST' });
+          melde(d.gestartet ? tx('{0} Notizen bekommen Trailer, {1} noch ohne', d.gestartet, d.offen) : tx('Keine Film- oder Serien-Notiz ohne Trailer'));
+          b.disabled = false;
+          return;
+        }
         case 'fehler-weg': {
           if (!confirm(tx('Alle dauerhaft fehlgeschlagenen und leeren Einträge in den Papierkorb legen?'))) return;
           b.disabled = true;
@@ -4142,7 +4309,7 @@ async function zeigeEinrichten() {
 // ---------- Menü (Hamburger links): drei Hauptseiten, darunter ihre Unterseiten ----------
 
 // Seite → Bereich im Menü.
-const BEREICH = { zugang: 'status', zugangCode: 'status', nutzer: 'status', nutzerNeu: 'status', nutzerBearbeiten: 'status', backupHochladen: 'status', kalender: 'status', ring: 'status', ringTauschen: 'status', ringBearbeiten: 'status', joplin: 'status', einstellungBearbeiten: 'status', darstellung: 'status', geraetNeu: 'status', tagsVerwalten: 'status', kosten: 'status', papierkorb: 'status', update: 'status', backups: 'status', einstellungen: 'status', einstellungenBearbeiten: 'status', pebble: 'status', gedaechtnis: 'status', gedaechtnisBearbeiten: 'status', liste: 'listen', verschieben: 'listen', listeBearbeiten: 'listen', gruppeBearbeiten: 'listen', eintrag: 'verlauf', planung: 'verlauf', tags: 'verlauf', antwort: 'verlauf', umhaengen: 'verlauf', wortlaut: 'verlauf', einsortieren: 'verlauf', suche: 'verlauf' };
+const BEREICH = { zugang: 'status', zugangCode: 'status', nutzer: 'system', nutzerNeu: 'system', nutzerBearbeiten: 'system', backupHochladen: 'system', kalender: 'status', ring: 'status', ringTauschen: 'status', ringBearbeiten: 'status', joplin: 'status', einstellungBearbeiten: 'status', darstellung: 'status', geraetNeu: 'status', tagsVerwalten: 'status', kosten: 'status', papierkorb: 'status', update: 'system', backups: 'system', einstellungen: 'status', einstellungenBearbeiten: 'status', pebble: 'status', gedaechtnis: 'status', gedaechtnisBearbeiten: 'status', liste: 'listen', verschieben: 'listen', listeBearbeiten: 'listen', gruppeBearbeiten: 'listen', eintrag: 'verlauf', planung: 'verlauf', tags: 'verlauf', antwort: 'verlauf', umhaengen: 'verlauf', wortlaut: 'verlauf', einsortieren: 'verlauf', suche: 'verlauf' };
 const lokal = (k, v = '') => { try { return localStorage.getItem(k) ?? v; } catch { return v; } };
 function maleMenue() {
   const name = aktuell?.name || '';
@@ -4166,14 +4333,17 @@ function maleMenue() {
     { id: 'listen', name: tx('Listen'), href: '/listen', unter: gruppen.map(([g, offen, neu]) => ({ name: gruppenTitel(g), href: gruppenPfad(g), an: !!gruppe && gruppe.toLowerCase() === g.toLowerCase(), extra: neuZahl(neu) + zahl(offen, true) })) },
     { id: 'status', name: tx('Einstellungen'), href: '/status', unter: [
       { name: tx('Status'), href: '/status', an: ['status', 'pebble', 'joplin', 'kalender', 'einstellungen', 'einstellungBearbeiten', 'geraetNeu', 'darstellung', 'zugang', 'zugangCode'].includes(name), extra: audioFehler ? T` <span class="zaehler fehler" title="${tx('{0} Aufnahmen ohne Eintrag', audioFehler)}">${audioFehler}</span>` : '' },
-      ...(istAdmin() ? [{ name: tx('Updates'), href: '/status/update', an: name === 'update', extra: neueVersion ? ` ${updateSymbol}` : '' },
-        { name: tx('Backups'), href: '/status/backups', an: name === 'backups' },
-        { name: tx('Nutzer'), href: '/admin/nutzer', an: ['nutzer', 'nutzerNeu', 'nutzerBearbeiten'].includes(name) }] : []),
       { name: tx('Gedächtnis'), href: '/status/gedaechtnis', an: name === 'gedaechtnis' || name === 'gedaechtnisBearbeiten', extra: zahl(offeneVorschlaege) },
       { name: tx('Tags'), href: '/status/tags', an: name === 'tagsVerwalten', extra: zahl(tagZahl, true) },
       { name: tx('KI-Kosten'), href: '/status/kosten', an: name === 'kosten' },
       { name: tx('Papierkorb'), href: '/status/papierkorb', an: name === 'papierkorb', extra: zahl(papierkorbZahl, true) },
     ] },
+    // System: was für alle Nutzer gilt, nur für Admins (eigene Gruppe unter den persönlichen Einstellungen).
+    ...(istAdmin() ? [{ id: 'system', name: tx('System'), href: '/status/update', unter: [
+      { name: tx('Updates'), href: '/status/update', an: name === 'update', extra: neueVersion ? ` ${updateSymbol}` : '' },
+      { name: tx('Backups'), href: '/status/backups', an: name === 'backups' || name === 'backupHochladen' },
+      { name: tx('Nutzer'), href: '/admin/nutzer', an: ['nutzer', 'nutzerNeu', 'nutzerBearbeiten'].includes(name) },
+    ] }] : []),
   ];
   // Verlauf-Filter ohne Einträge (Zähler 0) sind nicht anklickbar: der Verlauf fiele sonst auf „Alles“ zurück.
   const link = (k, x) => (x.leer && !x.an ? T`<span class="${k} gesperrt" aria-disabled="true"><span>${esc(x.name)}</span>${x.extra || ''}</span>` : linkAktiv(k, x));

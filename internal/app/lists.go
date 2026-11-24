@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -34,16 +35,22 @@ type Dictation struct {
 	Antworten []Answer   `json:"antworten,omitempty"`
 	// Anweisungen sind freie Vorgaben des Nutzers zur Auswertung („bitte in zwei Punkte trennen“); sie bleiben an der Notiz.
 	Anweisungen []string `json:"anweisungen,omitempty"`
+	// AnweisungenZeit: Zeitpunkt (ms) je Anweisung, gleiche Reihenfolge; Bezug für relative Zeitangaben darin. Fehlt bei Altbestand.
+	AnweisungenZeit []int64 `json:"anweisungen_zeit,omitempty"`
 	// Termin nur bei art termin.
 	Termin *Appointment `json:"termin_info,omitempty"`
 	// Bezug: Nummer der früheren Notiz, die diese fortsetzt (dann dieselbe Liste); 0 = eigenes Thema.
 	Bezug int64 `json:"bezug,omitempty"`
+	// Medien: Diagramme, Bilder, Trailer (Film/Serie); Marker [[medium:N]] in Beschreibung. Fehlt bei älteren Auswertungen.
+	Medien []Medium `json:"medien,omitempty"`
 }
 
 // Answer ist die Antwort des Nutzers auf eine Rückfrage zu einer Notiz.
 type Answer struct {
 	Frage   string `json:"frage"`
 	Antwort string `json:"antwort"`
+	// Zeit: wann der Nutzer geantwortet hat (ms); Bezug für relative Zeitangaben. 0 = unbekannt (Altbestand).
+	Zeit int64 `json:"zeit,omitempty"`
 }
 
 type DictItem struct {
@@ -64,7 +71,7 @@ func parseDictation(s string) *Dictation {
 
 var dictationSchema = map[string]any{
 	"type": "object", "additionalProperties": false,
-	"required": []string{"titel", "art", "termin", "notiz", "beschreibung", "eckdaten", "hinweise", "gruppe", "liste", "punkte", "quellen", "rueckfragen", "tags", "neue_tags", "merken", "bezug"},
+	"required": []string{"titel", "art", "termin", "notiz", "beschreibung", "eckdaten", "hinweise", "gruppe", "liste", "punkte", "quellen", "rueckfragen", "medien", "tags", "neue_tags", "merken", "bezug"},
 	"properties": map[string]any{
 		"titel":        map[string]any{"type": "string"},
 		"bezug":        map[string]any{"type": "integer"},
@@ -80,6 +87,7 @@ var dictationSchema = map[string]any{
 			"type": "object", "additionalProperties": false, "required": []string{"text", "eckdaten"},
 			"properties": map[string]any{"text": map[string]any{"type": "string"}, "eckdaten": factsSchema}}},
 		"quellen":   sourcesSchema,
+		"medien":    mediaSchema,
 		"tags":      map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
 		"neue_tags": map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
 		"merken":    memorySchema,
@@ -104,6 +112,7 @@ Felder:
 - eckdaten: nur bei notiz: 0–5 Paare name/wert mit den wichtigsten Fakten zum Thema (Termin, Ort, Preis, Person …). name höchstens 3 Wörter, wert höchstens 8 Wörter. Bei listenpunkt leer.
 - hinweise: höchstens 4 Stichpunkte, die weiterhelfen: Ähnliches, Tipp, nächster Schritt, wichtige Einschränkung. Nichts aus den Eckdaten oder der notiz wiederholen. Keine URLs, Links gehören in quellen. Leer, wenn nichts Nützliches zu sagen ist.
 - quellen: die tatsächlich verwendeten Webseiten mit Titel und vollständiger URL. Nichts erfinden.
+- ` + mediaRules + ` Marker nur in beschreibung. Bei persönlichen Gedanken, Aufgaben, Einkäufen und Terminen keine Medien außer Trailern.
 - rueckfragen: höchstens 2 Fragen an den Nutzer, nur wenn du die Notiz ohne die Antwort nicht richtig verstehen oder einsortieren kannst (unbekannter Name, unklare Abkürzung, mehrdeutiges Ziel, fehlender Zusammenhang) und das Gedächtnis es nicht klärt. Je Frage: frage = kurz und einzeln beantwortbar; antworten = genau 3 naheliegende, unterschiedliche Vorschläge, je höchstens 6 Wörter. Werte die Notiz trotzdem so gut wie möglich aus. Stehen in der Eingabe schon Antworten des Nutzers, stellst du keine Frage mehr. Meist leer.
 - ` + tagRules + `
 - ` + memoryRules + ` Besonders, was Antworten des Nutzers auf Rückfragen über diese Notiz hinaus klären.
@@ -139,10 +148,12 @@ func (a *App) analyseDictation(ctx context.Context, j *store.Job) error {
 	// Erneute Auswertung nach beantworteten Rückfragen: die Antworten gehen mit und bleiben an der Notiz.
 	var answered []Answer
 	var instructions []string
+	var instructionTimes []int64
 	prevList, prevGroup := "", ""
+	var prevMedia []Medium
 	if prev := parseDictation(j.Result); prev != nil {
-		answered, instructions = prev.Antworten, prev.Anweisungen
-		prevList, prevGroup = prev.Liste, prev.Gruppe
+		answered, instructions, instructionTimes = prev.Antworten, prev.Anweisungen, prev.AnweisungenZeit
+		prevList, prevGroup, prevMedia = prev.Liste, prev.Gruppe, prev.Medien
 	}
 	oldNote := ""
 	if j.JoplinPushedAt != 0 {
@@ -156,17 +167,24 @@ func (a *App) analyseDictation(ctx context.Context, j *store.Job) error {
 	if len(answered) > 0 {
 		input += "\n\nAntworten des Nutzers auf Rückfragen zu dieser Notiz:"
 		for _, an := range answered {
-			input += fmt.Sprintf("\nFrage: %s\nAntwort: %s", an.Frage, an.Antwort)
+			input += fmt.Sprintf("\nFrage: %s\nAntwort [%s]: %s", an.Frage, givenHint(an.Zeit), an.Antwort)
 		}
 	}
 	if len(instructions) > 0 {
 		input += "\n\nAnweisungen des Nutzers zu dieser Notiz (haben Vorrang, die letzte zuerst beachten):"
-		for _, in := range instructions {
-			input += "\n- " + in
+		for i, in := range instructions {
+			var at int64
+			if i < len(instructionTimes) {
+				at = instructionTimes[i]
+			}
+			input += fmt.Sprintf("\n- [%s] %s", givenHint(at), in)
 		}
 		if prevList != "" {
 			input += fmt.Sprintf("\nBisher einsortiert in Liste „%s“ (Gruppe „%s“).", prevList, prevGroup)
 		}
+	}
+	if k, _ := a.DB.Get(contextKey(j.ID)); k != "" {
+		input += fmt.Sprintf("\n\nAufgenommen in der Web-App, während offen war: %s. Gehört die Notiz erkennbar dazu, dorthin einsortieren.", k)
 	}
 	req := openai.Request{
 		Model: a.Cfg.DictationModel, Instructions: dictationInstructions, MaxOutputTokens: 3000,
@@ -201,7 +219,8 @@ func (a *App) analyseDictation(ctx context.Context, j *store.Job) error {
 	}
 	d := full.Dictation
 	d.Eckdaten = cleanFacts(d.Eckdaten, 5)
-	d.Notiz, d.Beschreibung = clipText(d.Notiz, 600), clipText(d.Beschreibung, 800)
+	d.Notiz, d.Beschreibung = clipText(d.Notiz, 600), clipText(d.Beschreibung, 1000)
+	d.Medien = normalizeMedia(d.Medien, prevMedia)
 	hints := []string{}
 	for _, h := range d.Hinweise {
 		if h = store.Preview(h, 200); h != "" && len(hints) < 4 {
@@ -241,7 +260,7 @@ func (a *App) analyseDictation(ctx context.Context, j *store.Job) error {
 			questions = append(questions, q)
 		}
 	}
-	d.Fragen, d.Antworten, d.Anweisungen = questions, answered, instructions
+	d.Fragen, d.Antworten, d.Anweisungen, d.AnweisungenZeit = questions, answered, instructions, instructionTimes
 
 	// Termin: eigener Zeitpunkt statt Liste. Ohne brauchbaren Zeitpunkt bleibt es eine Notiz mit sichtbarem Hinweis.
 	d.Termin = nil
@@ -383,6 +402,9 @@ func (a *App) analyseDictation(ctx context.Context, j *store.Job) error {
 	return nil
 }
 
+// contextKey: KV-Schlüssel des Aufnahme-Kontexts einer Web-Notiz (offene Gruppe/Liste beim Aufnehmen).
+func contextKey(jobID string) string { return "kontext:" + jobID }
+
 // handleJobInstruction nimmt eine freie Anweisung des Nutzers zu einer fertigen Notiz an („bitte in zwei Punkte trennen“)
 // und lässt die Notiz damit neu auswerten. Alle Punkte der Notiz fallen weg; die neue Auswertung legt sie wieder an.
 func (a *App) handleJobInstruction(w http.ResponseWriter, r *http.Request) {
@@ -439,7 +461,7 @@ func (a *App) handleJobInstruction(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusConflict, "zu_viele", "Höchstens 10 Anweisungen je Notiz")
 		return
 	}
-	if err := a.reevaluate(j, d, text); err != nil {
+	if err := a.reevaluate(j, d, text, clientTime(r.FormValue("zeit"))); err != nil {
 		writeErr(w, 500, "speicher", "Datenbankfehler")
 		return
 	}
@@ -452,8 +474,13 @@ func (a *App) handleJobInstruction(w http.ResponseWriter, r *http.Request) {
 
 // reevaluate hängt eine Anweisung an die Notiz und lässt sie neu auswerten. Alle Punkte der Notiz fallen weg;
 // die neue Auswertung legt sie wieder an.
-func (a *App) reevaluate(j *store.Job, d *Dictation, text string) error {
+func (a *App) reevaluate(j *store.Job, d *Dictation, text string, at int64) error {
+	// Altbestand ohne Zeiten: mit 0 (unbekannt) auffüllen, damit Zeit i zu Anweisung i gehört.
+	for len(d.AnweisungenZeit) < len(d.Anweisungen) {
+		d.AnweisungenZeit = append(d.AnweisungenZeit, 0)
+	}
 	d.Anweisungen = append(d.Anweisungen, text)
+	d.AnweisungenZeit = append(d.AnweisungenZeit, at)
 	items, err := a.DB.ItemsByJob(j.ID)
 	if err != nil {
 		return err
@@ -798,6 +825,7 @@ func (a *App) handleDeleteJob(w http.ResponseWriter, r *http.Request) {
 func (a *App) handleJobAnswer(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Antworten []Answer `json:"antworten"`
+		Zeit      int64    `json:"zeit"` // Zeitpunkt der Antwort beim Nutzer (Ausgang), ms
 	}
 	j, err := a.DB.Job(r.PathValue("id"))
 	if err != nil {
@@ -814,8 +842,9 @@ func (a *App) handleJobAnswer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var lines []string
+	at := clientTime(strconv.FormatInt(in.Zeit, 10))
 	for _, an := range in.Antworten {
-		an.Frage, an.Antwort = store.Preview(an.Frage, 200), store.Preview(an.Antwort, 300)
+		an.Frage, an.Antwort, an.Zeit = store.Preview(an.Frage, 200), store.Preview(an.Antwort, 300), at
 		known := false
 		for _, q := range d.Fragen {
 			known = known || q.Frage == an.Frage

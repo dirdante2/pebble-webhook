@@ -62,7 +62,7 @@ pebble-webhook is free and open source. If it is useful to you, a small tip on [
 
 ```bash
 go test ./...
-printf 'LISTEN=127.0.0.1:8080\nDATA_DIR=./lokal/data\nAUDIO_DIR=./lokal/audio\n' > lokal/env
+printf 'LISTEN=127.0.0.1:8080\nDATA_DIR=./lokal/data\nMEDIA_DIR=./lokal/medien\n' > lokal/env
 mkdir -p lokal/data lokal/audio
 PEBBLE_ENV_FILE=./lokal/env go run ./cmd/pebble-webhook serve
 ```

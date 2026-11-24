@@ -2186,6 +2186,31 @@ func (s *Store) AudioJobs() ([]*Job, error) {
 	return out, rows.Err()
 }
 
+// MediaTexts: Auswertungen und Planungsstände (auch im Papierkorb und ältere Runden), die Bilder nennen – zum
+// Aufräumen von Bildern, auf die nichts mehr zeigt.
+func (s *Store) MediaTexts() ([]string, error) {
+	rows, err := s.DB.Query(`SELECT result FROM jobs WHERE result LIKE '%"bild":"%' UNION ALL SELECT plan FROM plannings WHERE plan LIKE '%"bild":"%'`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var t string
+		if err := rows.Scan(&t); err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
+// SetJobResult ändert nur die Auswertung eines Auftrags (z. B. nachgetragene Medien).
+func (s *Store) SetJobResult(id, result string) error {
+	_, err := s.DB.Exec(`UPDATE jobs SET result = ?, updated_at = ? WHERE id = ?`, result, Now(), id)
+	return err
+}
+
 // SetAudioPath ändert nur den Pfad der Aufnahme.
 func (s *Store) SetAudioPath(id, path string) error {
 	_, err := s.DB.Exec(`UPDATE jobs SET audio_path = ? WHERE id = ?`, path, id)

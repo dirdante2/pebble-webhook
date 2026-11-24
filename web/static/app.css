@@ -2,7 +2,7 @@
   --bg: #f4f5f7; --flaeche: #fff; --text: #171a20; --leise: #5d6673; --linie: #dde1e7;
   --akzent: #2f6fde; --akzent-text: #fff; --gut: #1f8a4c; --warn: #b26a00; --schlecht: #c0392b;
   --diktat: #2f6fde; --planung: #7a4bd1; --radius: 12px;
-  --s1: #2a78d6; --s2: #eb6834;
+  --s1: #2a78d6; --s2: #eb6834; --s3: #1f9e74; --s4: #8e55c9;
   color-scheme: light dark;
 }
 /* Nacht: nach System (ohne data-modus) oder fest gewählt (data-modus="dunkel"); Akzent setzt theme.js je Palette. */
@@ -10,13 +10,13 @@
   :root:not([data-modus="hell"]) {
     --bg: #14181f; --flaeche: #1d222b; --text: #e8ebf0; --leise: #9aa4b2; --linie: #2f3643;
     --akzent: #6b9cf5; --akzent-text: #0e1116; --gut: #4cc17f; --warn: #e0a341; --schlecht: #ef6b5e;
-    --diktat: #6b9cf5; --planung: #a98bf0; --s1: #3987e5; --s2: #d95926;
+    --diktat: #6b9cf5; --planung: #a98bf0; --s1: #3987e5; --s2: #d95926; --s3: #3fbf8f; --s4: #a77ee0;
   }
 }
 :root[data-modus="dunkel"] {
     --bg: #14181f; --flaeche: #1d222b; --text: #e8ebf0; --leise: #9aa4b2; --linie: #2f3643;
     --akzent: #6b9cf5; --akzent-text: #0e1116; --gut: #4cc17f; --warn: #e0a341; --schlecht: #ef6b5e;
-    --diktat: #6b9cf5; --planung: #a98bf0; --s1: #3987e5; --s2: #d95926;
+    --diktat: #6b9cf5; --planung: #a98bf0; --s1: #3987e5; --s2: #d95926; --s3: #3fbf8f; --s4: #a77ee0;
 }
 * { box-sizing: border-box; }
 html { -webkit-text-size-adjust: 100%; scrollbar-gutter: stable; }
@@ -716,6 +716,9 @@ code.kopierbar { display: block; margin: .15rem 0 .4rem; overflow-wrap: anywhere
 .neuknopf svg { width: 1.45rem; height: 1.45rem; }
 .neuknopf:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
 .aufnahmedrawer .zeile h2 { margin: .3rem 0; }
+.kontextzeile { display: flex; align-items: center; justify-content: space-between; gap: .5rem; margin: .4rem 0 .6rem; }
+.kontextzeile strong { overflow-wrap: anywhere; }
+.kontextzeile .klein { font-size: .8rem; }
 .aufnahmeknopf { position: relative; display: grid; place-items: center; width: min(10.5rem, 50vw); aspect-ratio: 1; margin: 1rem auto .5rem; padding: 0;
   border: 0; border-radius: 50%; background: var(--akzent); color: var(--akzent-text); cursor: pointer; touch-action: manipulation; }
 .aufnahmeknopf > svg { position: absolute; inset: -.55rem; width: calc(100% + 1.1rem); height: calc(100% + 1.1rem); transform: rotate(-90deg); }
@@ -752,3 +755,41 @@ code.kopierbar { display: block; margin: .15rem 0 .4rem; overflow-wrap: anywhere
 .prozessliste li { display: flex; justify-content: space-between; gap: .75rem; padding: .1rem 0; }
 .prozessliste li > span:last-child { white-space: nowrap; font-variant-numeric: tabular-nums; }
 .prozessliste .pfad { overflow-wrap: anywhere; min-width: 0; }
+
+/* Medien in Notizen und Planungen: Bild, Trailer, Diagramm, Tabelle (nie breiter als die Seite) */
+.tabelle { max-width: 100%; overflow-x: auto; }
+.tabelle table { min-width: 100%; }
+figure.medium { margin: .8rem 0; max-width: 100%; }
+figure.medium img { display: block; max-width: 100%; height: auto; border-radius: 8px; background: var(--linie); }
+figure.medium a.bild { display: block; }
+figure.medium figcaption { font-size: .85rem; color: var(--leise); margin-top: .3rem; }
+figure.medium figcaption strong { color: var(--text); font-weight: 600; }
+figure.medium.fehlt, figure.medium.wartet { border-left: 3px solid var(--linie); padding-left: .6rem; }
+button.trailer { position: relative; display: block; width: 100%; aspect-ratio: 16 / 9; padding: 0; border: 0; border-radius: 8px; overflow: hidden; background: #000; cursor: pointer; }
+button.trailer img { width: 100%; height: 100%; object-fit: cover; border-radius: 0; }
+button.trailer .abspielen { position: absolute; left: 50%; top: 50%; width: 4rem; height: 2.8rem; margin: -1.4rem 0 0 -2rem; border-radius: .7rem; background: rgba(0, 0, 0, .72); }
+button.trailer .abspielen::after { content: ""; position: absolute; left: 1.65rem; top: .8rem; border-style: solid; border-width: .6rem 0 .6rem 1rem; border-color: transparent transparent transparent #fff; }
+button.trailer:hover .abspielen, button.trailer:focus-visible .abspielen { background: #c4302b; }
+iframe.trailer { display: block; width: 100%; aspect-ratio: 16 / 9; border: 0; border-radius: 8px; }
+.diagramm .s3, .legende .s3 { fill: var(--s3); background: var(--s3); }
+.diagramm .s4, .legende .s4 { fill: var(--s4); background: var(--s4); }
+.diagramm .linie { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.diagramm .l1 { stroke: var(--s1); } .diagramm .l2 { stroke: var(--s2); } .diagramm .l3 { stroke: var(--s3); } .diagramm .l4 { stroke: var(--s4); }
+.diagramm.kreis { max-width: 14rem; margin: .4rem auto; }
+.diagramm.kreis path, .diagramm.kreis circle { stroke: var(--flaeche); stroke-width: 1; }
+.k0 { fill: var(--s1); background: var(--s1); } .k1 { fill: var(--s2); background: var(--s2); }
+.k2 { fill: var(--s3); background: var(--s3); } .k3 { fill: var(--s4); background: var(--s4); }
+.k4 { fill: #c99a12; background: #c99a12; } .k5 { fill: #d6457a; background: #d6457a; }
+.k6 { fill: #2f9fb3; background: #2f9fb3; } .k7 { fill: #7f8a96; background: #7f8a96; }
+figure.medium .legende { margin-top: .3rem; padding: 0; list-style: none; }
+figure.medium details.werte { margin-top: .2rem; }
+.beschreibung.md { white-space: normal; }
+.diagramm.ablauf { max-width: 26rem; margin: .4rem auto; }
+.diagramm.ablauf .kasten { fill-opacity: .16; stroke-width: 1.5; }
+.diagramm.ablauf .kasten.k0 { stroke: var(--s1); } .diagramm.ablauf .kasten.k1 { stroke: var(--s2); } .diagramm.ablauf .kasten.k2 { stroke: var(--s3); } .diagramm.ablauf .kasten.k3 { stroke: var(--s4); }
+.diagramm.ablauf .kasten.k4 { stroke: #c99a12; } .diagramm.ablauf .kasten.k5 { stroke: #d6457a; } .diagramm.ablauf .kasten.k6 { stroke: #2f9fb3; } .diagramm.ablauf .kasten.k7 { stroke: #7f8a96; }
+.diagramm.ablauf .schritt { fill: var(--text); font-size: 12px; }
+.diagramm.ablauf .nummer { fill: var(--akzent); }
+.diagramm.ablauf .nummerzahl { fill: var(--akzent-text); font-size: 11px; font-weight: 700; }
+.diagramm.ablauf .pfeil { fill: none; stroke: var(--leise); stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+figure.medium .legende li { margin: 0; }

@@ -4,6 +4,17 @@ Summarised notes for **beta** and **stable** releases. Each section lists only w
 
 A tag `vX.Y.Z-stable` (stable; before 1.33.5 `vX.Y.Z`) or `vX.Y.Z-beta` (beta) needs a section `## [X.Y.Z]` or `## [X.Y.Z-beta]` here; the release workflow uses it as the release notes.
 
+## [4.0.0] - 2026-11-24
+
+### Media in notes and plannings
+- Charts, tables, images (AI-generated or from the web) and YouTube trailers right in the text.
+- Films and series always get a trailer (app language, else English).
+- Images encrypted per user, loaded on demand, offline for at most 7 days; part of backups with recordings.
+
+### Storage
+- New layout MEDIA_DIR/<id>/audio|bilder (moves automatically); backup format 3.
+- Own mounts recommended for databases, media and backups; owner and modes fixed before every start.
+
 ## [3.1.0] - 2026-11-24
 
 ### Backups

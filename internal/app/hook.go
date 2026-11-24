@@ -239,11 +239,11 @@ func audioExt(mimeType string) string {
 	return ".m4a"
 }
 
-// saveAudio schreibt die Aufnahme dauerhaft (fsync) unter AUDIO_DIR/<nutzer>/<diktat|planung>/JJJJ/MM/<id>.<ext>.enc,
+// saveAudio schreibt die Aufnahme dauerhaft (fsync) unter MEDIA_DIR/<nutzer>/audio/<diktat|planung>/JJJJ/MM/<id>.<ext>.enc,
 // verschlüsselt mit dem Schlüssel des Nutzers. Aufnahmen aus der Web-App (web) heißen <id>-web.<ext>.enc, damit ein
 // Reimport sie nicht dem Ring zuschreibt.
 func (a *App) saveAudio(id, mode string, data []byte, mimeType string, web bool) (string, error) {
-	free, err := freeBytes(a.Cfg.AudioDir)
+	free, err := freeBytes(a.Cfg.MediaDir)
 	if err != nil {
 		return "", err
 	}
@@ -288,10 +288,16 @@ func (a *App) saveAudio(id, mode string, data []byte, mimeType string, web bool)
 	return path, nil
 }
 
-// audioRoot: Ablage der Aufnahmen dieses Nutzers.
-func (a *App) audioRoot() string {
-	return filepath.Join(a.Cfg.AudioDir, strconv.FormatInt(a.UserID, 10))
+// mediaRoot: Ablage der Medien dieses Nutzers (MEDIA_DIR/<id>, darunter audio/ und bilder/).
+func (a *App) mediaRoot() string {
+	return filepath.Join(a.Cfg.MediaDir, strconv.FormatInt(a.UserID, 10))
 }
+
+// audioRoot: Ablage der Aufnahmen dieses Nutzers.
+func (a *App) audioRoot() string { return filepath.Join(a.mediaRoot(), "audio") }
+
+// imageRoot: Ablage der Bilder dieses Nutzers.
+func (a *App) imageRoot() string { return filepath.Join(a.mediaRoot(), "bilder") }
 
 // readAudio liest eine Aufnahme; verschlüsselte (.enc) werden mit dem Schlüssel des Nutzers geöffnet.
 // Aufnahmen bis 2.x liegen bis zum bestätigten Umzug unverschlüsselt am alten Ort.

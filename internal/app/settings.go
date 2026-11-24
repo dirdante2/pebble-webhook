@@ -148,7 +148,7 @@ func (a *System) handleSettingsSave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	merged := mergeSettings(old, in.Werte, scopeSystem)
-	boot := config.Bootstrap{Listen: a.Cfg.Listen, DataDir: a.Cfg.DataDir, AudioDir: a.Cfg.AudioDir, BackupDir: a.Cfg.BackupDir, KeyDir: a.Cfg.KeyDir}
+	boot := config.Bootstrap{Listen: a.Cfg.Listen, DataDir: a.Cfg.DataDir, MediaDir: a.Cfg.MediaDir, BackupDir: a.Cfg.BackupDir, KeyDir: a.Cfg.KeyDir}
 	if _, err := config.FromValues(boot, func(k string) string { return merged[k] }); err != nil {
 		writeErr(w, 400, "ungueltig", strings.TrimPrefix(err.Error(), "Konfiguration: "))
 		return
@@ -205,7 +205,7 @@ func (a *App) handlePersonalSettingsSave(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	merged := mergeSettings(old, in.Werte, scopePersonal)
-	boot := config.Bootstrap{Listen: a.Cfg.Listen, DataDir: a.Cfg.DataDir, AudioDir: a.Cfg.AudioDir, BackupDir: a.Cfg.BackupDir, KeyDir: a.Cfg.KeyDir}
+	boot := config.Bootstrap{Listen: a.Cfg.Listen, DataDir: a.Cfg.DataDir, MediaDir: a.Cfg.MediaDir, BackupDir: a.Cfg.BackupDir, KeyDir: a.Cfg.KeyDir}
 	if _, err := config.FromValues(boot, func(k string) string { return merged[k] }); err != nil {
 		writeErr(w, 400, "ungueltig", strings.TrimPrefix(err.Error(), "Konfiguration: "))
 		return
