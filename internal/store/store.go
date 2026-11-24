@@ -14,7 +14,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
 )
 
 const schema = `
@@ -141,7 +140,10 @@ const (
 
 var ErrNotFound = errors.New("nicht gefunden")
 
-type Store struct{ DB *sql.DB }
+type Store struct {
+	DB  *sql.DB
+	key []byte // Schlüssel der Datei (nil = Klartext); Snapshots werden gleich verschlüsselt
+}
 
 type Job struct {
 	ID               string
@@ -233,40 +235,112 @@ func Hash(token string) string {
 	return hex.EncodeToString(h[:])
 }
 
-func Open(path string) (*Store, error) {
+// OpenLegacy öffnet die Datenbank bis 2.x (pebble.db, Klartext) und bringt sie nur auf deren Endstand (Schema 1) –
+// für den Umzug auf system.db + daten.db je Nutzer.
+func OpenLegacy(path string) (*Store, error) {
 	db, err := openSQLite(path, nil, false)
 	if err != nil {
 		return nil, err
 	}
-	// Beschädigte Datenbank: nicht starten (der Installer wechselt nach einem Update dann zurück).
-	var check string
-	if err := db.QueryRow("PRAGMA quick_check").Scan(&check); err != nil || check != "ok" {
+	if err := quickCheck(db); err != nil {
 		db.Close()
-		if err == nil {
-			err = fmt.Errorf("%s", check)
-		}
-		return nil, fmt.Errorf("Datenbank beschädigt (quick_check): %w", err)
+		return nil, err
 	}
-	if err := migrate(db); err != nil {
+	if err := migrateTo(db, 0, 1); err != nil {
 		db.Close()
 		return nil, err
 	}
 	return &Store{DB: db}, nil
 }
 
-// SchemaVersion: Stand der Datenbank, den dieses Programm kennt (PRAGMA user_version). Jede Änderung an Tabellen
-// oder Daten ist ein weiterer Schritt in migrations; Schritte werden nie geändert oder entfernt, nur angehängt.
-var SchemaVersion = len(migrations)
-
-// migrations: Eintrag i hebt die Datenbank von Stand i auf i+1 und läuft samt neuem Stand in einer Transaktion
-// (scheitert er, bleibt die Datenbank auf Stand i). Eintrag 0 bleibt leer: Stand 1 ist migrateBase.
-var migrations = []func(*sql.Tx) error{
-	nil, // Stand 1: migrateBase
+// OpenUser öffnet die Datenbank eines Nutzers (key nil = Klartext, nur in Tests), bringt sie auf SchemaVersion und
+// prüft, dass alle Zeilen ihm gehören – eine vertauschte Datei startet nicht.
+func OpenUser(path string, key []byte, uid int64) (*Store, error) {
+	db, err := openSQLite(path, key, false)
+	if err != nil {
+		return nil, err
+	}
+	if err := quickCheck(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := migrateTo(db, uid, SchemaVersion); err != nil {
+		db.Close()
+		return nil, err
+	}
+	for _, t := range userTables {
+		var x int
+		err := db.QueryRow(`SELECT 1 FROM `+t+` WHERE user_id != ? LIMIT 1`, uid).Scan(&x)
+		if err == nil {
+			db.Close()
+			return nil, fmt.Errorf("Datenbank %s gehört nicht zu Nutzer %d (Tabelle %s)", path, uid, t)
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			db.Close()
+			return nil, fmt.Errorf("Tabelle %s: %w", t, err)
+		}
+	}
+	return &Store{DB: db, key: key}, nil
 }
 
-// migrate bringt die Datenbank Schritt für Schritt auf SchemaVersion – auch über übersprungene Versionen hinweg.
+// quickCheck: beschädigte (oder mit falschem Schlüssel geöffnete) Datenbank – nicht starten.
+func quickCheck(db *sql.DB) error {
+	var check string
+	if err := db.QueryRow("PRAGMA quick_check").Scan(&check); err != nil || check != "ok" {
+		if err == nil {
+			err = fmt.Errorf("%s", check)
+		}
+		return fmt.Errorf("Datenbank beschädigt oder Schlüssel falsch (quick_check): %w", err)
+	}
+	return nil
+}
+
+// SchemaVersion: Stand der Datenbank, den dieses Programm kennt (PRAGMA user_version) – in system.db und in jeder
+// daten.db derselbe. Jede Änderung an Tabellen oder Daten ist ein weiterer Schritt in migrations (Nutzerdaten)
+// bzw. sysMigrations (system.db); Schritte werden nie geändert oder entfernt, nur angehängt.
+var SchemaVersion = len(migrations)
+
+// migrations: Eintrag i hebt die Datenbank eines Nutzers von Stand i auf i+1 und läuft samt neuem Stand in einer
+// Transaktion (scheitert er, bleibt die Datenbank auf Stand i). Eintrag 0 bleibt leer: Stand 1 ist migrateBase.
+var migrations = []func(tx *sql.Tx, uid int64) error{
+	nil,         // Stand 1: migrateBase (Endstand bis 2.x)
+	splitByUser, // Stand 2 (3.0.0): Daten eines Nutzers – Anmeldung und Systemwerte liegen in system.db
+}
+
+// userTables: Tabellen einer daten.db, alle mit Spalte user_id (= Besitzer der Datei).
+var userTables = []string{"jobs", "plannings", "lists", "list_items", "list_groups", "memory", "rings", "ring_recordings",
+	"push_subs", "joplin_deletes", "kv"}
+
+// systemKV: Systemwerte, die bis 2.x in pebble.db lagen und ab 3.0 nur in system.db stehen (oder in user_tokens).
+var systemKV = []string{"ersteinrichtung:code", "update-releases", "auto-update-letzt", "backup-letzt", "spenden-link",
+	"vapid_public", "vapid_private", "webauthn_user", "oauth"}
+
+// splitByUser: Anmeldung und Systemwerte entfernen, user_id an jede Tabelle.
+func splitByUser(tx *sql.Tx, uid int64) error {
+	for _, t := range []string{"passkeys", "sessions", "enroll_tokens"} {
+		if _, err := tx.Exec(`DROP TABLE IF EXISTS ` + t); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.Exec(`DELETE FROM kv WHERE k LIKE ?`, settingPrefix+"%"); err != nil {
+		return err
+	}
+	for _, k := range systemKV {
+		if _, err := tx.Exec(`DELETE FROM kv WHERE k = ?`, k); err != nil {
+			return err
+		}
+	}
+	for _, t := range userTables {
+		if _, err := tx.Exec(fmt.Sprintf(`ALTER TABLE %s ADD COLUMN user_id INTEGER NOT NULL DEFAULT %d`, t, uid)); err != nil {
+			return fmt.Errorf("%s: %w", t, err)
+		}
+	}
+	return nil
+}
+
+// migrateTo bringt die Datenbank Schritt für Schritt auf Stand target – auch über übersprungene Versionen hinweg.
 // Eine neuere Datenbank (nach Rückwechsel auf eine ältere Version) wird nicht angefasst: zurück nur über ein Backup.
-func migrate(db *sql.DB) error {
+func migrateTo(db *sql.DB, uid int64, target int) error {
 	var v int
 	if err := db.QueryRow(`PRAGMA user_version`).Scan(&v); err != nil {
 		return fmt.Errorf("Schema: %w", err)
@@ -284,22 +358,24 @@ func migrate(db *sql.DB) error {
 		}
 		v = 1
 	}
-	for ; v < SchemaVersion; v++ {
-		if err := migrateStep(db, v); err != nil {
+	for ; v < target; v++ {
+		if err := migrateStep(db, v, func(tx *sql.Tx) error { return migrations[v](tx, uid) }); err != nil {
 			return fmt.Errorf("Schema %d: %w", v+1, err)
 		}
 	}
 	return nil
 }
 
-func migrateStep(db *sql.DB, v int) error {
+func migrateStep(db *sql.DB, v int, step func(*sql.Tx) error) error {
 	tx, err := db.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	if err := migrations[v](tx); err != nil {
-		return err
+	if step != nil {
+		if err := step(tx); err != nil {
+			return err
+		}
 	}
 	if _, err := tx.Exec(fmt.Sprintf(`PRAGMA user_version = %d`, v+1)); err != nil {
 		return err
@@ -1431,159 +1507,15 @@ func (s *Store) SaveMemory(e *MemoryEntry) error {
 	return err
 }
 
-// --- Schlüssel/Wert ---
+// --- Schlüssel/Wert (eigene Werte des Nutzers; Systemwerte in system.db) ---
 
-func (s *Store) Get(k string) (string, error) {
-	var v string
-	err := s.DB.QueryRow(`SELECT v FROM kv WHERE k = ?`, k).Scan(&v)
-	if errors.Is(err, sql.ErrNoRows) {
-		return "", nil
-	}
-	return v, err
-}
+func (s *Store) Get(k string) (string, error) { return kvGet(s.DB, k) }
+func (s *Store) Set(k, v string) error        { return kvSet(s.DB, k, v) }
 
-func (s *Store) Set(k, v string) error {
-	_, err := s.DB.Exec(`INSERT INTO kv (k, v) VALUES (?, ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v`, k, v)
-	return err
-}
-
-// --- Einstellungen (Web-Oberfläche) ---
-
-const settingPrefix = "einstellung:"
-
-// Settings liefert alle gespeicherten Einstellungen (Schlüssel wie in der früheren env-Datei).
-func (s *Store) Settings() (map[string]string, error) {
-	rows, err := s.DB.Query(`SELECT k, v FROM kv WHERE k LIKE ?`, settingPrefix+"%")
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := map[string]string{}
-	for rows.Next() {
-		var k, v string
-		if err := rows.Scan(&k, &v); err != nil {
-			return nil, err
-		}
-		out[strings.TrimPrefix(k, settingPrefix)] = v
-	}
-	return out, rows.Err()
-}
-
-// SaveSettings schreibt die Einstellungen in einem Zug; leere Werte werden gespeichert (= nicht gesetzt).
+// Settings: persönliche Einstellungen des Nutzers (Schlüssel wie in config.Fields).
+func (s *Store) Settings() (map[string]string, error) { return kvSettings(s.DB) }
 func (s *Store) SaveSettings(values map[string]string) error {
-	tx, err := s.DB.Begin()
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	for k, v := range values {
-		if _, err := tx.Exec(`INSERT INTO kv (k, v) VALUES (?, ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v`, settingPrefix+k, v); err != nil {
-			return err
-		}
-	}
-	return tx.Commit()
-}
-
-// --- Anmeldung ---
-
-type Passkey struct {
-	ID         string
-	Name       string
-	Credential string // JSON von webauthn.Credential
-	CreatedAt  int64
-	LastUsedAt int64
-}
-
-func (s *Store) Passkeys() ([]Passkey, error) {
-	rows, err := s.DB.Query(`SELECT id, name, credential, created_at, last_used_at FROM passkeys ORDER BY created_at`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []Passkey
-	for rows.Next() {
-		var p Passkey
-		if err := rows.Scan(&p.ID, &p.Name, &p.Credential, &p.CreatedAt, &p.LastUsedAt); err != nil {
-			return nil, err
-		}
-		out = append(out, p)
-	}
-	return out, rows.Err()
-}
-
-func (s *Store) AddPasskey(p Passkey) error {
-	_, err := s.DB.Exec(`INSERT INTO passkeys (id, name, credential, created_at) VALUES (?,?,?,?)`, p.ID, p.Name, p.Credential, Now())
-	return err
-}
-
-func (s *Store) UpdatePasskey(id, credential string) error {
-	_, err := s.DB.Exec(`UPDATE passkeys SET credential = ?, last_used_at = ? WHERE id = ?`, credential, Now(), id)
-	return err
-}
-
-// DeletePasskey entfernt ein Gerät samt seinen Sitzungen.
-func (s *Store) DeletePasskey(id string) error {
-	if _, err := s.DB.Exec(`DELETE FROM sessions WHERE passkey_id = ?`, id); err != nil {
-		return err
-	}
-	_, err := s.DB.Exec(`DELETE FROM passkeys WHERE id = ?`, id)
-	return err
-}
-
-func (s *Store) NewSession(passkeyID string, ttl time.Duration) (string, error) {
-	token := NewID() + NewID()
-	_, err := s.DB.Exec(`INSERT INTO sessions (token_hash, passkey_id, created_at, expires_at) VALUES (?,?,?,?)`,
-		Hash(token), passkeyID, Now(), time.Now().Add(ttl).UnixMilli())
-	return token, err
-}
-
-// Session prüft eine Sitzung und liefert die Id ihres Passkeys; verlängert gleitend.
-func (s *Store) Session(token string, ttl time.Duration) (string, bool) {
-	if token == "" {
-		return "", false
-	}
-	var pk string
-	var exp int64
-	if err := s.DB.QueryRow(`SELECT passkey_id, expires_at FROM sessions WHERE token_hash = ?`, Hash(token)).Scan(&pk, &exp); err != nil {
-		return "", false
-	}
-	if exp < Now() {
-		return "", false
-	}
-	if next := time.Now().Add(ttl).UnixMilli(); next-exp > int64(time.Hour/time.Millisecond) {
-		s.DB.Exec(`UPDATE sessions SET expires_at = ? WHERE token_hash = ?`, next, Hash(token))
-	}
-	return pk, true
-}
-
-func (s *Store) DeleteSession(token string) error {
-	_, err := s.DB.Exec(`DELETE FROM sessions WHERE token_hash = ?`, Hash(token))
-	return err
-}
-
-func (s *Store) NewEnrollToken(ttl time.Duration) (string, error) {
-	s.DB.Exec(`DELETE FROM enroll_tokens WHERE expires_at < ?`, Now())
-	token := NewID() + NewID()
-	_, err := s.DB.Exec(`INSERT INTO enroll_tokens (token_hash, expires_at) VALUES (?,?)`, Hash(token), time.Now().Add(ttl).UnixMilli())
-	return token, err
-}
-
-func (s *Store) EnrollTokenValid(token string) bool {
-	var exp int64
-	if err := s.DB.QueryRow(`SELECT expires_at FROM enroll_tokens WHERE token_hash = ?`, Hash(token)).Scan(&exp); err != nil {
-		return false
-	}
-	return exp >= Now()
-}
-
-// UseEnrollToken verbraucht einen Einmal-Link; false, wenn er nicht (mehr) gilt.
-func (s *Store) UseEnrollToken(token string) bool {
-	res, err := s.DB.Exec(`DELETE FROM enroll_tokens WHERE token_hash = ? AND expires_at >= ?`, Hash(token), Now())
-	if err != nil {
-		return false
-	}
-	n, _ := res.RowsAffected()
-	return n == 1
+	return kvSaveSettings(s.DB, values)
 }
 
 // --- Push ---
@@ -2211,7 +2143,7 @@ func (s *Store) DeleteGroup(name string) (conflict string, err error) {
 
 // Snapshot schreibt eine in sich stimmige Kopie der Datenbank nach path (VACUUM INTO; path darf nicht existieren).
 func (s *Store) Snapshot(path string) error {
-	_, err := s.DB.Exec(`VACUUM INTO ?`, snapshotURI(path, nil))
+	_, err := s.DB.Exec(`VACUUM INTO ?`, snapshotURI(path, s.key))
 	return err
 }
 
@@ -2442,3 +2374,6 @@ func (s *Store) SearchIndex(words []string, tier int, before int64, limit int) (
 	}
 	return out, rows.Err()
 }
+
+// Open öffnet eine unverschlüsselte Datenbank als Daten von Nutzer 1 (Tests und lokale Werkzeuge).
+func Open(path string) (*Store, error) { return OpenUser(path, nil, 1) }

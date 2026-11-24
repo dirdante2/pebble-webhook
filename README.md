@@ -17,6 +17,7 @@ One Go binary: webhook, worker, SQLite and web app. No queue, no second database
 - Built-in **MCP server** with OAuth: connect Claude, ChatGPT & co., read lists and tick items off from AI chats
 - **Ring usage**: the Index 01 battery lasts about 12–15 hours of recording. Every recording is counted (seconds, notes vs. plannings, button presses) per ring ID (`#12345`); warnings at 60/80/95/100 %, forecast at constant use, ring swap with comparison
 - **English or German** – UI, messages, push and MCP answers, and the texts the AI writes; chosen in the setup wizard (preset from the browser), changeable under Status → Configuration
+- **Multiple users**: own encrypted database and recordings per user, admin/user roles, invite links, recovery code; nobody sees another user's data
 - Passkey login (new devices with a 4-digit code), setup wizard, settings with explanations and validation, **themes** (day/night, colour palettes) and **updates** in the web app
 
 ## Screenshots

@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"pebble-webhook/internal/i18n"
 	"pebble-webhook/internal/openai"
 	"pebble-webhook/internal/store"
 )
@@ -323,7 +322,7 @@ func (a *App) train(ctx context.Context) (info TrainInfo) {
 		MaxOutputTokens: 3000, ReasoningEffort: a.Cfg.PlanReasoningEffort, SchemaName: "lernlauf", Schema: trainSchema,
 	})
 	if err != nil {
-		info.Fehler = i18n.T("KI nicht erreichbar:") + " " + err.Error()
+		info.Fehler = a.T("KI nicht erreichbar:") + " " + err.Error()
 		return
 	}
 	info.KostenUSD = a.cost(res)
@@ -331,7 +330,7 @@ func (a *App) train(ctx context.Context) (info TrainInfo) {
 		Eintraege []string `json:"eintraege"`
 	}
 	if err := json.Unmarshal([]byte(res.Text), &out); err != nil {
-		info.Fehler = i18n.T("Antwort der KI nicht lesbar")
+		info.Fehler = a.T("Antwort der KI nicht lesbar")
 		return
 	}
 	info.Neu = a.remember("lernlauf", out.Eintraege[:min(trainNewMax, len(out.Eintraege))]...)

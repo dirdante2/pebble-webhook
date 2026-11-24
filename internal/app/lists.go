@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"pebble-webhook/internal/i18n"
 	"pebble-webhook/internal/joplin"
 	"pebble-webhook/internal/openai"
 	"pebble-webhook/internal/store"
@@ -135,7 +134,7 @@ func (a *App) analyseDictation(ctx context.Context, j *store.Job) error {
 	}
 	if j.CostUSD != nil && *j.CostUSD >= a.Cfg.ResearchLimitUSD {
 		j.LimitHit = true
-		return plain(i18n.T("Kostenlimit erreicht"))
+		return plain(a.T("Kostenlimit erreicht"))
 	}
 	// Erneute Auswertung nach beantworteten Rückfragen: die Antworten gehen mit und bleiben an der Notiz.
 	var answered []Answer
@@ -250,7 +249,7 @@ func (a *App) analyseDictation(ctx context.Context, j *store.Job) error {
 		ap, err := appointmentTimes(full.RawTermin, j.RecordedAt)
 		if err != nil {
 			d.Art = "notiz"
-			d.Hinweise = append(d.Hinweise, i18n.T("Termin nicht erkannt:")+" "+err.Error())
+			d.Hinweise = append(d.Hinweise, a.T("Termin nicht erkannt:")+" "+err.Error())
 		} else {
 			d.Termin = ap
 			d.Liste, d.Gruppe, d.Punkte = "", "", nil
@@ -301,7 +300,7 @@ func (a *App) analyseDictation(ctx context.Context, j *store.Job) error {
 		var ns errNotSorted
 		if list, err = a.findList(d.Gruppe, d.Liste); errors.As(err, &ns) {
 			// Sichtbar an der Notiz statt still verworfen.
-			d.Hinweise = append(d.Hinweise, i18n.T("Nicht einsortiert:")+" "+ns.reason)
+			d.Hinweise = append(d.Hinweise, a.T("Nicht einsortiert:")+" "+ns.reason)
 			list = nil
 		} else if err != nil {
 			return err
@@ -400,7 +399,34 @@ func (a *App) handleJobInstruction(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusConflict, "nicht_fertig", "Die Notiz ist noch nicht fertig ausgewertet")
 		return
 	}
-	if readJSON(r, &in) != nil {
+	// JSON {text} oder multipart (Web-App, auch aus dem Ausgang): text oder audio, client_id gegen Doppelte.
+	dedupeKey := ""
+	if strings.HasPrefix(r.Header.Get("Content-Type"), "multipart/") {
+		r.Body = http.MaxBytesReader(w, r.Body, webNoteMaxBytes)
+		if err := r.ParseMultipartForm(webNoteMaxBytes); err != nil {
+			writeErr(w, http.StatusRequestEntityTooLarge, "gross", "Aufnahme zu groß oder nicht lesbar")
+			return
+		}
+		if id := strings.TrimSpace(r.FormValue("client_id")); id != "" {
+			key := "anweisung:" + id
+			if v, _ := a.DB.Get(key); v != "" {
+				writeJSON(w, 200, map[string]any{"ok": true, "bekannt": true})
+				return
+			}
+			dedupeKey = key
+		}
+		in.Text = r.FormValue("text")
+		if f, hdr, err := r.FormFile("audio"); err == nil {
+			text, err := a.transcribeUpload(r.Context(), j, f, hdr.Header.Get("Content-Type"))
+			f.Close()
+			if err != nil {
+				logf("Anweisung %s: Transkription: %v", j.ID, err)
+				writeErr(w, http.StatusBadGateway, "transkription", "Die Aufnahme ließ sich nicht verstehen")
+				return
+			}
+			in.Text = text
+		}
+	} else if readJSON(r, &in) != nil {
 		writeErr(w, 400, "ungueltig", "Anweisung nicht lesbar")
 		return
 	}
@@ -417,8 +443,11 @@ func (a *App) handleJobInstruction(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, "speicher", "Datenbankfehler")
 		return
 	}
+	if dedupeKey != "" {
+		a.DB.Set(dedupeKey, "1")
+	}
 	a.observe("anweisung", fmt.Sprintf("Anweisung des Nutzers zur Notiz „%s“: %s", j.Title, text))
-	writeJSON(w, 200, map[string]any{"ok": true})
+	writeJSON(w, 200, map[string]any{"ok": true, "text": text})
 }
 
 // reevaluate hängt eine Anweisung an die Notiz und lässt sie neu auswerten. Alle Punkte der Notiz fallen weg;

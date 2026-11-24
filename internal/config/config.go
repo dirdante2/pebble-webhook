@@ -24,14 +24,10 @@ type Config struct {
 	DataDir      string
 	AudioDir     string
 	BackupDir    string // Ablage der Backups (Startwert BACKUP_DIR, vom Installer freigegeben)
+	KeyDir       string // Schlüssel je Nutzer (Startwert KEY_DIR, nie im Backup)
 	TrustedProxy string
 
-	// APIToken öffnet einen Maschinenzugang (Authorization: Bearer) zu wenigen Routen; leer = abgeschaltet.
-	APIToken string
-
-	HookToken       string
 	HookTokenHeader string
-	HookSecret      string
 	HookMaxBytes    int64
 	HookRatePerMin  int
 	MinFreeBytes    uint64
@@ -123,6 +119,7 @@ type Bootstrap struct {
 	DataDir   string
 	AudioDir  string
 	BackupDir string
+	KeyDir    string // Schlüssel je Nutzer (nie im Backup)
 }
 
 func LoadBootstrap() Bootstrap {
@@ -133,7 +130,8 @@ func LoadBootstrap() Bootstrap {
 		return def
 	}
 	return Bootstrap{Listen: get("LISTEN", "0.0.0.0:8080"), DataDir: get("DATA_DIR", "/var/lib/pebble-webhook"),
-		AudioDir: get("AUDIO_DIR", "/srv/pebble-audio"), BackupDir: get("BACKUP_DIR", "/srv/pebble-backup")}
+		AudioDir: get("AUDIO_DIR", "/srv/pebble-audio"), BackupDir: get("BACKUP_DIR", "/srv/pebble-backup"),
+		KeyDir: get("KEY_DIR", "/etc/pebble-webhook/keys")}
 }
 
 // Load liest alle Einstellungen aus der Umgebung (Tests, Übernahme einer alten env-Datei).
@@ -234,13 +232,10 @@ func FromValues(boot Bootstrap, lookup func(string) string) (*Config, error) {
 		DataDir:      boot.DataDir,
 		AudioDir:     boot.AudioDir,
 		BackupDir:    boot.BackupDir,
+		KeyDir:       boot.KeyDir,
 		TrustedProxy: str("TRUSTED_PROXY", ""),
 
-		APIToken: str("API_TOKEN", ""),
-
-		HookToken:       need("HOOK_TOKEN"),
 		HookTokenHeader: str("HOOK_TOKEN_HEADER", "X-Webhook-Token"),
-		HookSecret:      need("HOOK_SIGNING_SECRET"),
 		HookMaxBytes:    int64(num("HOOK_MAX_MB", 25)) << 20,
 		HookRatePerMin:  num("HOOK_RATE_PER_MIN", 30),
 		MinFreeBytes:    uint64(num("MIN_FREE_MB", 500)) << 20,
@@ -318,9 +313,6 @@ func FromValues(boot Bootstrap, lookup func(string) string) (*Config, error) {
 		case u.Path != "" || u.RawQuery != "" || u.Fragment != "" || u.User != nil:
 			errs = append(errs, i18n.T("Öffentliche Adresse: nur https://host, ohne Pfad, ? oder #"))
 		}
-	}
-	if c.APIToken != "" && len(c.APIToken) < 32 {
-		errs = append(errs, i18n.T("API_TOKEN braucht mindestens 32 Zeichen"))
 	}
 	// Joplin: inaktiv → aus, auch wenn Werte stehen; aktiv ohne Server → noch nicht eingerichtet (kein Fehler).
 	if !c.JoplinEnabled {

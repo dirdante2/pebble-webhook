@@ -131,6 +131,7 @@ async function api(pfad, opt = {}) {
   try { daten = await antwort.json(); } catch (e) { /* leer */ }
   if (!antwort.ok) {
     if (antwort.status === 401 && !pfad.startsWith('/api/auth/')) { try { localStorage.setItem('angemeldet', '0'); } catch { /* nur Startabkürzung */ } geheZu('/anmelden', true); }
+    if (antwort.status === 423 && aktuell?.name !== 'wiederherstellen') geheZu('/wiederherstellen', true);
     throw new ApiFehler(antwort.status, daten?.code || '', daten?.fehler || T`Fehler ${antwort.status}`);
   }
   return daten;
@@ -258,12 +259,14 @@ async function sendeAusgang() {
           if (p.audio) form.set('audio', p.audio, 'antwort');
           else form.set('text', p.text);
           await api(p.planung ? T`/api/planungen/${p.planung}/antwort` : '/api/planungen', { method: 'POST', body: form });
-        } else if (p.typ === 'notiz') {
+        } else if (p.typ === 'notiz' || p.typ === 'anweisung') {
           const form = new FormData();
           form.set('client_id', p.client_id);
           form.set('zeit', String(p.zeit));
-          form.set('audio', p.audio, 'notiz');
-          await api('/api/notizen', { method: 'POST', body: form });
+          if (p.audio) form.set('audio', p.audio, p.typ);
+          else form.set('text', p.text);
+          await api(p.typ === 'notiz' ? '/api/notizen' : T`/api/eintraege/${p.eintrag}/anweisung`, { method: 'POST', body: form });
+          if (p.typ === 'anweisung') { ladeZaehler(); aktuell?.neuLaden?.(); }
         } else if (p.typ === 'notizantwort') {
           await api(T`/api/eintraege/${p.eintrag}/antwort`, { method: 'POST', body: { antworten: p.antworten } });
         } else if (p.typ === 'schliessen') {
@@ -278,7 +281,7 @@ async function sendeAusgang() {
         if (e instanceof NetzFehler || (e instanceof ApiFehler && (e.status === 401 || e.status >= 500))) break; // später erneut
         if (e instanceof ApiFehler && e.code === 'geschlossen' && p.typ === 'antwort') {
           await lege('ausgang', { ...p, zustand: 'konflikt' });
-        } else if (e instanceof ApiFehler && e.status === 409) {
+        } else if (e instanceof ApiFehler && e.status === 409 && p.typ !== 'anweisung') {
           await loesche('ausgang', p.client_id); // Aktion hat sich erledigt (z. B. läuft schon wieder)
         } else {
           await lege('ausgang', { ...p, zustand: 'fehler', fehler: e.message });
@@ -298,6 +301,25 @@ async function merkeVor(posten) {
   return offen === 0; // true = schon gesendet
 }
 
+// ---------- Angemeldeter Nutzer ----------
+
+// Name und Rolle (für „Hallo …“ und die Systemverwaltung nur bei Admins); offline aus dem letzten Stand.
+let ich = (() => { try { return JSON.parse(localStorage.getItem('ich')) || {}; } catch { return {}; } })();
+const istAdmin = () => ich.rolle === 'admin';
+function merkeIch(s) {
+  ich = { id: s.id, name: s.name || '', rolle: s.rolle || '' };
+  try { localStorage.setItem('ich', JSON.stringify(ich)); } catch { /* nur Anzeige */ }
+}
+// vergissGeraet: Zwischenspeicher des Nutzers auf diesem Gerät löschen (Abmelden, Nutzerwechsel); das Theme bleibt.
+async function vergissGeraet() {
+  let theme = null;
+  try { theme = localStorage.getItem('darstellung'); localStorage.clear(); if (theme) localStorage.setItem('darstellung', theme); localStorage.setItem('angemeldet', '0'); } catch { /* nichts gespeichert */ }
+  ich = {};
+  try { (await dbZusage)?.close(); } catch { /* nie geöffnet */ }
+  dbZusage = null;
+  await new Promise((ok) => { const r = indexedDB.deleteDatabase('sprachnotizen'); r.onsuccess = r.onerror = r.onblocked = () => ok(); });
+}
+
 // ---------- Router ----------
 
 const routen = [
@@ -306,11 +328,11 @@ const routen = [
   [/^\/eintrag\/([0-9a-f]+)$/, 'eintrag', zeigeEintrag],
   [/^\/eintrag\/([0-9a-f]+)\/umhaengen$/, 'umhaengen', zeigeUmhaengen],
   [/^\/eintrag\/([0-9a-f]+)\/wortlaut$/, 'wortlaut', zeigeWortlaut],
-  [/^\/eintrag\/([0-9a-f]+)\/anweisung$/, 'anweisung', zeigeAnweisung],
+  [/^\/eintrag\/([0-9a-f]+)\/anweisung$/, 'anweisung', (id) => eingabeVonAdresse(T`/eintrag/${id}`, () => eingabeAnweisung(id))],
   [/^\/eintrag\/([0-9a-f]+)\/liste$/, 'einsortieren', (id) => zeigeEinsortieren(id, 'eintrag')],
   [/^\/planung\/([0-9a-f]+)\/liste$/, 'einsortieren', (id) => zeigeEinsortieren(id, 'planung')],
   [/^\/planung\/([0-9a-f]+)$/, 'planung', zeigePlanung],
-  [/^\/planung\/([0-9a-f]+)\/antwort$/, 'antwort', zeigeAntwort],
+  [/^\/planung\/([0-9a-f]+)\/antwort$/, 'antwort', (id) => eingabeVonAdresse(T`/planung/${id}`, () => eingabeAntwort(id))],
   [/^\/tags\/(eintrag|planung)\/([0-9a-f]+)$/, 'tags', zeigeTags],
   [/^\/listen$/, 'listen', () => zeigeListen('')],
   [/^\/listen\/gruppe\/([^/]+)$/, 'listen', (g) => zeigeListen(decodeURIComponent(g))],
@@ -343,6 +365,13 @@ const routen = [
   [/^\/status\/einstellungen\/bearbeiten$/, 'einstellungenBearbeiten', () => geheZu('/status/einstellungen', true)],
   [/^\/status\/einstellungen\/([A-Z_]+)$/, 'einstellungBearbeiten', zeigeEinstellungBearbeiten],
   [/^\/einrichten$/, 'einrichten', zeigeEinrichten],
+  [/^\/willkommen$/, 'willkommen', zeigeWillkommen],
+  [/^\/wiederherstellen$/, 'wiederherstellen', zeigeWiederherstellen],
+  [/^\/status\/zugang$/, 'zugang', zeigeZugang],
+  [/^\/status\/zugang\/code$/, 'zugangCode', zeigeNeuerCode],
+  [/^\/admin\/nutzer$/, 'nutzer', zeigeNutzer],
+  [/^\/admin\/nutzer\/neu$/, 'nutzerNeu', zeigeNutzerNeu],
+  [/^\/admin\/nutzer\/(\d+)\/bearbeiten$/, 'nutzerBearbeiten', zeigeNutzerBearbeiten],
 ];
 let aktuell = null;
 let aufraeumen = null;
@@ -410,6 +439,8 @@ async function zeige() {
 }
 
 document.addEventListener('click', (e) => {
+  const eingabe = e.target.closest('[data-eingabe]');
+  if (eingabe) { e.preventDefault(); (eingabe.dataset.eingabe === 'anweisung' ? eingabeAnweisung : eingabeAntwort)(eingabe.dataset.id); return; }
   const frage = e.target.closest('[data-fragen]');
   if (frage) { e.preventDefault(); oeffneFragen(frage.dataset.fragen, frage.dataset.ftyp); return; }
   const fertig = e.target.closest('[data-fertig]');
@@ -847,7 +878,7 @@ async function zeigeAusgang() {
   const box = document.getElementById('ausgang');
   if (!box) return;
   const posten = (await alle('ausgang')).sort((a, b) => a.zeit - b.zeit);
-  const name = (p) => (p.typ === 'notiz' ? tx('Notiz (Aufnahme)') : p.typ === 'antwort' ? (p.audio ? tx('Antwort (Aufnahme)') : T`Antwort: ${esc((p.text || '').slice(0, 80))}`) : p.typ === 'notizantwort' ? tx('Antwort auf Rückfrage') : p.typ === 'schliessen' ? tx('Planung schließen') : p.typ === 'haken' ? tx('Punkt abhaken') : tx('Erneut starten'));
+  const name = (p) => (p.typ === 'notiz' ? (p.audio ? tx('Notiz (Aufnahme)') : T`Notiz: ${esc((p.text || '').slice(0, 80))}`) : p.typ === 'anweisung' ? (p.audio ? tx('KI-Anweisung (Aufnahme)') : T`KI-Anweisung: ${esc((p.text || '').slice(0, 80))}`) : p.typ === 'antwort' ? (p.audio ? tx('Antwort (Aufnahme)') : T`Antwort: ${esc((p.text || '').slice(0, 80))}`) : p.typ === 'notizantwort' ? tx('Antwort auf Rückfrage') : p.typ === 'schliessen' ? tx('Planung schließen') : p.typ === 'haken' ? tx('Punkt abhaken') : tx('Erneut starten'));
   box.innerHTML = posten.map((p) => {
     if (p.zustand === 'konflikt') {
       return T`<div class="hinweis warn"><strong>Die Planung wurde inzwischen geschlossen.</strong><br>${name(p)} <span class="leise">(${zeit(p.zeit)})</span>
@@ -1526,11 +1557,12 @@ function eintragHtml(e, offline) {
     haupt.push(zu ? T`<button class="btn" data-fertig="${e.id}" data-erledigt="0">Wieder öffnen</button>` : T`<button class="btn haupt" data-fertig="${e.id}">${t?.verpasst ? tx('Bestätigen') : tx('Erledigt')}</button>`);
   }
   // Termin: zweiter Knopf zum Verschieben (eigenes Fenster mit Datum und Uhrzeit).
-  if (t && fertig && !offline) haupt.push(T('<button class="btn" data-akt="verschieben">Verschieben</button>'));
   // Freie Anweisung an die KI („bitte in zwei Punkte trennen“): eigene Seite, danach neue Auswertung.
-  if (e.modus === 'diktat' && !e.planung && fertig && e.analyse && !offline) haupt.push(T`<a class="btn" href="/eintrag/${e.id}/anweisung">KI-Anweisung</a>`);
+  if (e.modus === 'diktat' && !e.planung && fertig && e.analyse && !offline) haupt.push(T`<button type="button" class="btn" data-eingabe="anweisung" data-id="${e.id}">KI-Anweisung</button>`);
   if (e.status === 'fehler' || e.status === 'wiederholung' || e.status === 'leer') haupt.push(T`<button class="btn${e.status === 'leer' ? '' : ' haupt'}" data-akt="neustart">Erneut starten</button>`);
-  if (offen && fertig) haupt.push(T`<a class="btn haupt" href="/planung/${p.id}/antwort">Antworten</a>`);
+  if (offen && fertig) haupt.push(T`<button type="button" class="btn haupt" data-eingabe="antwort" data-id="${p.id}">Antworten</button>`);
+  // Termin verschieben: im Mehr-Menü (Nutzervorgabe 23.11.2026), nicht als Hauptaktion.
+  if (t && fertig && !offline) mehr.push(punkt('b', 'data-akt="verschieben"', tx('Termin verschieben')));
   if (fertig || e.transkript) {
     if (navigator.share) mehr.push(punkt('b', 'data-akt="teilen"', tx('Teilen')));
     mehr.push(punkt('b', 'data-akt="kopieren"', tx('Kopieren')));
@@ -1759,7 +1791,7 @@ function planungHtml(p, offline) {
   if (letzte.status === 'fehler' || letzte.status === 'wiederholung') haupt.push(T`<button class="btn haupt" data-akt="neustart" data-id="${letzte.id}">Erneut starten</button>`);
   if (p.fragen && !offline) haupt.push(T`<button class="btn haupt" data-fragen="${p.id}">${tx('{0} beantworten', fragenText(p.fragen))}</button>`);
   // Offene Planung: zwei gleichrangige Aktionen, Antworten oder Schließen; abgeschlossene: Wieder öffnen.
-  if (offen && !laeuft) haupt.push(T`<a class="btn${p.fragen ? '' : ' haupt'}" href="/planung/${p.id}/antwort">Antworten</a>`);
+  if (offen && !laeuft) haupt.push(T`<button type="button" class="btn${p.fragen ? '' : ' haupt'}" data-eingabe="antwort" data-id="${p.id}">Antworten</button>`);
   if (offen) haupt.push(T('<button class="btn" data-akt="schliessen">Schließen</button>'));
   else if (!offline) haupt.push(T('<button class="btn" data-akt="oeffnen">Wieder öffnen</button>'));
   if (p.text) {
@@ -1944,38 +1976,6 @@ async function zeigeWortlaut(id) {
   aufraeumen = () => { seite.onclick = null; };
 }
 
-// Anweisung an die KI zu einer fertigen Notiz: freier Text, danach wertet die KI die Notiz neu aus (Punkte werden neu angelegt).
-async function zeigeAnweisung(id) {
-  const e = await api(T`/api/eintraege/${id}`);
-  const zurueck = T`/eintrag/${id}`;
-  const bisher = e.analyse?.anweisungen || [];
-  seite.innerHTML = T`<h1>KI-Anweisung</h1>
-    <p class="leise">Sag der KI, was sie an dieser Notiz ändern soll. Danach wertet sie die Notiz neu aus; die Listenpunkte werden neu angelegt.</p>
-    ${bisher.length ? T`<h2>Bisherige Anweisungen</h2><ul>${bisher.map((x) => T`<li>${esc(x)}</li>`).join('')}</ul>` : ''}
-    <label for="anweisung">Was soll die KI ändern?</label>
-    <textarea id="anweisung" rows="4" maxlength="500" placeholder="${tx('z. B. In zwei Punkte trennen: Mitarbeiter und Kundenportal')}"></textarea>
-    <div class="leiste"><button class="btn haupt" data-akt="senden">Neu prüfen lassen</button><a class="btn" href="${zurueck}">Abbrechen</a></div>`;
-  const feld = document.getElementById('anweisung');
-  feld.focus();
-  seite.onclick = async (ev) => {
-    const b = ev.target.closest('button[data-akt="senden"]');
-    if (!b) return;
-    const text = feld.value.trim();
-    if (!text) return melde(tx('Die Anweisung ist leer'));
-    b.disabled = true;
-    try {
-      await api(T`/api/eintraege/${id}/anweisung`, { method: 'POST', body: { text } });
-      melde(tx('Wird neu ausgewertet'));
-      ladeZaehler();
-      geheZu(zurueck, true);
-    } catch (f) {
-      b.disabled = false;
-      melde(f instanceof NetzFehler ? tx('Offline – nur mit Verbindung') : f.message);
-    }
-  };
-  aufraeumen = () => { seite.onclick = null; };
-}
-
 // ---------- Antwortseite ----------
 
 // starteAufnahme: Mikrofon an, Aufnahme läuft bis stopp() oder maxSek (0 = ohne Grenze); onEnde(blob, sek)
@@ -2003,79 +2003,58 @@ async function starteAufnahme({ maxSek = 0, onTick, onEnde } = {}) {
   };
 }
 
-async function zeigeAntwort(planung) {
-  let aufnahme = null, lauf = null;
-  const entwurfKey = T`entwurf:${planung}`;
-  seite.innerHTML = T`<h1>Antworten</h1>
-    <p class="leise">Die Antwort wird als neue Runde in die Planung eingearbeitet. Tippen oder aufnehmen.</p>
-    <label for="text">Antwort als Text</label>
-    <textarea id="text" placeholder="Antworten auf die offenen Fragen, Ergänzungen, Änderungen …"></textarea>
-    <label>Oder als Aufnahme</label>
-    <div class="aufnahme" id="aufnahme"></div>
-    <div class="leiste"><button class="btn haupt" id="senden">Senden</button><button class="btn" id="zurueck">Abbrechen</button></div>`;
-  const text = document.getElementById('text');
-  const box = document.getElementById('aufnahme');
-  text.value = localStorage.getItem(entwurfKey) || '';
-  text.oninput = () => localStorage.setItem(entwurfKey, text.value);
-  document.getElementById('zurueck').onclick = () => history.back();
-
-  const male = () => {
-    if (lauf?.laeuft) box.innerHTML = T('<span class="punkt"></span><span>Aufnahme läuft …</span><button class="btn klein" data-a="stopp">Stopp</button>');
-    else if (aufnahme) {
-      box.innerHTML = T('<audio controls></audio><button class="btn klein gefahr" data-a="weg">Aufnahme verwerfen</button>');
-      box.querySelector('audio').src = URL.createObjectURL(aufnahme);
-    } else box.innerHTML = navigator.mediaDevices?.getUserMedia ? T('<button class="btn" data-a="start">Aufnehmen</button>') : T('<span class="leise">Aufnahme wird von diesem Browser nicht unterstützt.</span>');
-  };
-  box.onclick = async (ev) => {
-    const a = ev.target.closest('button')?.dataset.a;
-    if (a === 'start') {
-      try {
-        lauf = await starteAufnahme({ onEnde: (blob) => { aufnahme = blob; lauf = null; male(); } });
-      } catch (f) { melde(tx('Mikrofon nicht verfügbar')); }
-    } else if (a === 'stopp') lauf?.stopp();
-    else if (a === 'weg') aufnahme = null;
-    male();
-  };
-  male();
-
-  document.getElementById('senden').onclick = async (ev) => {
-    if (lauf?.laeuft) return melde(tx('Erst die Aufnahme stoppen'));
-    const inhalt = text.value.trim();
-    if (!aufnahme && !inhalt) return melde(tx('Antwort ist leer'));
-    if (aufnahme && inhalt && !confirm(tx('Es gibt Text und Aufnahme. Gesendet wird die Aufnahme, der Text entfällt. Fortfahren?'))) return;
-    ev.target.disabled = true;
-    const gesendet = await merkeVor(aufnahme ? { typ: 'antwort', planung, audio: aufnahme } : { typ: 'antwort', planung, text: inhalt });
-    localStorage.removeItem(entwurfKey);
-    melde(gesendet ? tx('Antwort gesendet') : tx('Antwort vorgemerkt – wird bei Verbindung gesendet'));
-    geheZu(T`/planung/${planung}`, true);
-  };
-  aufraeumen = () => lauf?.verwerfen();
-}
-
 // ---------- Notiz aufnehmen (Knopf + im Kopf) ----------
 // Aufnahme bis 60 s → Ausgang (IndexedDB) → POST /api/notizen; gelöscht wird sie erst nach der Bestätigung.
 const NOTIZ_MAX_SEK = 60;
 const mmss = (sek) => { const s = Math.max(0, Math.round(sek)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; };
-function oeffneAufnahme() {
+// oeffneEingabe: ein Fenster für alle Eingaben (neue Notiz, KI-Anweisung, Antwort auf eine Planung): oben Text, darunter
+// der Aufnahmeknopf (bis maxSek, tippen = Start, nochmal = Senden). Mit Text im Feld ist die Aufnahme gesperrt –
+// entweder tippen oder sprechen. senden({text} | {audio}) legt den Posten in den Ausgang und liefert true = gesendet.
+function oeffneEingabe({ titel, hinweis = '', platzhalter = '', maxText = 4000, maxSek = NOTIZ_MAX_SEK, entwurf = '', senden }) {
   if (document.querySelector('dialog.drawer')) return;
   const d = document.createElement('dialog');
   d.className = 'drawer aufnahmedrawer';
   const umfang = 2 * Math.PI * 46;
   const kann = !!(navigator.mediaDevices?.getUserMedia && window.MediaRecorder);
-  d.innerHTML = T`<div class="griff" aria-hidden="true"></div><div class="zeile"><h2>Notiz aufnehmen</h2><button class="btn klein rund" data-d="zu" aria-label="Schließen">×</button></div>
+  d.innerHTML = T`<div class="griff" aria-hidden="true"></div><div class="zeile"><h2>${esc(titel)}</h2><button class="btn klein rund" data-d="zu" aria-label="Schließen">×</button></div>
+    ${hinweis ? T`<p class="leise">${esc(hinweis)}</p>` : ''}
+    <textarea class="eingabetext" rows="2" maxlength="${maxText}" placeholder="${esc(platzhalter)}" aria-label="Text"></textarea>
+    <div class="eingabeleiste" hidden><button type="button" class="btn haupt" data-d="text">Senden</button></div>
     ${kann ? T`<button type="button" class="aufnahmeknopf" data-d="knopf" aria-label="Aufnahme starten">
         <svg viewBox="0 0 100 100" aria-hidden="true"><circle class="spur" cx="50" cy="50" r="46"/><circle class="fortschritt" cx="50" cy="50" r="46" stroke-dasharray="${umfang}" stroke-dashoffset="${umfang}"/></svg>
         <span class="symbol" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3" fill="currentColor"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></span>
       </button>
-      <p class="aufnahmezeit" aria-live="polite"><span data-zeit>0:00</span> / ${mmss(NOTIZ_MAX_SEK)}</p>
-      <p class="leise aufnahmehinweis" data-hinweis>Tippen zum Aufnehmen, nochmal tippen zum Senden.</p>` : T('<p class="hinweis warn">Aufnahme wird von diesem Browser nicht unterstützt.</p>')}`;
+      <p class="aufnahmezeit" aria-live="polite"><span data-zeit>0:00</span> / ${mmss(maxSek)}</p>
+      <p class="leise aufnahmehinweis" data-hinweis>Tippen zum Aufnehmen, nochmal tippen zum Senden.</p>` : T('<p class="hinweis warn">Aufnahme wird von diesem Browser nicht unterstützt – bitte tippen.</p>')}`;
+  const feld = d.querySelector('.eingabetext');
+  const leiste = d.querySelector('.eingabeleiste');
   const knopf = d.querySelector('.aufnahmeknopf');
   const ring = d.querySelector('.fortschritt');
   const zeitEl = d.querySelector('[data-zeit]');
-  const hinweis = d.querySelector('[data-hinweis]');
-  let lauf = null, startet = false;
+  const hinweisEl = d.querySelector('[data-hinweis]');
+  let lauf = null, startet = false, fertigGesendet = false;
+  try { feld.value = entwurf ? localStorage.getItem(entwurf) || '' : ''; } catch { /* nur Komfort */ }
+  // Text im Feld: Senden zeigen, Aufnahme sperren; das Feld wächst mit (höchstens etwa 8 Zeilen).
+  const pruefe = () => {
+    const hatText = !!feld.value.trim();
+    leiste.hidden = !hatText;
+    if (knopf) knopf.disabled = hatText && !lauf;
+    if (hinweisEl && !lauf) hinweisEl.textContent = hatText ? tx('Text senden – oder Feld leeren, um aufzunehmen.') : tx('Tippen zum Aufnehmen, nochmal tippen zum Senden.');
+    feld.style.height = 'auto';
+    feld.style.height = `${Math.min(feld.scrollHeight, 220)}px`;
+  };
+  feld.oninput = () => { try { if (entwurf) localStorage.setItem(entwurf, feld.value); } catch { /* nur Komfort */ } pruefe(); };
+  const abschicken = async (posten) => {
+    fertigGesendet = true;
+    let gesendet;
+    try { gesendet = await senden(posten); } catch (f) { fertigGesendet = false; return melde(f.message); }
+    try { if (entwurf) localStorage.removeItem(entwurf); } catch { /* nur Komfort */ }
+    d.close();
+    melde(gesendet ? tx('Gesendet') : tx('Vorgemerkt – wird bei Verbindung gesendet'));
+    if (aktuell?.name === 'verlauf') zeigeAusgang();
+  };
   const tick = (sek) => {
-    ring.style.strokeDashoffset = String(umfang * (1 - Math.min(1, sek / NOTIZ_MAX_SEK)));
+    ring.style.strokeDashoffset = String(umfang * (1 - Math.min(1, sek / maxSek)));
     zeitEl.textContent = mmss(sek);
   };
   const fertig = async (blob, sek) => {
@@ -2083,35 +2062,61 @@ function oeffneAufnahme() {
     knopf.classList.remove('laeuft');
     knopf.disabled = true;
     if (!blob.size || sek < 0.5) { d.close(); return melde(tx('Aufnahme zu kurz')); }
-    const gesendet = await merkeVor({ typ: 'notiz', audio: blob });
-    d.close();
-    melde(gesendet ? tx('Notiz gesendet') : tx('Notiz vorgemerkt – wird bei Verbindung gesendet'));
-    if (aktuell?.name === 'verlauf') zeigeAusgang();
+    await abschicken({ audio: blob });
   };
   d.onclick = async (ev) => {
     if (ev.target === d) return d.close();
     const b = ev.target.closest('[data-d]');
     if (!b) return;
     if (b.dataset.d === 'zu') return d.close();
-    if (b.dataset.d !== 'knopf' || startet) return;
+    if (b.dataset.d === 'text') {
+      const text = feld.value.trim();
+      if (!text || fertigGesendet) return;
+      b.disabled = true;
+      return abschicken({ text });
+    }
+    if (b.dataset.d !== 'knopf' || startet || b.disabled) return;
     if (lauf) return lauf.stopp();
     startet = true;
     try {
-      lauf = await starteAufnahme({ maxSek: NOTIZ_MAX_SEK, onTick: tick, onEnde: fertig });
+      lauf = await starteAufnahme({ maxSek, onTick: tick, onEnde: fertig });
       if (!d.open) return lauf.verwerfen();
       knopf.classList.add('laeuft');
       knopf.setAttribute('aria-label', tx('Aufnahme beenden und senden'));
-      hinweis.textContent = tx('Aufnahme läuft – tippen zum Beenden und Senden.');
+      feld.disabled = true;
+      hinweisEl.textContent = tx('Aufnahme läuft – tippen zum Beenden und Senden.');
     } catch (f) {
       melde(tx('Mikrofon nicht verfügbar'));
     } finally { startet = false; }
   };
-  // Schließen ohne Stopp verwirft die laufende Aufnahme.
+  // Schließen ohne Stopp verwirft die laufende Aufnahme; getippter Text bleibt als Entwurf.
   d.onclose = () => { lauf?.verwerfen(); d.remove(); };
   document.body.append(d);
   d.showModal();
+  pruefe();
 }
-neuKnopf.onclick = oeffneAufnahme;
+
+// Die drei Eingaben über dasselbe Fenster.
+function eingabeNotiz() {
+  oeffneEingabe({ titel: tx('Neue Notiz'), platzhalter: tx('Notiz tippen …'), entwurf: 'entwurf:notiz',
+    senden: (x) => merkeVor({ typ: 'notiz', ...x }) });
+}
+function eingabeAnweisung(eintrag) {
+  oeffneEingabe({ titel: tx('KI-Anweisung'), hinweis: tx('Was soll die KI an dieser Notiz ändern? Danach wertet sie sie neu aus.'),
+    platzhalter: tx('z. B. In zwei Punkte trennen: Mitarbeiter und Kundenportal'), maxText: 500, entwurf: T`entwurf:anweisung:${eintrag}`,
+    senden: (x) => merkeVor({ typ: 'anweisung', eintrag, ...x }) });
+}
+function eingabeAntwort(planung) {
+  oeffneEingabe({ titel: tx('Antworten'), hinweis: tx('Die Antwort wird als neue Runde in die Planung eingearbeitet.'),
+    platzhalter: tx('Antworten auf die offenen Fragen, Ergänzungen, Änderungen …'), entwurf: T`entwurf:${planung}`,
+    senden: (x) => merkeVor({ typ: 'antwort', planung, ...x }) });
+}
+neuKnopf.onclick = eingabeNotiz;
+// Alte Adressen der Eingabeseiten: Detailseite öffnen, dann das Fenster.
+function eingabeVonAdresse(pfad, oeffne) {
+  geheZu(pfad, true);
+  setTimeout(oeffne, 400);
+}
 
 // ---------- Fragen der KI (Drawer): eine Frage nach der anderen, drei Vorschläge oder eigene Antwort ----------
 
@@ -2551,12 +2556,24 @@ function bytesZuB64(buf) {
   return btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
+// Auf-/Zugeklappt der Statuskarten merken: übersteht Nachladen (Aufträge in Arbeit) und Neuladen der Seite.
+const AUF_SCHLUESSEL = 'status-aufgeklappt';
+const aufLesen = () => { try { return JSON.parse(localStorage.getItem(AUF_SCHLUESSEL)) || {}; } catch { return {}; } };
+const aufAttr = (k) => (aufLesen()[k] ? ' open' : '') + ` data-auf="${k}"`;
+document.addEventListener('toggle', (ev) => {
+  const k = ev.target?.dataset?.auf;
+  if (!k) return;
+  const m = aufLesen();
+  if (ev.target.open) m[k] = 1; else delete m[k];
+  try { localStorage.setItem(AUF_SCHLUESSEL, JSON.stringify(m)); } catch { /* nur Komfort */ }
+}, true);
+
 async function zeigeStatus() {
   seite.innerHTML = T`${statusReiter('status')}<p class="leer">Lädt …</p>`;
   const laden = async (vorab) => {
-    let s, g, o;
+    let s, g, o, sy;
     try {
-      [s, g, o] = await Promise.all([apiAbgelegt('/api/status', vorab), apiAbgelegt('/api/geraete', vorab), apiAbgelegt('/api/oauth/apps', vorab).catch(() => ({ apps: [] })), vorab || ladeZaehler()]);
+      [s, g, o, sy] = await Promise.all([apiAbgelegt('/api/status', vorab), apiAbgelegt('/api/geraete', vorab), apiAbgelegt('/api/oauth/apps', vorab).catch(() => ({ apps: [] })), apiAbgelegt('/api/status/system', vorab).catch(() => null), vorab || ladeZaehler()]);
     } catch (f) {
       if (vorab) return;
       if (f instanceof NetzFehler) { if (aktuell?.name === 'status') seite.innerHTML = T('<p class="leer">Offline – der Status ist noch nicht gespeichert.</p>'); return; }
@@ -2579,7 +2596,7 @@ async function zeigeStatus() {
         start += anteil;
         return bogen;
       }).join('') : '';
-      return T`<details class="karte eingangskarte"><summary><span class="zeile kartentitel"><strong>Eingänge</strong><span class="eingangszahl">${s.auftraege}</span></span>
+      return T`<details${aufAttr('eingaenge')} class="karte eingangskarte"><summary><span class="zeile kartentitel"><strong>Eingänge</strong><span class="eingangszahl">${s.auftraege}</span></span>
           ${d.anzahl ? T`<span class="leise">${d.anzahl} Aufnahmen${d.schnitt_groesse ? T` · Ø ${groesse(d.schnitt_groesse)}` : ''}${d.schnitt_sekunden ? T` · Ø ${dauer(d.schnitt_sekunden)} · zusammen ${dauer(d.gesamt_sekunden)}` : ''}</span>` : ''}
           ${auffaellig ? T`<span class="zahlkacheln">${auffaellig}</span>` : ''}</summary>
         <div class="eingangsdetail">${summe ? T`<svg class="ringdiagramm" viewBox="-2 -2 40 40" role="img" aria-label="${esc(teile.map(([n, name]) => `${n} ${name}`).join(', '))}">${ring}</svg>` : ''}
@@ -2606,11 +2623,33 @@ async function zeigeStatus() {
     const aufraeumen = (x) => (x ? T`<div class="leiste aufraeumen">
       ${x.backups ? T`<button class="btn gefahr" data-aufraeumen="backups" data-n="${x.backups}" data-groesse="${x.backups_groesse}">${tx('{0} alte Backups löschen', x.backups)} · ${groesse(x.backups_groesse)}</button>` : T`<button class="btn" disabled>${tx('Keine Backups älter als 7 Tage')}</button>`}
       ${x.versionen ? T`<button class="btn gefahr" data-aufraeumen="versionen" data-n="${x.versionen}" data-groesse="${x.versionen_groesse}">${tx('{0} alte App-Versionen löschen', x.versionen)} · ${groesse(x.versionen_groesse)}</button>` : T`<button class="btn" disabled>${tx('Keine alten App-Versionen')}</button>`}</div>` : '');
-    const speicher = (liste, x) => T`<details class="karte speicherkarte"><summary><span class="zeile kartentitel"><strong>Speicher</strong><span class="eingangszahl">${groesse(liste.reduce((n, p) => n + (p.belegt || 0), 0))}</span></span>${liste.map((p) => T`<span class="speicherzeile"><span class="zeile"><span>${esc(tx(p.name))}</span>${p.fehler ? T`<span class="schlecht">nicht lesbar</span>` : T`<span>${groesse(p.belegt)}</span>`}</span>
+    const speicher = (liste, x) => T`<details${aufAttr('speicher')} class="karte speicherkarte"><summary><span class="zeile kartentitel"><strong>Speicher</strong><span class="eingangszahl">${groesse(liste.reduce((n, p) => n + (p.belegt || 0), 0))}</span></span>${liste.map((p) => T`<span class="speicherzeile"><span class="zeile"><span>${esc(tx(p.name))}</span>${p.fehler ? T`<span class="schlecht">nicht lesbar</span>` : T`<span>${groesse(p.belegt)}</span>`}</span>
         ${p.fehler ? '' : balken(p)}${p.knapp ? T('<span class="hinweis schlecht">Knapp – neue Aufnahmen werden abgewiesen.</span>') : ''}</span>`).join('')}</summary>
       <div class="speicherdetails">${liste.map((p) => T`<div><strong>${esc(tx(p.name))}</strong>
         <div class="pfadzeile leise"><span class="pfad">${esc(p.pfad)}</span>${p.fehler ? '' : T`<span class="frei">frei ${groesse(p.frei)} von ${groesse(p.gesamt)}</span>`}</div>
         ${p.fehler ? T`<div class="hinweis schlecht">nicht lesbar: ${esc(p.fehler)}</div>` : ''}</div>`).join('')}${aufraeumen(x)}</div></details>`;
+    // System: zugeklappt Betriebssystem, CPU- und RAM-Balken; aufgeklappt Maschine, dieser Dienst und die Prozesse mit der höchsten CPU-Last.
+    const system = (x) => {
+      if (!x) return T('<div class="karte"><strong>System</strong> <span class="schlecht">nicht lesbar</span></div>');
+      const c = x.cpu || {}, r = x.ram || {}, d = x.dienst || {}, m = x.system || {};
+      const prozent = (v) => (v == null ? '–' : `${v.toLocaleString(LOCALE)} %`);
+      const zeitraum = (s) => { if (s == null) return '–'; const t = Math.floor(s / 86400), h = Math.floor(s / 3600) % 24, mi = Math.floor(s / 60) % 60; return t ? tx('{0} T {1} Std', t, h) : h ? tx('{0} Std {1} Min', h, mi) : tx('{0} Min', mi); };
+      const gr = (n) => (n == null || n < 0 ? '–' : groesse(n));
+      const ramBelegt = r.gesamt > 0 && r.verfuegbar >= 0 ? r.gesamt - r.verfuegbar : null;
+      const zeile = (name, wert, balken) => T`<span class="speicherzeile"><span class="zeile"><span>${esc(name)}</span><span>${wert}</span></span>${balken}</span>`;
+      const cpuBalken = c.auslastung == null ? '' : T`<meter class="balken${c.auslastung >= 90 ? ' knapp' : ''}" min="0" max="100" value="${c.auslastung}" aria-label="${esc(tx('CPU {0} %', c.auslastung))}"></meter>`;
+      const ramBalken = ramBelegt == null ? '' : T`<meter class="balken${ramBelegt / r.gesamt >= 0.9 ? ' knapp' : ''}" min="0" max="${r.gesamt}" value="${ramBelegt}" aria-label="${esc(tx('{0} von {1} belegt', groesse(ramBelegt), groesse(r.gesamt)))}"></meter>`;
+      const dl = (paare) => T`<dl class="systemliste">${paare.filter(([, v]) => v != null && v !== '').map(([k, v]) => T`<dt>${esc(k)}</dt><dd>${esc(String(v))}</dd>`).join('')}</dl>`;
+      const swap = r.swap_gesamt > 0 ? tx('{0} von {1} belegt', gr(r.swap_gesamt - r.swap_frei), gr(r.swap_gesamt)) : tx('keiner');
+      return T`<details${aufAttr('system')} class="karte speicherkarte systemkarte"><summary><span class="zeile kartentitel"><strong>System</strong><span class="leise">${esc(m.os || tx('unbekannt'))}</span></span>
+          ${zeile(tx('CPU'), prozent(c.auslastung), cpuBalken)}${zeile(tx('RAM'), ramBelegt == null ? '–' : T`${groesse(ramBelegt)} / ${groesse(r.gesamt)}`, ramBalken)}</summary>
+        <div class="speicherdetails">
+          <div><strong>${esc(tx('Maschine'))}</strong>${dl([[tx('Betriebssystem'), m.os], [tx('Kernel'), m.kernel], [tx('Architektur'), m.architektur], [tx('Container'), m.container], [tx('Hostname'), m.hostname], [tx('Läuft seit'), zeitraum(m.laufzeit_s)],
+            [tx('CPU'), c.modell], [tx('Kerne'), c.kerne], [tx('Last 1/5/15 min'), (c.load || []).join(' / ')], [tx('Swap'), swap], [tx('Prozesse'), x.prozesse_anzahl]])}</div>
+          <div><strong>${esc(tx('Dieser Dienst'))}</strong>${dl([[tx('Version'), d.version], [tx('CPU'), prozent(d.cpu)], [tx('RAM (RSS)'), gr(d.rss)], [tx('Go-Heap'), gr(d.heap)], [tx('Threads'), d.threads], [tx('Goroutinen'), d.goroutinen], [tx('Go'), d.go], [tx('PID'), d.pid], [tx('Läuft seit'), zeitraum(d.laufzeit_s)]])}</div>
+          ${(x.prozesse || []).length ? T`<div><strong>${esc(tx('Prozesse nach CPU'))}</strong><ul class="prozessliste">${x.prozesse.map((p) => T`<li><span class="pfad">${esc(p.name)} <span class="leise">${p.pid}</span></span><span>${prozent(p.cpu)} · ${gr(p.rss)}</span></li>`).join('')}</ul></div>` : ''}
+        </div></details>`;
+    };
     const joplin = !s.joplin.aktiv ? tx('ausgeschaltet') : s.joplin.fehler ? T`<strong>Fehler:</strong> ${esc(s.joplin.fehler)}` : T`erreichbar${s.joplin.offene_planungen ? T`, ${s.joplin.offene_planungen} Planung(en) noch nicht übertragen` : ''}`;
     const updateKarte = neueVersion ? T`<a class="karte updatekarte" href="/status/update">${updateSymbol}<span><strong>Update ${esc(versionNr(neueVersion))} verfügbar</strong><br><span class="leise">Änderungen ansehen und installieren</span></span></a>` : '';
     seite.innerHTML = T`${statusReiter('status')}<h1>Status</h1>${updateKarte}
@@ -2624,6 +2663,7 @@ async function zeigeStatus() {
       ${s.joplin.aktiv ? T('<div class="leiste"><button class="btn klein" data-a="pruefen">Joplin jetzt prüfen</button></div>') : ''}
       ${eingaenge(s)}
       ${(s.speicher || []).length ? speicher(s.speicher, s.aufraeumen) : ''}
+      ${system(sy)}
       ${s.probleme.length ? T`<h2>Aufträge mit Fehlern</h2>${s.fehlgeschlagen ? T('<div class="leiste"><button class="btn gefahr" data-a="fehler-weg">Alle fehlerhaften löschen</button></div>') : ''}${s.probleme.map(karte).join('')}` : ''}
       <h2>Benachrichtigungen</h2>
       ${!pushDa ? T('<p class="leise">Dieser Browser unterstützt keine Benachrichtigungen. Auf dem iPhone die App erst zum Home-Bildschirm hinzufügen.</p>')
@@ -2639,6 +2679,8 @@ async function zeigeStatus() {
         <div class="leise">verbunden ${zeit(x.angelegt)}${x.zuletzt ? T` · zuletzt genutzt ${zeit(x.zuletzt)}` : ''}</div></div>`).join('') : T('<p class="leise">Keine. Claude, ChatGPT & Co. verbinden sich über die Adresse <code>/mcp</code> dieses Dienstes und fragen hier nach Freigabe.</p>')}
       <h2>${esc(tx('Kalender-Abo'))}</h2>
       <a class="karte" href="/status/kalender"><strong>${esc(tx('Termine in Google, Apple oder Outlook abonnieren'))}</strong><br><span class="leise">${esc(tx('Link und Anleitung'))}</span></a>
+      <h2>Zugang und Sicherheit</h2>
+      <a class="karte" href="/status/zugang"><strong>API-Token und Wiederherstellungscode</strong><br><span class="leise">Maschinenzugang für Skripte, Code für deine verschlüsselten Daten</span></a>
       <div class="leiste"><button class="btn gefahr" data-a="abmelden">Abmelden</button></div>
       ${spendenLink ? T`<section class="spendenbereich"><p><strong>${esc(tx('Gefällt dir die App?'))}</strong> <span class="leise">${esc(tx('Sie ist kostenlos und quelloffen. Wer mag, unterstützt die Entwicklung mit einer kleinen Spende auf Ko-fi.'))}</span></p>
         ${spendenKnopf()}</section>` : ''}`;
@@ -3086,10 +3128,12 @@ async function zeigeErsteinrichtung() {
   // Sprache: die Seite läuft schon in der gewählten (Browser, ?lang= oder gespeichert); Umschalten lädt neu.
   for (const f of d.felder) if (f.key === 'LANGUAGE') f.wert = SPRACHE;
   seite.innerHTML = T`<h1>Ersteinrichtung</h1>
-    <p class="leise">Alle Werte sind mit Vorgaben gefüllt; Pflichtfelder tragen *. Webhook-Token und Signatur-Secret sind neu erzeugt – nach der Einrichtung stehen sie unter Status → Pebble zum Kopieren. Später änderbar unter Status → Einstellungen.</p>
+    <p class="leise">Alle Werte sind mit Vorgaben gefüllt; Pflichtfelder tragen *. Den Zugang für die Pebble-App findest du nach der Einrichtung unter Status → Pebble-App. Später änderbar unter Status → Konfiguration.</p>
     ${d.fehler ? T`<div class="hinweis schlecht">Die gespeicherten Einstellungen sind ungültig: ${esc(d.fehler)}</div>` : ''}
     ${einstellungsFormular(d.felder, { assistent: true })}<div id="ergebnis"></div>`;
   const form = seite.querySelector('form');
+  // Erster Nutzer (Admin): sein Name für „Hallo …“.
+  if (!d.eingerichtet) form.insertAdjacentHTML('afterbegin', T`<fieldset><legend>Dein Zugang</legend><label for="f-name">Dein Name *</label><input id="f-name" name="_name" autocomplete="given-name" maxlength="40" required><p class="leise hilfe">Du bist der erste Nutzer und Admin. Weitere Nutzer lädst du später unter Einstellungen → Nutzer ein.</p></fieldset>`);
   const sprache = form.querySelector('[name=LANGUAGE]');
   if (sprache) sprache.onchange = () => { const u = new URL(location.href); u.searchParams.set('lang', sprache.value); location.replace(u); };
   form.onclick = async (ev) => {
@@ -3108,7 +3152,8 @@ async function zeigeErsteinrichtung() {
     const knopf = form.querySelector('[type=submit]');
     knopf.disabled = true;
     try {
-      const r = await api('/api/ersteinrichtung', { method: 'POST', body: { code, werte: einstellungsWerte(form) } });
+      const { _name: name = '', ...werte } = einstellungsWerte(form);
+      const r = await api('/api/ersteinrichtung', { method: 'POST', body: { code, name, werte } });
       form.hidden = true;
       const box = document.getElementById('ergebnis');
       box.innerHTML = T`<div class="hinweis gut">Gespeichert. Der Dienst startet neu …</div>`;
@@ -3132,9 +3177,27 @@ const statusReiter = (aktiv) => T`<nav class="btn-group unter reiter4" aria-labe
 
 // Konfiguration: je Wert „?“ (Erklärung darunter ein-/ausklappen) und ✎ (eigene Bearbeitungsseite für diesen Wert).
 const STIFT = T('<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16zM14 6l4 4" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/></svg>');
+// ladeEinstellungen: eigene Werte, bei Admins dazu die des Systems (je Feld „persoenlich“).
+async function ladeEinstellungen() {
+  const [eigen, system] = await Promise.all([api('/api/einstellungen/persoenlich'), istAdmin() ? api('/api/einstellungen') : { felder: [] }]);
+  return { felder: [...eigen.felder, ...system.felder] };
+}
+// speichereEinstellungen: persönliche Werte gelten sofort, Werte des Systems nach einem Neustart des Dienstes.
+async function speichereEinstellungen(werte, persoenlich) {
+  if (persoenlich) {
+    await api('/api/einstellungen/persoenlich', { method: 'PUT', body: { werte } });
+    melde(tx('Gespeichert'));
+    await new Promise((r) => setTimeout(r, 1200)); // Daten des Nutzers werden mit den neuen Werten neu geöffnet
+    return;
+  }
+  await api('/api/einstellungen', { method: 'PUT', body: { werte } });
+  melde(tx('Gespeichert – Dienst startet neu'));
+  await warteAufNeustart();
+}
+
 async function zeigeEinstellungen() {
   seite.innerHTML = T`${statusReiter('einstellungen')}<p class="leer">Lädt …</p>`;
-  const d = await api('/api/einstellungen');
+  const d = await ladeEinstellungen();
   if (aktuell?.name !== 'einstellungen') return;
   // Joplin-Zugang wird unter Status → Joplin eingerichtet; hier steht nur der Schalter.
   d.felder = d.felder.filter((f) => f.gruppe !== 'Joplin' || f.key === 'JOPLIN_ENABLED');
@@ -3146,9 +3209,12 @@ async function zeigeEinstellungen() {
       <a class="konfedit" href="/status/einstellungen/${f.key}" aria-label="${esc(tx('{0} bearbeiten', tx(f.name)))}">${STIFT}</a>
       <span class="konfwert">${wert(f)}</span>
       <p class="konfinfo" id="hilfe-${f.key}" hidden>${esc(f.hilfe ? tx(f.hilfe) : tx('Keine Erklärung hinterlegt.'))}${f.vorgabe ? T` <span class="leise">Vorgabe: ${esc(f.vorgabe)}</span>` : ''}</p></div>`;
+  const teil = (persoenlich) => gruppen.filter((g) => d.felder.some((f) => f.gruppe === g && !!f.persoenlich === persoenlich))
+    .map((g) => T`<h3>${esc(tx(g))}</h3><div class="karte konfliste">${d.felder.filter((f) => f.gruppe === g && !!f.persoenlich === persoenlich).map(zeile).join('')}</div>`).join('');
   seite.innerHTML = T`${statusReiter('einstellungen')}<h1>Konfiguration</h1>
-    <p class="leise">? erklärt einen Wert, ✎ ändert ihn. Nach dem Speichern startet der Dienst kurz neu.</p>
-    ${gruppen.map((g) => T`<h2>${esc(tx(g))}</h2><div class="karte konfliste">${d.felder.filter((f) => f.gruppe === g).map(zeile).join('')}</div>`).join('')}`;
+    <p class="leise">? erklärt einen Wert, ✎ ändert ihn.</p>
+    <h2>Persönlich</h2><p class="leise">Gilt nur für dich, sofort nach dem Speichern.</p>${teil(true)}
+    ${istAdmin() ? T`<h2>System</h2><p class="leise">Gilt für alle Nutzer; nach dem Speichern startet der Dienst kurz neu.</p>${teil(false)}` : ''}`;
   seite.onclick = (ev) => {
     const b = ev.target.closest('[data-hilfe]');
     if (!b) return;
@@ -3162,7 +3228,7 @@ async function zeigeEinstellungen() {
 // Joplin einrichten und testen (Reiter nur bei JOPLIN_ENABLED = aktiv).
 async function zeigeJoplin() {
   seite.innerHTML = T`${statusReiter('joplin')}<p class="leer">Lädt …</p>`;
-  const [d, st] = await Promise.all([api('/api/einstellungen'), api('/api/status').catch(() => null)]);
+  const [d, st] = await Promise.all([api('/api/einstellungen/persoenlich'), api('/api/status').catch(() => null)]);
   if (aktuell?.name !== 'joplin') return;
   const felder = d.felder.filter((f) => f.gruppe === 'Joplin' && f.key !== 'JOPLIN_ENABLED');
   const j = st?.joplin;
@@ -3194,9 +3260,7 @@ async function zeigeJoplin() {
     const knopf = form.querySelector('[type=submit]');
     knopf.disabled = true;
     try {
-      await api('/api/einstellungen', { method: 'PUT', body: { werte: werte() } });
-      melde(tx('Gespeichert – Dienst startet neu'));
-      await warteAufNeustart();
+      await speichereEinstellungen(werte(), true);
       geheZu('/status/joplin', true);
     } catch (f) { knopf.disabled = false; melde(f.message); }
   };
@@ -3251,7 +3315,7 @@ async function zeigeEinstellungBearbeiten(key) {
   const zurueckParam = new URLSearchParams(location.search).get('zurueck') || '';
   const zurueck = /^\/status\/[a-z/]*$/.test(zurueckParam) ? zurueckParam : '/status/einstellungen';
   seite.innerHTML = T`${statusReiter('einstellungen')}<p class="leer">Lädt …</p>`;
-  const d = await api('/api/einstellungen');
+  const d = await ladeEinstellungen();
   if (aktuell?.name !== 'einstellungBearbeiten') return;
   const f = d.felder.find((x) => x.key === key);
   if (!f) { seite.innerHTML = T`${statusReiter('einstellungen')}<div class="hinweis schlecht">Unbekannte Einstellung.</div>`; return; }
@@ -3267,9 +3331,7 @@ async function zeigeEinstellungBearbeiten(key) {
     const knopf = form.querySelector('[type=submit]');
     knopf.disabled = true;
     try {
-      await api('/api/einstellungen', { method: 'PUT', body: { werte } });
-      melde(tx('Gespeichert – Dienst startet neu'));
-      await warteAufNeustart();
+      await speichereEinstellungen(werte, !!f.persoenlich);
       if (key === 'LANGUAGE') { location.replace(zurueck); return; }
       await ladeZaehler();
       geheZu(zurueck, true);
@@ -3280,6 +3342,189 @@ async function zeigeEinstellungBearbeiten(key) {
   };
 }
 
+
+// ---------- Nutzer: Willkommen, Wiederherstellen, Zugang, Verwaltung (Admin) ----------
+
+// Willkommen: nach der Einrichtung oder dem Umzug auf 3.0 – Name (falls noch leer) und einmalig der Wiederherstellungscode.
+async function zeigeWillkommen() {
+  seite.innerHTML = T('<p class="leer">Lädt …</p>');
+  const d = await api('/api/wiederherstellungscode');
+  if (aktuell?.name !== 'willkommen') return;
+  if (!d.code) { geheZu('/', true); return; }
+  seite.innerHTML = T`<h1>${d.name ? esc(tx('Hallo {0}', d.name)) : esc(tx('Willkommen'))}</h1>
+    <p>Deine Notizen, Listen und Aufnahmen liegen verschlüsselt mit einem eigenen Schlüssel. Fehlt dieser Schlüssel einmal (z. B. nach einem Umzug auf einen neuen Server), öffnet nur dieser Code deine Daten wieder.</p>
+    <div class="karte"><div class="leise">Dein Wiederherstellungscode</div><code class="kopierbar" id="wcode">${esc(d.code)}</code>
+      <div class="leiste"><button class="btn" type="button" data-kopieren>Kopieren</button></div></div>
+    <div class="hinweis warn">Schreib ihn auf oder leg ihn in deinen Passwort-Manager. Er wird nur jetzt angezeigt.</div>
+    <form class="einstellungen" novalidate>
+      ${d.name ? '' : T('<label for="w-name">Dein Name *</label><input id="w-name" name="name" maxlength="40" autocomplete="given-name" required>')}
+      <label class="schalter"><input type="checkbox" name="notiert"> Ich habe den Code sicher notiert</label>
+      <div class="leiste"><button class="btn haupt" type="submit">Weiter</button></div></form>`;
+  seite.querySelector('[data-kopieren]').onclick = async () => {
+    try { await navigator.clipboard.writeText(d.code); melde(tx('Code kopiert')); } catch { melde(tx('Kopieren nicht möglich – Code markieren und kopieren')); }
+  };
+  const form = seite.querySelector('form');
+  form.onsubmit = async (ev) => {
+    ev.preventDefault();
+    if (!form.notiert.checked) { melde(tx('Bitte bestätigen, dass der Code notiert ist')); return; }
+    const knopf = form.querySelector('[type=submit]');
+    knopf.disabled = true;
+    try {
+      await api('/api/wiederherstellungscode/notiert', { method: 'POST', body: { name: form.name?.value || '', notiert: true } });
+      const s = await api('/api/sitzung');
+      merkeIch(s);
+      maleMenue();
+      geheZu('/', true);
+    } catch (f) { knopf.disabled = false; melde(f.message); }
+  };
+}
+
+// Wiederherstellen: die eigenen Daten sind gesperrt (Schlüsseldatei fehlt) – mit dem Code wieder öffnen.
+async function zeigeWiederherstellen() {
+  const s = await api('/api/sitzung').catch(() => ({}));
+  if (aktuell?.name !== 'wiederherstellen') return;
+  if (!s.gesperrt) { geheZu('/', true); return; }
+  if (s.gesperrt === 'gesperrt') {
+    seite.innerHTML = T`<h1>Zugang gesperrt</h1><div class="hinweis schlecht">Dein Zugang ist vom Admin gesperrt. Bitte wende dich an ihn.</div>
+      <div class="leiste"><button class="btn" data-menue-abmelden-seite>Abmelden</button></div>`;
+  } else {
+    seite.innerHTML = T`<h1>Daten wiederherstellen</h1>
+      <p>Der Schlüssel zu deinen Daten fehlt auf diesem Server (z. B. nach dem Wiederherstellen eines Backups auf einem neuen Server). Gib deinen Wiederherstellungscode ein, um sie wieder zu öffnen.</p>
+      <form class="einstellungen" novalidate><label for="r-code">Wiederherstellungscode</label>
+        <input id="r-code" name="code" autocomplete="off" spellcheck="false" placeholder="XXXXX-XXXXX-XXXXX-XXXXX-XXXXXX">
+        <div class="leiste"><button class="btn haupt" type="submit">Öffnen</button></div></form>`;
+    const form = seite.querySelector('form');
+    form.onsubmit = async (ev) => {
+      ev.preventDefault();
+      const knopf = form.querySelector('[type=submit]');
+      knopf.disabled = true;
+      try {
+        await api('/api/wiederherstellen', { method: 'POST', body: { code: form.code.value } });
+        melde(tx('Daten wieder geöffnet'));
+        geheZu('/', true);
+      } catch (f) { knopf.disabled = false; melde(f.message); }
+    };
+  }
+  const ab = seite.querySelector('[data-menue-abmelden-seite]');
+  if (ab) ab.onclick = async () => { await api('/api/auth/abmelden', { method: 'POST' }).catch(() => {}); await vergissGeraet(); geheZu('/anmelden', true); };
+}
+
+// Zugang und Sicherheit: API-Token (Maschinenzugang) und Wiederherstellungscode – Ansicht mit Aktionen.
+async function zeigeZugang() {
+  seite.innerHTML = T('<p class="leer">Lädt …</p>');
+  const laden = async () => {
+    const t = await api('/api/zugang/api');
+    if (aktuell?.name !== 'zugang') return;
+    seite.innerHTML = T`<p><a class="btn klein" href="/status">← Status</a></p><h1>Zugang und Sicherheit</h1>
+      <h2>API-Token</h2>
+      <p class="leise">Für Skripte und Werkzeuge (Authorization: Bearer): Listen lesen, einsortieren, abhaken. Gilt nur für deine Daten.</p>
+      <div class="karte">${t.aktiv ? T`<strong>Aktiv</strong><div class="leise">angelegt ${zeit(t.angelegt)}${t.zuletzt ? T` · zuletzt genutzt ${zeit(t.zuletzt)}` : ''}</div>` : T('<span class="leise">Kein Token – Maschinenzugang aus.</span>')}</div>
+      <div id="neuestoken"></div>
+      <div class="leiste"><button class="btn" data-z="neu">${t.aktiv ? tx('Neues Token erzeugen') : tx('Token erzeugen')}</button>${t.aktiv ? T('<button class="btn gefahr" data-z="aus">Abschalten</button>') : ''}</div>
+      <h2>Wiederherstellungscode</h2>
+      <p class="leise">Öffnet deine verschlüsselten Daten, falls der Schlüssel auf dem Server fehlt. Ein neuer Code macht den alten ungültig.</p>
+      <div class="leiste"><a class="btn" href="/status/zugang/code">Neuen Code erzeugen</a></div>`;
+  };
+  aktuell.neuLaden = laden;
+  await laden();
+  seite.onclick = async (ev) => {
+    const b = ev.target.closest('[data-z]');
+    if (!b) return;
+    if (b.dataset.z === 'aus' && !confirm(tx('Maschinenzugang abschalten? Skripte mit dem Token funktionieren dann nicht mehr.'))) return;
+    if (b.dataset.z === 'neu' && !confirm(tx('Neues Token erzeugen? Ein bisheriges gilt danach nicht mehr.'))) return;
+    b.disabled = true;
+    try {
+      if (b.dataset.z === 'aus') { await api('/api/zugang/api', { method: 'DELETE' }); await laden(); return; }
+      const r = await api('/api/zugang/api', { method: 'POST' });
+      await laden();
+      document.getElementById('neuestoken').innerHTML = T`<div class="karte"><div class="leise">Neues Token – nur jetzt sichtbar</div><code class="kopierbar">${esc(r.token)}</code></div>`;
+    } catch (f) { b.disabled = false; melde(f.message); }
+  };
+  aufraeumen = () => { seite.onclick = null; };
+}
+
+// Neuer Wiederherstellungscode: erst bestätigen, dann einmal zeigen; Willkommen bestätigt das Notieren.
+async function zeigeNeuerCode() {
+  seite.innerHTML = T`<p><a class="btn klein" href="/status/zugang">← Zugang</a></p><h1>Neuer Wiederherstellungscode</h1>
+    <p>Der bisherige Code gilt danach nicht mehr. Den neuen Code siehst du nur einmal.</p>
+    <div class="leiste"><a class="btn" href="/status/zugang">Abbrechen</a><button class="btn haupt" data-neu>Neuen Code erzeugen</button></div>`;
+  seite.querySelector('[data-neu]').onclick = async (ev) => {
+    ev.target.disabled = true;
+    try { await api('/api/wiederherstellungscode/neu', { method: 'POST' }); geheZu('/willkommen', true); } catch (f) { ev.target.disabled = false; melde(f.message); }
+  };
+}
+
+const ROLLE = { admin: 'Admin', user: 'Nutzer' };
+const SPERRE = { gesperrt: 'gesperrt', schluessel: 'Schlüssel fehlt', fehler: 'Daten nicht lesbar' };
+
+// Nutzer (Admin): Liste mit Rolle, letzter Anmeldung, Kosten und Speicher – nie Inhalte.
+async function zeigeNutzer() {
+  seite.innerHTML = T('<p class="leer">Lädt …</p>');
+  const d = await api('/api/admin/nutzer');
+  if (aktuell?.name !== 'nutzer') return;
+  seite.innerHTML = T`<h1>Nutzer</h1>
+    <p class="leise">Jeder sieht nur seine eigenen Daten – auch Admins nicht die der anderen. Hier stehen nur Rolle, Anmeldung und Verbrauch.</p>
+    ${d.nutzer.map((u) => T`<div class="karte"><div class="zeile"><span><strong>${esc(u.name || tx('(ohne Namen)'))}</strong> <span class="badge neutral">${esc(tx(ROLLE[u.rolle] || u.rolle))}</span>${u.id === d.ich ? T(' <span class="badge neutral">du</span>') : ''}${u.gesperrt ? T` <span class="badge fehler">${esc(tx(SPERRE[u.gesperrt] || u.gesperrt))}</span>` : ''}</span>
+        <a class="konfedit" href="/admin/nutzer/${u.id}/bearbeiten" aria-label="${esc(tx('{0} bearbeiten', u.name))}">${STIFT}</a></div>
+      <div class="leise">${u.zuletzt ? T`zuletzt angemeldet ${zeit(u.zuletzt)}` : tx('noch nie angemeldet')} · KI-Kosten 30 Tage: ${u.kosten_30_tage != null ? esc(u.kosten_30_tage.toFixed(2)) + ' $' : '–'} · Daten ${groesse(u.daten_bytes)} · Aufnahmen ${groesse(u.audio_bytes)}</div></div>`).join('')}
+    <div class="leiste"><a class="btn haupt" href="/admin/nutzer/neu">Nutzer einladen</a></div>`;
+}
+
+// Einladen (Admin): Name und Rolle; der Link legt den Nutzer mit seinem ersten Passkey an.
+async function zeigeNutzerNeu() {
+  seite.innerHTML = T`<p><a class="btn klein" href="/admin/nutzer">← Nutzer</a></p><h1>Nutzer einladen</h1>
+    <form class="einstellungen" novalidate><label for="n-name">Name *</label><input id="n-name" name="name" maxlength="40" required>
+      <label for="n-rolle">Rolle</label><select id="n-rolle" name="rolle"><option value="user">${esc(tx('Nutzer'))}</option><option value="admin">${esc(tx('Admin'))}</option></select>
+      <p class="leise hilfe">Admins verwalten zusätzlich Updates, Backups, Systemeinstellungen und Nutzer – die Daten anderer sehen auch sie nicht.</p>
+      <div class="leiste"><a class="btn" href="/admin/nutzer">Abbrechen</a><button class="btn haupt" type="submit">Einladung erzeugen</button></div></form><div id="einladung"></div>`;
+  const form = seite.querySelector('form');
+  form.name.focus();
+  form.onsubmit = async (ev) => {
+    ev.preventDefault();
+    const knopf = form.querySelector('[type=submit]');
+    knopf.disabled = true;
+    try {
+      const r = await api('/api/admin/nutzer/einladung', { method: 'POST', body: { name: form.name.value, rolle: form.rolle.value } });
+      form.hidden = true;
+      document.getElementById('einladung').innerHTML = T`<div class="hinweis gut">Einladung für ${esc(form.name.value)} erzeugt (${r.gueltig_tage} Tage gültig, einmal nutzbar).</div>
+        <div class="karte"><code class="kopierbar">${esc(r.link)}</code><div class="leiste"><button class="btn haupt" data-kopieren>Link kopieren</button></div></div>
+        <p class="leise">Den Link im Browser des neuen Nutzers öffnen: dort legt er seinen Passkey an und bekommt seinen Wiederherstellungscode.</p>
+        <div class="leiste"><a class="btn" href="/admin/nutzer">Zur Liste</a></div>`;
+      seite.querySelector('[data-kopieren]').onclick = async () => { try { await navigator.clipboard.writeText(r.link); melde(tx('Link kopiert')); } catch { melde(tx('Kopieren nicht möglich – Link markieren und kopieren')); } };
+    } catch (f) { knopf.disabled = false; melde(f.message); }
+  };
+}
+
+// Nutzer bearbeiten (Admin): Name, Rolle, Sperre; Löschen mit Bestätigung durch den Namen.
+async function zeigeNutzerBearbeiten(id) {
+  seite.innerHTML = T('<p class="leer">Lädt …</p>');
+  const [u, liste] = await Promise.all([api(`/api/admin/nutzer/${id}`), api('/api/admin/nutzer')]);
+  if (aktuell?.name !== 'nutzerBearbeiten') return;
+  const selbst = u.id === liste.ich;
+  seite.innerHTML = T`<p><a class="btn klein" href="/admin/nutzer">← Nutzer</a></p><h1>${esc(u.name || tx('Nutzer'))}</h1>
+    <form class="einstellungen" novalidate><label for="b-name">Name *</label><input id="b-name" name="name" maxlength="40" value="${esc(u.name)}" required>
+      <label for="b-rolle">Rolle</label><select id="b-rolle" name="rolle"><option value="user"${u.rolle === 'user' ? ' selected' : ''}>${esc(tx('Nutzer'))}</option><option value="admin"${u.rolle === 'admin' ? ' selected' : ''}>${esc(tx('Admin'))}</option></select>
+      ${selbst ? '' : T`<label class="schalter"><input type="checkbox" name="gesperrt"${u.gesperrt === 'gesperrt' ? ' checked' : ''}> Gesperrt (keine Anmeldung, keine Verarbeitung; Daten bleiben)</label>`}
+      <div class="leiste"><a class="btn" href="/admin/nutzer">Abbrechen</a><button class="btn haupt" type="submit">Speichern</button></div></form>
+    ${selbst ? '' : T`<h2>Löschen</h2><p class="leise">Löscht Daten, Aufnahmen und Schlüssel dieses Nutzers unwiderruflich. Zur Bestätigung den Namen eingeben.</p>
+      <form class="einstellungen" id="loeschen" novalidate><label for="l-name">Name</label><input id="l-name" name="bestaetigung" autocomplete="off">
+        <div class="leiste"><button class="btn gefahr" type="submit">Endgültig löschen</button></div></form>`}`;
+  const form = seite.querySelector('form');
+  form.onsubmit = async (ev) => {
+    ev.preventDefault();
+    const knopf = form.querySelector('[type=submit]');
+    knopf.disabled = true;
+    const body = { name: form.name.value, rolle: form.rolle.value };
+    if (form.gesperrt) body.gesperrt = form.gesperrt.checked;
+    try { await api(`/api/admin/nutzer/${id}`, { method: 'PUT', body }); melde(tx('Gespeichert')); geheZu('/admin/nutzer', true); } catch (f) { knopf.disabled = false; melde(f.message); }
+  };
+  const loeschen = document.getElementById('loeschen');
+  if (loeschen) loeschen.onsubmit = async (ev) => {
+    ev.preventDefault();
+    if (!confirm(tx('{0} endgültig löschen?', u.name))) return;
+    try { await api(`/api/admin/nutzer/${id}`, { method: 'DELETE', body: { bestaetigung: loeschen.bestaetigung.value } }); melde(tx('Gelöscht')); geheZu('/admin/nutzer', true); } catch (f) { melde(f.message); }
+  };
+}
 
 // ---------- Updates: neue Versionen von GitHub mit Änderungsliste, Installation über den Updater ----------
 
@@ -3883,7 +4128,7 @@ async function zeigeEinrichten() {
 // ---------- Menü (Hamburger links): drei Hauptseiten, darunter ihre Unterseiten ----------
 
 // Seite → Bereich im Menü.
-const BEREICH = { backupHochladen: 'status', kalender: 'status', ring: 'status', ringTauschen: 'status', ringBearbeiten: 'status', joplin: 'status', einstellungBearbeiten: 'status', darstellung: 'status', geraetNeu: 'status', tagsVerwalten: 'status', kosten: 'status', papierkorb: 'status', update: 'status', backups: 'status', einstellungen: 'status', einstellungenBearbeiten: 'status', pebble: 'status', gedaechtnis: 'status', gedaechtnisBearbeiten: 'status', liste: 'listen', verschieben: 'listen', listeBearbeiten: 'listen', gruppeBearbeiten: 'listen', eintrag: 'verlauf', planung: 'verlauf', tags: 'verlauf', antwort: 'verlauf', umhaengen: 'verlauf', wortlaut: 'verlauf', einsortieren: 'verlauf', suche: 'verlauf' };
+const BEREICH = { zugang: 'status', zugangCode: 'status', nutzer: 'status', nutzerNeu: 'status', nutzerBearbeiten: 'status', backupHochladen: 'status', kalender: 'status', ring: 'status', ringTauschen: 'status', ringBearbeiten: 'status', joplin: 'status', einstellungBearbeiten: 'status', darstellung: 'status', geraetNeu: 'status', tagsVerwalten: 'status', kosten: 'status', papierkorb: 'status', update: 'status', backups: 'status', einstellungen: 'status', einstellungenBearbeiten: 'status', pebble: 'status', gedaechtnis: 'status', gedaechtnisBearbeiten: 'status', liste: 'listen', verschieben: 'listen', listeBearbeiten: 'listen', gruppeBearbeiten: 'listen', eintrag: 'verlauf', planung: 'verlauf', tags: 'verlauf', antwort: 'verlauf', umhaengen: 'verlauf', wortlaut: 'verlauf', einsortieren: 'verlauf', suche: 'verlauf' };
 const lokal = (k, v = '') => { try { return localStorage.getItem(k) ?? v; } catch { return v; } };
 function maleMenue() {
   const name = aktuell?.name || '';
@@ -3906,9 +4151,10 @@ function maleMenue() {
     { id: 'verlauf', name: tx('Verlauf'), href: '/', setze: ['verlauf-art', 'alles'], unter: ARTEN.map(([a, n]) => ({ name: a === 'termin' ? tx('Termine') : n, href: '/', setze: ['verlauf-art', a], an: name === 'verlauf' && art === a, extra: (a === 'fragen' ? '' : neuZahl(neuZahlen[a])) + zahl(zahlen[a] ?? 0, a !== 'fragen') })) },
     { id: 'listen', name: tx('Listen'), href: '/listen', unter: gruppen.map(([g, offen, neu]) => ({ name: gruppenTitel(g), href: gruppenPfad(g), an: !!gruppe && gruppe.toLowerCase() === g.toLowerCase(), extra: neuZahl(neu) + zahl(offen, true) })) },
     { id: 'status', name: tx('Einstellungen'), href: '/status', unter: [
-      { name: tx('Status'), href: '/status', an: ['status', 'pebble', 'joplin', 'kalender', 'einstellungen', 'einstellungBearbeiten', 'geraetNeu', 'darstellung'].includes(name), extra: audioFehler ? T` <span class="zaehler fehler" title="${tx('{0} Aufnahmen ohne Eintrag', audioFehler)}">${audioFehler}</span>` : '' },
-      { name: tx('Updates'), href: '/status/update', an: name === 'update', extra: neueVersion ? ` ${updateSymbol}` : '' },
-      { name: tx('Backups'), href: '/status/backups', an: name === 'backups' },
+      { name: tx('Status'), href: '/status', an: ['status', 'pebble', 'joplin', 'kalender', 'einstellungen', 'einstellungBearbeiten', 'geraetNeu', 'darstellung', 'zugang', 'zugangCode'].includes(name), extra: audioFehler ? T` <span class="zaehler fehler" title="${tx('{0} Aufnahmen ohne Eintrag', audioFehler)}">${audioFehler}</span>` : '' },
+      ...(istAdmin() ? [{ name: tx('Updates'), href: '/status/update', an: name === 'update', extra: neueVersion ? ` ${updateSymbol}` : '' },
+        { name: tx('Backups'), href: '/status/backups', an: name === 'backups' },
+        { name: tx('Nutzer'), href: '/admin/nutzer', an: ['nutzer', 'nutzerNeu', 'nutzerBearbeiten'].includes(name) }] : []),
       { name: tx('Gedächtnis'), href: '/status/gedaechtnis', an: name === 'gedaechtnis' || name === 'gedaechtnisBearbeiten', extra: zahl(offeneVorschlaege) },
       { name: tx('Tags'), href: '/status/tags', an: name === 'tagsVerwalten', extra: zahl(tagZahl, true) },
       { name: tx('KI-Kosten'), href: '/status/kosten', an: name === 'kosten' },
@@ -3918,13 +4164,13 @@ function maleMenue() {
   // Verlauf-Filter ohne Einträge (Zähler 0) sind nicht anklickbar: der Verlauf fiele sonst auf „Alles“ zurück.
   const link = (k, x) => (x.leer && !x.an ? T`<span class="${k} gesperrt" aria-disabled="true"><span>${esc(x.name)}</span>${x.extra || ''}</span>` : linkAktiv(k, x));
   const linkAktiv = (k, x) => T`<a class="${k}${x.an ? ' aktiv' : ''}" href="${x.href}"${x.setze ? T` data-setze="${x.setze[0]}" data-wert="${esc(x.setze[1])}"` : ''}${x.an ? ' aria-current="page"' : ''}><span>${esc(x.name)}</span>${x.extra || ''}</a>`;
-  nav.innerHTML = T`<div class="menuekopf"><span class="marke">Sprachnotizen</span><button type="button" class="btn klein rund" data-menue-zu aria-label="Menü schließen">×</button></div>
+  nav.innerHTML = T`<div class="menuekopf"><span class="marke">${ich.name ? esc(tx('Hallo {0}', ich.name)) : 'Sprachnotizen'}</span><button type="button" class="btn klein rund" data-menue-zu aria-label="Menü schließen">×</button></div>
     ${teile.map((t) => T`<div class="menuegruppe">${link('menuehaupt', { ...t, an: bereich === t.id })}${t.unter.map((u) => link('menueunter', u)).join('')}</div>`).join('')}
     <div class="menuegruppe"><button type="button" class="menueunter abmelden" data-menue-abmelden><span>Abmelden</span></button></div>
     <div class="menuefuss">${ringBalkenHtml()}${spendenLink ? spendenKnopf() : ''}<div class="menuefusszeile">${appVersion ? T`<a href="/status/update">Version ${esc(versionNr(appVersion))}${appKanal ? ` · ${esc(tx(appKanal))}` : ''}</a>` : '<span></span>'}<a class="themeknopf" href="/status/darstellung" title="Theme" aria-label="Theme"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 3a9 9 0 0 0 0 18z" fill="currentColor"/></svg></a></div></div>`;
   setzeBalken(nav);
   const punkt = menueKnopf.querySelector('.punkt');
-  punkt.hidden = !neueVersion && !offeneVorschlaege && !audioFehler;
+  punkt.hidden = !(neueVersion && istAdmin()) && !offeneVorschlaege && !audioFehler;
   punkt.classList.toggle('vorschlag', !neueVersion && !audioFehler);
   punkt.classList.toggle('fehler', !!audioFehler);
   menueKnopf.title = audioFehler ? tx('{0} Aufnahmen ohne Eintrag', audioFehler) : neueVersion ? T`Update ${versionNr(neueVersion)} verfügbar` : offeneVorschlaege ? T`${offeneVorschlaege} Gedächtnis-Vorschläge` : '';
@@ -3946,7 +4192,7 @@ menue.addEventListener('click', async (e) => {
   const b = e.target.closest('[data-menue-abmelden]');
   if (!b || !confirm(tx('Auf diesem Gerät abmelden?'))) return;
   b.disabled = true;
-  try { await api('/api/auth/abmelden', { method: 'POST' }); try { localStorage.setItem('angemeldet', '0'); } catch { /* nur Startabkürzung */ } if (menue.open) menue.close(); geheZu('/anmelden', true); } catch (f) { b.disabled = false; melde(f.message); }
+  try { await api('/api/auth/abmelden', { method: 'POST' }); await vergissGeraet(); if (menue.open) menue.close(); geheZu('/anmelden', true); } catch (f) { b.disabled = false; melde(f.message); }
 });
 
 // Offene Gedächtnis-Vorschläge: Zahl an „Gedächtnis“ im Menü, Punkt am Menüknopf.
@@ -4151,12 +4397,17 @@ if ('serviceWorker' in navigator) {
   if (pfad !== '/anmelden' && pfad !== '/einrichten' && pfad !== '/ersteinrichtung') {
     try {
       const s = await api('/api/sitzung');
+      // Anderer Nutzer als zuletzt auf diesem Gerät: dessen Zwischenspeicher (Einträge, Vorgemerktes) verwerfen.
+      if (s.angemeldet && ich.id && s.id !== ich.id) { await vergissGeraet(); location.reload(); return; }
       try { localStorage.setItem('angemeldet', s.angemeldet ? '1' : '0'); } catch { /* nur Startabkürzung */ }
+      if (s.angemeldet) merkeIch(s);
       if (!s.angemeldet) {
         // Freigabe für eine App (OAuth): nach der Anmeldung dorthin zurück.
         if (pfad === '/verbinden') try { sessionStorage.setItem('nach-anmeldung', pfad + location.search); } catch { /* dann zur Startseite */ }
         return geheZu('/anmelden', true);
       }
+      if (s.gesperrt) return geheZu('/wiederherstellen', true);
+      if (s.code_offen && pfad !== '/willkommen') return geheZu('/willkommen', true);
       // Zuletzt gesehen vom Server holen, bevor die erste Seite „Neu“ markiert.
       await besuche.pruefe();
       // Neues Gerät ohne eigene Wahl: die zuletzt gewählte Darstellung übernehmen.

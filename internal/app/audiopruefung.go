@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"pebble-webhook/internal/schluessel"
 	"pebble-webhook/internal/store"
 )
 
@@ -31,7 +32,7 @@ type orphanAudio struct {
 
 var (
 	orphanMu   sync.Mutex
-	orphanList []orphanAudio
+	orphanList = map[int64][]orphanAudio{} // je Nutzer
 	jobIDRe    = regexp.MustCompile(`^[0-9a-f]{32}$`)
 )
 
@@ -39,9 +40,15 @@ var (
 // am Zusatz erkennt der Reimport das auch ohne Datenbank.
 const webMark = "-web"
 
+// plainName: Dateiname einer Aufnahme ohne die Endung der Verschlüsselung (<id>.m4a.enc → <id>.m4a).
+func plainName(name string) string {
+	return strings.TrimSuffix(filepath.Base(name), schluessel.AudioExt)
+}
+
 // audioIDOf: Eintrags-Id aus dem Dateinamen einer Aufnahme und ob sie aus der Web-App stammt.
 func audioIDOf(name string) (id string, web bool) {
-	base := strings.TrimSuffix(filepath.Base(name), filepath.Ext(name))
+	name = plainName(name)
+	base := strings.TrimSuffix(name, filepath.Ext(name))
 	if id, ok := strings.CutSuffix(base, webMark); ok {
 		return id, true
 	}
@@ -65,13 +72,14 @@ func modeOfPath(rel string) string {
 	return "diktat"
 }
 
-// sortAudio legt jede bekannte Aufnahme in den Unterordner ihrer Art (AUDIO_DIR/<diktat|planung>/JJJJ/MM) und
+// sortAudio legt jede bekannte Aufnahme in den Unterordner ihrer Art (AUDIO_DIR/<nutzer>/<diktat|planung>/JJJJ/MM) und
 // richtet den Pfad in der Datenbank nach dem Ort der Datei: verschiebt Aufnahmen aus der Zeit vor den
 // Unterordnern, folgt einem geänderten Modus und repariert Pfade einer wiederhergestellten älteren Datenbank.
 // Gefunden wird eine Datei über ihre Id im Dateinamen. Läuft beim Start.
 func (a *App) sortAudio() {
+	root := a.audioRoot()
 	byID := map[string]string{}
-	filepath.WalkDir(a.Cfg.AudioDir, func(p string, d fs.DirEntry, err error) error {
+	filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 		if err == nil && d.Type().IsRegular() && audioMimeOf(p) != "" {
 			id, _ := audioIDOf(d.Name())
 			byID[id] = p
@@ -89,7 +97,7 @@ func (a *App) sortAudio() {
 		if !ok {
 			continue // Datei fehlt: bleibt erkennbar (Abspielen meldet es)
 		}
-		rel, err := filepath.Rel(a.Cfg.AudioDir, cur)
+		rel, err := filepath.Rel(root, cur)
 		if err != nil || strings.HasPrefix(rel, "..") {
 			continue
 		}
@@ -97,7 +105,7 @@ func (a *App) sortAudio() {
 		for _, sub := range []string{"diktat/", "planung/"} {
 			rest = strings.TrimPrefix(rest, sub)
 		}
-		want := filepath.Join(a.Cfg.AudioDir, audioSub(j.Mode), filepath.FromSlash(rest))
+		want := filepath.Join(root, audioSub(j.Mode), filepath.FromSlash(rest))
 		if cur != want {
 			if err := os.MkdirAll(filepath.Dir(want), 0o750); err != nil {
 				logf("Audio einsortieren: %v", err)
@@ -145,7 +153,7 @@ func (a *App) removeEmptyDirs(root string) {
 
 // audioMimeOf: MIME-Typ zur Dateiendung (Gegenstück zu audioExt).
 func audioMimeOf(name string) string {
-	switch strings.ToLower(filepath.Ext(name)) {
+	switch strings.ToLower(filepath.Ext(plainName(name))) {
 	case ".webm":
 		return "audio/webm"
 	case ".ogg":
@@ -169,7 +177,8 @@ func (a *App) scanAudio() []orphanAudio {
 	}
 	found := []orphanAudio{}
 	recent := time.Now().Add(-time.Minute) // gerade gespeichert, Eintrag folgt gleich
-	filepath.WalkDir(a.Cfg.AudioDir, func(p string, d fs.DirEntry, err error) error {
+	root := a.audioRoot()
+	filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil || !d.Type().IsRegular() || audioMimeOf(p) == "" {
 			return nil
 		}
@@ -181,7 +190,7 @@ func (a *App) scanAudio() []orphanAudio {
 		if err != nil || fi.ModTime().After(recent) {
 			return nil
 		}
-		rel, err := filepath.Rel(a.Cfg.AudioDir, p)
+		rel, err := filepath.Rel(root, p)
 		if err != nil {
 			return nil
 		}
@@ -190,8 +199,8 @@ func (a *App) scanAudio() []orphanAudio {
 	})
 	sort.Slice(found, func(i, k int) bool { return found[i].MTime < found[k].MTime })
 	orphanMu.Lock()
-	changed := len(found) != len(orphanList)
-	orphanList = found
+	changed := len(found) != len(orphanList[a.UserID])
+	orphanList[a.UserID] = found
 	orphanMu.Unlock()
 	if changed && len(found) > 0 {
 		logf("Audio-Prüfung: %d Aufnahme(n) ohne Eintrag", len(found))
@@ -202,12 +211,12 @@ func (a *App) scanAudio() []orphanAudio {
 func (a *App) orphans() []orphanAudio {
 	orphanMu.Lock()
 	defer orphanMu.Unlock()
-	return append([]orphanAudio(nil), orphanList...)
+	return append([]orphanAudio(nil), orphanList[a.UserID]...)
 }
 
 // importAudio legt für eine Aufnahme ohne Eintrag einen neuen Eintrag an; die Datei bleibt, wo sie ist.
 func (a *App) importAudio(o orphanAudio) error {
-	path := filepath.Join(a.Cfg.AudioDir, filepath.FromSlash(o.Path))
+	path := filepath.Join(a.audioRoot(), filepath.FromSlash(o.Path))
 	fi, err := os.Stat(path)
 	if err != nil {
 		return err
@@ -271,12 +280,8 @@ func (a *App) handleAudioImport(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"importiert": n, "dateien": a.scanAudio()})
 }
 
-// mp4Seconds liest die Länge einer m4a/mp4-Datei aus dem mvhd-Kasten (-1 = unbekannt).
-func mp4Seconds(path string) float64 {
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return -1
-	}
+// mp4Seconds liest die Länge einer m4a/mp4-Aufnahme aus dem mvhd-Kasten (-1 = unbekannt).
+func mp4Seconds(b []byte) float64 {
 	var walk func(b []byte) float64
 	walk = func(b []byte) float64 {
 		for len(b) >= 8 {
@@ -323,12 +328,12 @@ var (
 	secondsCache = map[string]float64{} // Pfad+Größe → Länge; einmal gelesen, im Speicher gehalten
 )
 
-// audioStats: Zahl, Durchschnittsgröße und -länge der Aufnahmen in AUDIO_DIR (Länge nur m4a/mp4).
+// audioStats: Zahl, Durchschnittsgröße und -länge der Aufnahmen des Nutzers (Länge nur m4a/mp4).
 func (a *App) audioStats() map[string]any {
 	var n, withLen int
 	var bytes int64
 	var secs float64
-	filepath.WalkDir(a.Cfg.AudioDir, func(p string, d fs.DirEntry, err error) error {
+	filepath.WalkDir(a.audioRoot(), func(p string, d fs.DirEntry, err error) error {
 		if err != nil || !d.Type().IsRegular() || audioMimeOf(p) == "" {
 			return nil
 		}
@@ -338,7 +343,7 @@ func (a *App) audioStats() map[string]any {
 		}
 		n++
 		bytes += fi.Size()
-		ext := strings.ToLower(filepath.Ext(p))
+		ext := strings.ToLower(filepath.Ext(plainName(p)))
 		if ext != ".m4a" && ext != ".mp4" {
 			return nil
 		}
@@ -347,7 +352,7 @@ func (a *App) audioStats() map[string]any {
 		s, ok := secondsCache[key]
 		secondsMu.Unlock()
 		if !ok {
-			s = mp4Seconds(p)
+			s = a.audioSeconds(p)
 			secondsMu.Lock()
 			secondsCache[key] = s
 			secondsMu.Unlock()

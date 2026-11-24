@@ -14,7 +14,6 @@ import (
 	"sync"
 	"time"
 
-	"pebble-webhook/internal/i18n"
 	"pebble-webhook/internal/store"
 )
 
@@ -56,13 +55,17 @@ func ringLevel(seconds float64, capacity int64) int {
 }
 
 // audioSeconds: Länge einer Aufnahme aus dem Dateikopf (-1 = unbekannt; lesbar sind m4a/mp4).
-func audioSeconds(path string) float64 {
+func (a *App) audioSeconds(path string) float64 {
 	if path == "" {
 		return -1
 	}
-	switch strings.ToLower(filepath.Ext(path)) {
+	switch strings.ToLower(filepath.Ext(plainName(path))) {
 	case ".m4a", ".mp4":
-		s := mp4Seconds(path)
+		b, err := a.readAudio(path)
+		if err != nil {
+			return -1
+		}
+		s := mp4Seconds(b)
 		if math.IsNaN(s) || math.IsInf(s, 0) || s < 0 {
 			return -1
 		}
@@ -107,7 +110,7 @@ func estimateSeconds(audioPath, text string) float64 {
 func (a *App) recordingOf(j *store.Job, ringNr int64, hw, origin string) store.RingRecording {
 	r := store.RingRecording{JobID: j.ID, RingNr: ringNr, HardwareID: hw, ReceivedAt: j.ReceivedAt,
 		Mode: j.Mode, Trigger: ringTrigger(j.Trigger), Origin: origin}
-	if s := audioSeconds(j.AudioPath); s >= 0 {
+	if s := a.audioSeconds(j.AudioPath); s >= 0 {
 		r.Seconds, r.SecondsSource = s, store.SecondsFile
 	} else if s := a.costSeconds(j); s >= 0 {
 		r.Seconds, r.SecondsSource = s, store.SecondsCost
@@ -147,7 +150,8 @@ func (a *App) ensureRingLocked() (*store.Ring, error) {
 		}
 	}
 	// Dateien ohne Eintrag (z. B. aus einem älteren Backup): der Dateiname ist die ID des früheren Eintrags.
-	filepath.WalkDir(a.Cfg.AudioDir, func(p string, d fs.DirEntry, err error) error {
+	root := a.audioRoot()
+	filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil || !d.Type().IsRegular() || audioMimeOf(p) == "" {
 			return nil
 		}
@@ -159,8 +163,8 @@ func (a *App) ensureRingLocked() (*store.Ring, error) {
 		if err != nil {
 			return nil
 		}
-		rel, _ := filepath.Rel(a.Cfg.AudioDir, p)
-		r := store.RingRecording{JobID: id, RingNr: g.Nr, ReceivedAt: fi.ModTime().UnixMilli(), Seconds: audioSeconds(p),
+		rel, _ := filepath.Rel(root, p)
+		r := store.RingRecording{JobID: id, RingNr: g.Nr, ReceivedAt: fi.ModTime().UnixMilli(), Seconds: a.audioSeconds(p),
 			Mode: modeOfPath(rel), Trigger: ringTrigger(""), Origin: "nachtrag", SecondsSource: store.SecondsFile}
 		if r.Seconds < 0 {
 			r.Seconds, r.SecondsSource = estimateSeconds(p, ""), store.SecondsEstimate
@@ -247,7 +251,7 @@ func (a *App) recordRecording(j *store.Job, hw string) bool {
 		return valid
 	}
 	if l := ringLevel(after.Seconds, g.CapacitySeconds); l > ringLevel(before.Seconds, g.CapacitySeconds) && l > g.WarnedLevel {
-		a.notify(i18n.T("Ring-Nutzung"), i18n.Tf("Der Ring hat %d %% seiner Aufnahmezeit erreicht.", l), "/status/ring")
+		a.notify(a.T("Ring-Nutzung"), a.Tf("Der Ring hat %d %% seiner Aufnahmezeit erreicht.", l), "/status/ring")
 	}
 	if hw != "" && g.HardwareID != "" && hw != g.HardwareID {
 		a.hub.send("ring")

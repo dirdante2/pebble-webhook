@@ -9,23 +9,17 @@ import (
 	"net/http"
 	"path/filepath"
 	"strings"
-	"sync"
-	"sync/atomic"
 	"syscall"
 	"time"
 
-	"github.com/go-webauthn/webauthn/webauthn"
-
-	"pebble-webhook/internal/config"
 	"pebble-webhook/internal/i18n"
 	"pebble-webhook/internal/joplin"
 	"pebble-webhook/internal/openai"
-	"pebble-webhook/internal/store"
 )
 
 // AI ist die Schnittstelle zu OpenAI (in Tests ersetzt).
 type AI interface {
-	Transcribe(ctx context.Context, model, path, mime, language string) (text string, seconds float64, err error)
+	Transcribe(ctx context.Context, model, name string, audio []byte, mime, language string) (text string, seconds float64, err error)
 	Respond(ctx context.Context, r openai.Request) (*openai.Result, error)
 }
 
@@ -40,59 +34,6 @@ type Notes interface {
 	Ping() error
 }
 
-type App struct {
-	Cfg     *config.Config
-	DB      *store.Store
-	AI      AI
-	Notes   Notes
-	Version string
-
-	wake chan struct{}
-	hub  *hub
-
-	rateMu sync.Mutex
-	rate   map[string][]int64
-
-	wa        *webauthn.WebAuthn
-	cerMu     sync.Mutex
-	cer       map[string]ceremony
-	vapidPub  string
-	vapidPriv string
-
-	joplinMu sync.Mutex
-
-	runMu   sync.Mutex // Auftrag, an dem der Worker gerade arbeitet (zum Abbrechen beim Löschen)
-	runID   string
-	runStop context.CancelFunc
-	runDone chan struct{}
-
-	trainNow  atomic.Bool    // Lernlauf von Hand angefordert
-	sortFails map[string]int // Planung → gescheiterte Versuche beim Einsortieren (nur im Worker)
-	joplinErr string
-	joplinAt  int64
-
-	updates updateCache
-	devCode deviceCode  // Kurz-Code für ein weiteres Gerät
-	oauth   oauthServer // OAuth für den MCP-Server (Einmal-Codes, Zugriff auf kv „oauth“)
-}
-
-func New(cfg *config.Config, db *store.Store, ai AI, notes Notes) (*App, error) {
-	i18n.Set(cfg.Language)
-	a := &App{Cfg: cfg, DB: db, AI: ai, Notes: notes, wake: make(chan struct{}, 1), hub: newHub(),
-		rate: map[string][]int64{}, cer: map[string]ceremony{}, sortFails: map[string]int{}}
-	if err := a.initAuth(); err != nil {
-		return nil, err
-	}
-	if err := a.initPush(); err != nil {
-		return nil, err
-	}
-	if err := a.normalizeStoredTags(); err != nil {
-		return nil, err
-	}
-	a.importMemoryFile()
-	return a, nil
-}
-
 // Wake stößt den Worker an.
 func (a *App) Wake() {
 	select {
@@ -102,7 +43,7 @@ func (a *App) Wake() {
 }
 
 // clientIP liefert die Adresse des Aufrufers; hinter dem eingetragenen Proxy dessen X-Real-IP.
-func (a *App) clientIP(r *http.Request) string {
+func (a *System) clientIP(r *http.Request) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		host = r.RemoteAddr
@@ -116,7 +57,7 @@ func (a *App) clientIP(r *http.Request) string {
 }
 
 // allow begrenzt Anfragen je Adresse und Minute.
-func (a *App) allow(key string, perMin int) bool {
+func (a *System) allow(key string, perMin int) bool {
 	if perMin <= 0 {
 		return true
 	}
@@ -175,7 +116,7 @@ func logf(format string, args ...any) { log.Printf(format, args...) }
 
 // respond ruft die KI auf; bei Englisch bekommt jede Anweisung die Sprachregel dazu.
 func (a *App) respond(ctx context.Context, r openai.Request) (*openai.Result, error) {
-	if rule := i18n.LanguageRule(); rule != "" {
+	if rule := i18n.LanguageRuleIn(a.Cfg.Language); rule != "" {
 		r.Instructions = strings.ReplaceAll(r.Instructions, "Antworte auf Deutsch", "Antworte auf Englisch") + "\n\n" + rule
 	}
 	return a.AI.Respond(ctx, r)

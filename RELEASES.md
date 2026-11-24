@@ -4,6 +4,18 @@ Summarised notes for **beta** and **stable** releases. Each section lists only w
 
 A tag `vX.Y.Z-stable` (stable; before 1.33.5 `vX.Y.Z`) or `vX.Y.Z-beta` (beta) needs a section `## [X.Y.Z]` or `## [X.Y.Z-beta]` here; the release workflow uses it as the release notes.
 
+## [3.0.0] - 2026-11-24
+
+### Multiple users (prepared)
+- First user is admin; roles admin/user; invite, lock and delete users (admin).
+- Everyone sees only own data and settings – admins included.
+- Personal settings apply instantly; "Hello <name>" in the menu.
+
+### Encryption
+- Own encrypted database and encrypted recordings per user; keys never in backups.
+- Recovery code reopens data after a restore on a new server.
+- Update moves the old database automatically; Pebble app keeps working unchanged.
+
 ## [2.3.0] - 2026-11-24
 
 ### Preparing 3.0

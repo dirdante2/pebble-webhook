@@ -5,6 +5,7 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -13,18 +14,23 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"pebble-webhook/internal/i18n"
+	"pebble-webhook/internal/schluessel"
 )
 
-// Backups: ein Archiv pebble-<version>-<kanal>-<zeit>-<art>[-audio].tar.gz in BACKUP_DIR mit
-//   meta.json  Version, Build, Kanal, Zeitpunkt, Art, Audio ja/nein
-//   pebble.db  Datenbank samt aller Einstellungen (in sich stimmige Kopie)
-//   env        Startwerte (LISTEN, DATA_DIR, AUDIO_DIR, BACKUP_DIR)
-//   audio/…    Aufnahmen (nur mit BACKUP_AUDIO oder Häkchen)
+// Backups: ein Archiv pebble-<version>-<kanal>-<zeit>-<art>[-audio].tar.gz in BACKUP_DIR mit (Format 2, ab 3.0)
+//   meta.json              Version, Build, Kanal, Zeitpunkt, Art, Audio ja/nein, Nutzer mit Schlüssel-Kennung
+//   system.db              Nutzer, Anmeldung (nur Hashes und öffentliche Schlüssel), Systemeinstellungen
+//   users/<id>/daten.db    Daten je Nutzer, verschlüsselt mit seinem Schlüssel (in sich stimmige Kopie)
+//   env                    Startwerte (LISTEN, DATA_DIR, AUDIO_DIR, BACKUP_DIR)
+//   audio/<id>/….enc       verschlüsselte Aufnahmen (nur mit BACKUP_AUDIO oder Häkchen)
+// Die Schlüssel (KEY_DIR) sind nie im Archiv: ohne sie oder den Wiederherstellungscode des Nutzers bleiben seine
+// Daten unlesbar. Format 1 (bis 2.x): pebble.db im Klartext statt system.db und users/.
 // Art: update = vom Installer vor jedem Update/Versionswechsel (30 Tage), plan = geplant (BACKUP_SCHEDULE),
 // manuell = „Jetzt sichern“; beide BACKUP_RETENTION_DAYS. Das Programm wird nicht gesichert: Wiederherstellen
 // installiert die vermerkte Version aus ihrem Kanal neu (install.sh restore).
@@ -49,21 +55,27 @@ type backupEntry struct {
 }
 
 type backupMeta struct {
-	Format   int    `json:"format"`
-	Version  string `json:"version"`
-	Build    string `json:"build"`
-	Channel  string `json:"kanal"`
-	Created  string `json:"erstellt"`
-	Kind     string `json:"art"`
-	Audio    bool   `json:"audio"`
-	DataDir  string `json:"data_dir"`
-	AudioDir string `json:"audio_dir"`
+	Format   int          `json:"format"`
+	Users    []backupUser `json:"nutzer,omitempty"`
+	Version  string       `json:"version"`
+	Build    string       `json:"build"`
+	Channel  string       `json:"kanal"`
+	Created  string       `json:"erstellt"`
+	Kind     string       `json:"art"`
+	Audio    bool         `json:"audio"`
+	DataDir  string       `json:"data_dir"`
+	AudioDir string       `json:"audio_dir"`
+}
+
+type backupUser struct {
+	ID    int64  `json:"id"`
+	KeyID string `json:"key_id"`
 }
 
 var backupMu sync.Mutex
 
 // backups: alle Backups, neueste zuerst (Archive in BACKUP_DIR und Ordner im alten Format).
-func (a *App) backups() []backupEntry {
+func (a *System) backups() []backupEntry {
 	out := []backupEntry{}
 	entries, _ := os.ReadDir(a.Cfg.BackupDir)
 	for _, e := range entries {
@@ -115,7 +127,7 @@ func (a *App) backups() []backupEntry {
 }
 
 // createBackup schreibt ein Archiv nach BACKUP_DIR (erst unter .tmp-Namen, dann umbenannt).
-func (a *App) createBackup(kind string, audio bool) (backupEntry, error) {
+func (a *System) createBackup(kind string, audio bool) (backupEntry, error) {
 	backupMu.Lock()
 	defer backupMu.Unlock()
 	now := time.Now()
@@ -135,14 +147,15 @@ func (a *App) createBackup(kind string, audio bool) (backupEntry, error) {
 	if err := os.MkdirAll(a.Cfg.BackupDir, 0o750); err != nil {
 		return backupEntry{}, i18n.Errorf("Backup-Ordner %s nicht anlegbar: %v", a.Cfg.BackupDir, err)
 	}
-	snap := filepath.Join(a.Cfg.BackupDir, ".snapshot-"+now.Format("20060102-150405")+".db")
-	os.Remove(snap)
-	defer os.Remove(snap)
-	if err := a.DB.Snapshot(snap); err != nil {
+	snap := filepath.Join(a.Cfg.BackupDir, ".snapshot-"+now.Format("20060102-150405"))
+	os.RemoveAll(snap)
+	defer os.RemoveAll(snap)
+	users, err := a.snapshot(snap)
+	if err != nil {
 		return backupEntry{}, i18n.Errorf("Datenbank-Kopie fehlgeschlagen: %v", err)
 	}
 	tmp := filepath.Join(a.Cfg.BackupDir, "."+name+".tmp")
-	if err := a.writeArchive(tmp, snap, backupMeta{Format: 1, Version: ver, Build: a.Version, Channel: channel,
+	if err := a.writeArchive(tmp, snap, backupMeta{Format: 2, Users: users, Version: ver, Build: a.Version, Channel: channel,
 		Created: now.Format(time.RFC3339), Kind: kind, Audio: audio, DataDir: a.Cfg.DataDir, AudioDir: a.Cfg.AudioDir}); err != nil {
 		os.Remove(tmp)
 		return backupEntry{}, i18n.Errorf("Backup nicht schreibbar: %v", err)
@@ -161,7 +174,64 @@ func (a *App) createBackup(kind string, audio bool) (backupEntry, error) {
 	return e, nil
 }
 
-func (a *App) writeArchive(path, dbFile string, meta backupMeta) (err error) {
+// snapshot legt in dir eine in sich stimmige Kopie aller Datenbanken an: system.db und je Nutzer users/<id>/daten.db
+// (verschlüsselt wie das Original; Nutzer mit gesperrten Daten werden als Datei kopiert – sie ist ebenfalls verschlüsselt).
+func (a *System) snapshot(dir string) ([]backupUser, error) {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, err
+	}
+	if err := a.DB.Snapshot(filepath.Join(dir, "system.db")); err != nil {
+		return nil, err
+	}
+	users, err := a.DB.Users()
+	if err != nil {
+		return nil, err
+	}
+	var out []backupUser
+	for _, u := range users {
+		ud := UserDir(dir, u.ID)
+		if err := os.MkdirAll(ud, 0o700); err != nil {
+			return nil, err
+		}
+		if app, _ := a.app(u.ID); app != nil {
+			err = app.DB.Snapshot(filepath.Join(ud, "daten.db"))
+		} else {
+			for _, f := range []string{"daten.db", "daten.db-wal"} {
+				if err == nil {
+					err = copyIfExists(filepath.Join(UserDir(a.Cfg.DataDir, u.ID), f), filepath.Join(ud, f))
+				}
+			}
+		}
+		if err != nil {
+			return nil, fmt.Errorf("Nutzer %d: %w", u.ID, err)
+		}
+		out = append(out, backupUser{ID: u.ID, KeyID: u.KeyID})
+	}
+	return out, nil
+}
+
+func copyIfExists(src, dst string) error {
+	in, err := os.Open(src)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o640)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		out.Close()
+		return err
+	}
+	return out.Close()
+}
+
+// writeArchive packt meta.json, env, die Kopien aus snapDir und (mit Audio) die verschlüsselten Aufnahmen.
+func (a *System) writeArchive(path, snapDir string, meta backupMeta) (err error) {
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o640)
 	if err != nil {
 		return err
@@ -205,25 +275,48 @@ func (a *App) writeArchive(path, dbFile string, meta backupMeta) (err error) {
 	if err := addBytes("env", []byte(env)); err != nil {
 		return err
 	}
-	if err := addFile("pebble.db", dbFile); err != nil {
+	err = filepath.WalkDir(snapDir, func(p string, d fs.DirEntry, err error) error {
+		if err != nil || !d.Type().IsRegular() {
+			return err
+		}
+		rel, err := filepath.Rel(snapDir, p)
+		if err != nil {
+			return err
+		}
+		return addFile(filepath.ToSlash(rel), p)
+	})
+	if err != nil {
 		return err
 	}
 	if meta.Audio {
-		err := filepath.WalkDir(a.Cfg.AudioDir, func(p string, d fs.DirEntry, err error) error {
+		// Nur verschlüsselte Aufnahmen unter AUDIO_DIR/<id>/ – Aufnahmen bis 2.x (Klartext am alten Ort) bleiben
+		// draußen, bis der Umzug sie verschlüsselt hat.
+		skipped := 0
+		for _, u := range meta.Users {
+			root := filepath.Join(a.Cfg.AudioDir, strconv.FormatInt(u.ID, 10))
+			err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+				if errors.Is(err, fs.ErrNotExist) {
+					return nil
+				}
+				if err != nil || !d.Type().IsRegular() {
+					return err
+				}
+				if !strings.HasSuffix(p, schluessel.AudioExt) {
+					skipped++
+					return nil
+				}
+				rel, err := filepath.Rel(a.Cfg.AudioDir, p)
+				if err != nil {
+					return err
+				}
+				return addFile("audio/"+filepath.ToSlash(rel), p)
+			})
 			if err != nil {
 				return err
 			}
-			if !d.Type().IsRegular() {
-				return nil
-			}
-			rel, err := filepath.Rel(a.Cfg.AudioDir, p)
-			if err != nil {
-				return err
-			}
-			return addFile("audio/"+filepath.ToSlash(rel), p)
-		})
-		if err != nil {
-			return err
+		}
+		if skipped > 0 {
+			logf("Backup: %d unverschlüsselte Aufnahmen nicht gesichert", skipped)
 		}
 	}
 	if err := tw.Close(); err != nil {
@@ -235,7 +328,7 @@ func (a *App) writeArchive(path, dbFile string, meta backupMeta) (err error) {
 // cleanBackups löscht abgelaufene Backups (update: 30 Tage, plan/manuell: BACKUP_RETENTION_DAYS; das jüngste
 // Archiv bleibt immer), alte Backup-Ordner nach 30 Tagen und Releases im lokalen Vorrat (DATA_DIR/releases),
 // die 30 Tage nicht genutzt wurden.
-func (a *App) cleanBackups() {
+func (a *System) cleanBackups() {
 	cache := filepath.Join(a.Cfg.DataDir, "releases")
 	entries, _ := os.ReadDir(cache)
 	for _, e := range entries {
@@ -290,7 +383,7 @@ const cleanupKeep = 7 * 24 * time.Hour
 
 // cleanupPlan: was „Aufräumen“ löschen würde – Backups älter als 7 Tage (das jüngste bleibt immer) und alle
 // zwischengespeicherten App-Versionen außer der laufenden.
-func (a *App) cleanupPlan() (backups, releases []string, backupBytes, releaseBytes int64) {
+func (a *System) cleanupPlan() (backups, releases []string, backupBytes, releaseBytes int64) {
 	newest := true
 	for _, b := range a.backups() {
 		if !b.Legacy && newest {
@@ -323,7 +416,7 @@ func (a *App) cleanupPlan() (backups, releases []string, backupBytes, releaseByt
 
 // handleCleanup: POST /api/speicher/aufraeumen?was=backups|versionen – löscht den Teil, den cleanupPlan nennt
 // (Status → Speicher, je ein Knopf).
-func (a *App) handleCleanup(w http.ResponseWriter, r *http.Request) {
+func (a *System) handleCleanup(w http.ResponseWriter, r *http.Request) {
 	backupMu.Lock()
 	defer backupMu.Unlock()
 	backups, releases, bb, rb := a.cleanupPlan()
@@ -358,7 +451,7 @@ func (a *App) handleCleanup(w http.ResponseWriter, r *http.Request) {
 const backupLastKey = "backup-letzt" // „2026-11-22 03:00 ok <name>“ oder „… fehler <meldung>“
 
 // backupPlan: Einstellungen und letzter Lauf für die Backup-Ansicht.
-func (a *App) backupPlan() map[string]any {
+func (a *System) backupPlan() map[string]any {
 	last, _ := a.DB.Get(backupLastKey)
 	return map[string]any{"plan": a.Cfg.BackupSchedule, "zeit": a.Cfg.BackupTime, "tage": a.Cfg.BackupRetentionDays,
 		"audio": a.Cfg.BackupAudio, "ordner": a.Cfg.BackupDir, "letzt": last}
@@ -366,7 +459,7 @@ func (a *App) backupPlan() map[string]any {
 
 // backupDue: geplantes Backup heute fällig (täglich; wöchentlich montags; monatlich am 1.), ab der Uhrzeit,
 // einmal am Tag – läuft der Dienst zur Uhrzeit nicht, wird es später am selben Tag nachgeholt.
-func (a *App) backupDue(now time.Time, last string) bool {
+func (a *System) backupDue(now time.Time, last string) bool {
 	switch a.Cfg.BackupSchedule {
 	case "täglich":
 	case "wöchentlich":
@@ -384,7 +477,7 @@ func (a *App) backupDue(now time.Time, last string) bool {
 }
 
 // BackupSchedule läuft im Hintergrund und legt das geplante Backup an.
-func (a *App) BackupSchedule(ctx context.Context) {
+func (a *System) BackupSchedule(ctx context.Context) {
 	t := time.NewTicker(time.Minute)
 	defer t.Stop()
 	for {
@@ -409,7 +502,7 @@ func (a *App) BackupSchedule(ctx context.Context) {
 }
 
 // handleBackupCreate: „Jetzt sichern“ (Aufnahmen nach Einstellung oder ausdrücklich).
-func (a *App) handleBackupCreate(w http.ResponseWriter, r *http.Request) {
+func (a *System) handleBackupCreate(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Audio *bool `json:"audio"`
 	}
@@ -427,7 +520,7 @@ func (a *App) handleBackupCreate(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleBackupDownload liefert ein Backup-Archiv als Datei.
-func (a *App) handleBackupDownload(w http.ResponseWriter, r *http.Request) {
+func (a *System) handleBackupDownload(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	if !archiveNameRe.MatchString(name) {
 		writeErr(w, 400, "ungueltig", "Backup unbekannt")
@@ -444,7 +537,7 @@ func (a *App) handleBackupDownload(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleUpdateRestore: zurück zu einem Backup über den Updater (Daten einspielen, vermerkte Version installieren).
-func (a *App) handleUpdateRestore(w http.ResponseWriter, r *http.Request) {
+func (a *System) handleUpdateRestore(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Name string `json:"name"`
 	}
@@ -473,7 +566,7 @@ func (a *App) handleUpdateRestore(w http.ResponseWriter, r *http.Request) {
 
 // requestRestore stößt das Einspielen eines Backups über den Updater an (install.sh: Daten ersetzen, Version aus dem
 // Backup installieren).
-func (a *App) requestRestore(name string) error {
+func (a *System) requestRestore(name string) error {
 	repo := a.Cfg.UpdateRepo
 	if repo == "" {
 		repo = "-"

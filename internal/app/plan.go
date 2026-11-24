@@ -480,7 +480,7 @@ func (a *App) renderPlan(plan *Plan, rounds []*store.Job) string {
 		if len(items) == 0 {
 			return
 		}
-		fmt.Fprintf(&b, "## %s\n\n", i18n.T(title))
+		fmt.Fprintf(&b, "## %s\n\n", a.T(title))
 
 		for _, it := range items {
 			fmt.Fprintf(&b, "%s%s\n", prefix, strings.TrimSpace(it))
@@ -490,7 +490,7 @@ func (a *App) renderPlan(plan *Plan, rounds []*store.Job) string {
 	fmt.Fprintf(&b, "%s\n\n", strings.TrimSpace(plan.Vorhaben))
 	writeFacts(&b, plan.Eckdaten)
 	if s := strings.TrimSpace(plan.Ergebnisse); s != "" {
-		fmt.Fprintf(&b, i18n.T("## Hintergrund\n\n%s\n\n"), s)
+		fmt.Fprintf(&b, a.T("## Hintergrund\n\n%s\n\n"), s)
 	}
 	list("Tipps", plan.Tipps, "- ")
 	list("Nächste Schritte", plan.NaechsteSchritte, "- [ ] ")
@@ -505,17 +505,17 @@ func (a *App) renderPlan(plan *Plan, rounds []*store.Job) string {
 	list("Offene Fragen", questions, "- ")
 	list("Annahme / unklar", plan.Annahmen, "- ")
 	writeSources(&b, plan.Quellen)
-	b.WriteString(i18n.T("---\n\n## Verlauf\n\n"))
+	b.WriteString(a.T("---\n\n## Verlauf\n\n"))
 	for _, r := range rounds {
 		if r.Result == "" {
 			continue
 		}
-		fmt.Fprintf(&b, i18n.T("### Runde %d – %s (%s)\n\n"), r.RoundNo, when(r.RecordedAt), sourceLabel(r))
+		fmt.Fprintf(&b, a.T("### Runde %d – %s (%s)\n\n"), r.RoundNo, when(r.RecordedAt), sourceLabel(r))
 		for _, line := range strings.Split(strings.TrimSpace(r.Transcript), "\n") {
 			fmt.Fprintf(&b, "> %s\n", line)
 		}
 		if r.LimitHit {
-			fmt.Fprintf(&b, i18n.T("\nKostenlimit (%.2f $) in dieser Runde erreicht.\n"), a.Cfg.ResearchLimitUSD)
+			fmt.Fprintf(&b, a.T("\nKostenlimit (%.2f $) in dieser Runde erreicht.\n"), a.Cfg.ResearchLimitUSD)
 		}
 		b.WriteString("\n")
 	}

@@ -41,6 +41,10 @@ const usage = `pebble-webhook <Befehl>
             alle Gedächtnis-Einträge samt Entscheidungen löschen (Beobachtungen bleiben); danach in der Web-App „Jetzt lernen“
   ersteinrichtung
             Pfad des Einrichtungsassistenten mit Einmal-Code ausgeben (nur solange nicht eingerichtet)
+  nutzer-anlegen <Name> [admin]
+            Nutzer anlegen (Schlüssel, verschlüsselte Daten); danach mit PEBBLE_NUTZER=<Id> enroll den Passkey-Link
+  schluessel-wiederherstellen <Nutzer-Id> <Code>
+            Schlüsseldatei eines Nutzers mit seinem Wiederherstellungscode neu schreiben (Restore auf neuer Maschine)
   vorbereiten
             Datenbestand bei gestopptem Dienst auf den Stand dieses Programms bringen (vom Installer vor dem Start
             aufgerufen, ohne Zeitgrenze der Gesundheitsprüfung); --kann: nur prüfen, ob es den Befehl gibt
@@ -48,12 +52,16 @@ const usage = `pebble-webhook <Befehl>
   schema [DATEI]
             Schema-Stand ausgeben, den dieses Programm kennt – mit DATEI den einer Datenbank (für den Installer)
 
-Start-Werte (LISTEN, DATA_DIR, AUDIO_DIR) kommen aus der Umgebung; außerhalb von systemd wird die
+Befehle für die Daten eines Nutzers (enroll, zugang, termine-nachtragen, notizen-einsortieren, gedaechtnis-…)
+gelten für Nutzer 1, mit PEBBLE_NUTZER=<Id> für einen anderen.
+
+Start-Werte (LISTEN, DATA_DIR, AUDIO_DIR, BACKUP_DIR, KEY_DIR) kommen aus der Umgebung; außerhalb von systemd wird die
 Datei aus PEBBLE_ENV_FILE gelesen (Standard /etc/pebble-webhook/env). Alle übrigen Einstellungen
 liegen in der Datenbank und werden in der Web-App gepflegt.`
 
 func main() {
 	log.SetFlags(0) // Zeitstempel setzt das Journal
+	syscall.Umask(0o027) // Datenbanken, Schlüssel und Aufnahmen nie für andere lesbar (auch beim Aufruf über die Kommandozeile)
 	cmd := ""
 	if len(os.Args) > 1 {
 		cmd = os.Args[1]
@@ -75,6 +83,10 @@ func main() {
 		fail(resetMemory())
 	case "ersteinrichtung":
 		fail(setupLink())
+	case "nutzer-anlegen":
+		fail(addUser())
+	case "schluessel-wiederherstellen":
+		fail(recoverKey())
 	case "vorbereiten":
 		if len(os.Args) > 2 && os.Args[2] == "--kann" {
 			fmt.Println("ja")
@@ -103,8 +115,9 @@ func fail(err error) {
 	}
 }
 
-// openDB liest die Start-Werte und öffnet die Datenbank.
-func openDB() (config.Bootstrap, *store.Store, error) {
+// openDB liest die Start-Werte, bringt den Datenbestand auf den Stand dieses Programms (Umzug von pebble.db bis 2.x)
+// und öffnet system.db.
+func openDB() (config.Bootstrap, *store.System, error) {
 	envFile := os.Getenv("PEBBLE_ENV_FILE")
 	if envFile == "" {
 		envFile = "/etc/pebble-webhook/env"
@@ -113,39 +126,75 @@ func openDB() (config.Bootstrap, *store.Store, error) {
 		return config.Bootstrap{}, nil, fmt.Errorf("%s: %w", envFile, err)
 	}
 	boot := config.LoadBootstrap()
-	for _, dir := range []string{boot.DataDir, boot.AudioDir} {
+	for _, dir := range []string{boot.DataDir, boot.AudioDir, boot.KeyDir} {
 		if st, err := os.Stat(dir); err != nil || !st.IsDir() {
 			return boot, nil, fmt.Errorf("Verzeichnis %s fehlt", dir)
 		}
 	}
-	db, err := store.Open(filepath.Join(boot.DataDir, "pebble.db"))
+	if err := app.Prepare(boot); err != nil {
+		return boot, nil, err
+	}
+	db, err := store.OpenSystem(filepath.Join(boot.DataDir, "system.db"))
 	return boot, db, err
 }
 
-func setup() (*app.App, *store.Store, error) {
+// setup baut das System und öffnet die Daten aller Nutzer.
+func setup() (*app.System, error) {
 	boot, db, err := openDB()
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	cfg, err := app.LoadSettings(db, boot)
 	if err != nil {
 		db.Close()
 		if errors.Is(err, app.ErrNotConfigured) {
-			return nil, nil, fmt.Errorf("noch nicht eingerichtet – Einrichtungsassistent: pebble ersteinrichtung")
+			return nil, fmt.Errorf("noch nicht eingerichtet – Einrichtungsassistent: pebble ersteinrichtung")
 		}
-		return nil, nil, err
+		return nil, err
 	}
-	var notes app.Notes
-	if cfg.JoplinURL != "" {
-		notes = joplin.New(cfg.JoplinURL, cfg.JoplinEmail, cfg.JoplinPassword)
+	notes := func(c *config.Config) app.Notes {
+		if c.JoplinURL == "" {
+			return nil
+		}
+		return joplin.New(c.JoplinURL, c.JoplinEmail, c.JoplinPassword)
 	}
-	a, err := app.New(cfg, db, openai.New(cfg.OpenAIKey, cfg.OpenAIBaseURL), notes)
+	sys, err := app.NewSystem(cfg, db, openai.New(cfg.OpenAIKey, cfg.OpenAIBaseURL), version, notes)
 	if err != nil {
 		db.Close()
+		return nil, err
+	}
+	if err := sys.OpenUsers(); err != nil {
+		db.Close()
+		return nil, err
+	}
+	return sys, nil
+}
+
+// userID: Nutzer für Befehle der Kommandozeile (Umgebung PEBBLE_NUTZER, sonst 1).
+func userID() int64 {
+	if v, err := strconv.ParseInt(os.Getenv("PEBBLE_NUTZER"), 10, 64); err == nil && v > 0 {
+		return v
+	}
+	return 1
+}
+
+// userApp: System samt geöffneter App des Nutzers aus userID.
+func userApp() (*app.System, *app.App, error) {
+	sys, err := setup()
+	if err != nil {
 		return nil, nil, err
 	}
-	a.Version = version
-	return a, db, nil
+	a := sys.AppOf(userID())
+	if a == nil {
+		closeAll(sys)
+		return nil, nil, fmt.Errorf("Daten von Nutzer %d nicht geöffnet (gesperrt oder Schlüssel fehlt)", userID())
+	}
+	return sys, a, nil
+}
+
+func closeAll(sys *app.System) {
+	sys.Close()
+	sys.DB.Close()
 }
 
 func serve() error {
@@ -158,11 +207,11 @@ func serve() error {
 		return serveSetup(boot, db, err)
 	}
 	db.Close()
-	a, db, err := setup()
+	a, err := setup()
 	if err != nil {
 		return err
 	}
-	defer db.Close()
+	defer closeAll(a)
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
@@ -190,7 +239,7 @@ func serve() error {
 	return nil
 }
 
-func serveSetup(boot config.Bootstrap, db *store.Store, loadErr error) error {
+func serveSetup(boot config.Bootstrap, db *store.System, loadErr error) error {
 	defer db.Close()
 	code, err := app.SetupCode(db)
 	if err != nil {
@@ -234,6 +283,45 @@ func prepare() error {
 	return db.Close()
 }
 
+func addUser() error {
+	if len(os.Args) < 3 || strings.TrimSpace(os.Args[2]) == "" {
+		return fmt.Errorf("Aufruf: nutzer-anlegen <Name> [admin]")
+	}
+	role := store.RoleUser
+	if len(os.Args) > 3 && os.Args[3] == "admin" {
+		role = store.RoleAdmin
+	}
+	sys, err := setup()
+	if err != nil {
+		return err
+	}
+	defer closeAll(sys)
+	a, _, err := sys.NewUser(strings.TrimSpace(os.Args[2]), role)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("Nutzer %d angelegt (%s). Passkey-Link: PEBBLE_NUTZER=%d pebble enroll – den Wiederherstellungscode zeigt die Web-App nach der Anmeldung.\n", a.UserID, role, a.UserID)
+	return nil
+}
+
+// recoverKey: Schlüsseldatei eines Nutzers mit seinem Wiederherstellungscode neu schreiben (z. B. nach Restore auf
+// einer neuen Maschine; in der Web-App geht es nach der Anmeldung ebenso).
+func recoverKey() error {
+	if len(os.Args) < 4 {
+		return fmt.Errorf("Aufruf: schluessel-wiederherstellen <Nutzer-Id> <Code>")
+	}
+	uid, err := strconv.ParseInt(os.Args[2], 10, 64)
+	if err != nil {
+		return fmt.Errorf("Nutzer-Id: Zahl erwartet")
+	}
+	boot, db, err := openDB()
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	return app.RecoverKey(db, boot.KeyDir, uid, os.Args[3])
+}
+
 func setupLink() error {
 	boot, db, err := openDB()
 	if err != nil {
@@ -256,12 +344,12 @@ func access() error {
 	if len(os.Args) > 2 {
 		name = os.Args[2]
 	}
-	a, db, err := setup()
+	sys, err := setup()
 	if err != nil {
 		return err
 	}
-	defer db.Close()
-	cookie, err := a.TestAccess(name)
+	defer closeAll(sys)
+	cookie, err := sys.TestAccess(userID(), name)
 	if err != nil {
 		return err
 	}
@@ -270,12 +358,12 @@ func access() error {
 }
 
 func enroll() error {
-	a, db, err := setup()
+	sys, err := setup()
 	if err != nil {
 		return err
 	}
-	defer db.Close()
-	link, err := a.EnrollLink()
+	defer closeAll(sys)
+	link, err := sys.EnrollLink(userID())
 	if err != nil {
 		return err
 	}
@@ -292,45 +380,45 @@ func backfill() error {
 		}
 		days = n
 	}
-	a, db, err := setup()
+	sys, a, err := userApp()
 	if err != nil {
 		return err
 	}
-	defer db.Close()
+	defer closeAll(sys)
 	checked, found, cost, err := a.BackfillAppointments(context.Background(), days)
 	fmt.Printf("Geprüft: %d, Termine erkannt: %d, Kosten: %.4f USD\n", checked, found, cost)
 	return err
 }
 
 func sortNotes() error {
-	a, db, err := setup()
+	sys, a, err := userApp()
 	if err != nil {
 		return err
 	}
-	defer db.Close()
+	defer closeAll(sys)
 	checked, sorted, cost, err := a.BackfillNoteLists(context.Background())
 	fmt.Printf("Ohne Liste: %d, einsortiert: %d, Kosten: %.4f USD\n", checked, sorted, cost)
 	return err
 }
 
 func rawMemory() error {
-	a, db, err := setup()
+	sys, a, err := userApp()
 	if err != nil {
 		return err
 	}
-	defer db.Close()
+	defer closeAll(sys)
 	n, err := a.RawToObservations(len(os.Args) > 2 && os.Args[2] == "vorschlaege")
 	fmt.Printf("Zu Beobachtungen gemacht: %d (die KI wertet sie in etwa 10 Minuten aus)\n", n)
 	return err
 }
 
 func resetMemory() error {
-	_, db, err := setup()
+	sys, a, err := userApp()
 	if err != nil {
 		return err
 	}
-	defer db.Close()
-	n, err := db.ResetMemory()
+	defer closeAll(sys)
+	n, err := a.DB.ResetMemory()
 	fmt.Printf("Gedächtnis zurückgesetzt: %d Einträge entfernt\n", n)
 	return err
 }

@@ -99,8 +99,11 @@ func DayMonth(t time.Time) string {
 func DateTime(t time.Time) string { return Date(t) + ", " + t.Format("15:04") }
 
 // LanguageRule: Zusatz für jede KI-Anweisung bei Englisch (leer bei Deutsch – die Anweisungen sind deutsch).
-func LanguageRule() string {
-	if Lang() != "en" {
+func LanguageRule() string { return LanguageRuleIn(Lang()) }
+
+// LanguageRuleIn: wie LanguageRule für eine bestimmte Sprache (je Nutzer).
+func LanguageRuleIn(l string) string {
+	if Norm(l) != "en" {
 		return ""
 	}
 	return "Sprache: Alle Texte, die du erzeugst (Titel, Notiz, Hinweise, Tags, Listen- und Gruppennamen, Beschreibungen, Fragen, Ergebnisse, Tipps), schreibst du auf Englisch – auch wenn Notiz, Gedächtnis, Listen oder Beispiele deutsch sind. Vorhandene Listen-, Gruppen- und Tag-Namen übernimmst du exakt wie geschrieben. Schlüssel und feste Werte des JSON-Formats bleiben unverändert."

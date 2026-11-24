@@ -57,35 +57,35 @@ func (a *App) mcpCleanup(raw json.RawMessage) (string, error) {
 		Ausfuehren  bool        `json:"ausfuehren"`
 	}
 	if json.Unmarshal(raw, &in) != nil {
-		return "", i18n.Errorf("Argumente nicht lesbar")
+		return "", a.Errorf("Argumente nicht lesbar")
 	}
 	if len(in.Aenderungen) == 0 {
-		return "", i18n.Errorf("Keine Änderungen angegeben")
+		return "", a.Errorf("Keine Änderungen angegeben")
 	}
 	if len(in.Aenderungen) > mcpCleanupMax {
-		return "", i18n.Errorf("Zu viele Änderungen (höchstens %d je Aufruf)", mcpCleanupMax)
+		return "", a.Errorf("Zu viele Änderungen (höchstens %d je Aufruf)", mcpCleanupMax)
 	}
 	var b strings.Builder
 	if in.Ausfuehren {
-		b.WriteString(i18n.T("Ausgeführt:") + "\n")
+		b.WriteString(a.T("Ausgeführt:") + "\n")
 	} else {
-		b.WriteString(i18n.T("VORSCHLAG – noch nichts geändert. Dem Nutzer zeigen; nur nach seiner Zustimmung mit ausfuehren=true erneut aufrufen:") + "\n")
+		b.WriteString(a.T("VORSCHLAG – noch nichts geändert. Dem Nutzer zeigen; nur nach seiner Zustimmung mit ausfuehren=true erneut aufrufen:") + "\n")
 	}
 	ok, failed := 0, 0
 	for i, c := range in.Aenderungen {
 		text, err := a.mcpChangeOne(c, in.Ausfuehren)
 		if err != nil {
 			failed++
-			fmt.Fprintf(&b, "%d. %s: %s\n", i+1, i18n.T("FEHLER"), err)
+			fmt.Fprintf(&b, "%d. %s: %s\n", i+1, a.T("FEHLER"), err)
 			continue
 		}
 		ok++
 		fmt.Fprintf(&b, "%d. %s\n", i+1, text)
 	}
 	if failed > 0 && !in.Ausfuehren {
-		b.WriteString(i18n.Tf("%d Änderung(en) nicht möglich – vor dem Ausführen korrigieren.", failed))
+		b.WriteString(a.Tf("%d Änderung(en) nicht möglich – vor dem Ausführen korrigieren.", failed))
 	} else if in.Ausfuehren {
-		b.WriteString(i18n.Tf("%d erledigt, %d fehlgeschlagen.", ok, failed))
+		b.WriteString(a.Tf("%d erledigt, %d fehlgeschlagen.", ok, failed))
 	}
 	return strings.TrimSpace(b.String()), nil
 }
@@ -94,11 +94,11 @@ func (a *App) mcpCleanup(raw json.RawMessage) (string, error) {
 func (a *App) mcpResolveList(ref string) (*store.List, error) {
 	ref = strings.TrimSpace(ref)
 	if ref == "" {
-		return nil, i18n.Errorf("Liste fehlt")
+		return nil, a.Errorf("Liste fehlt")
 	}
 	lists, err := a.DB.Lists()
 	if err != nil {
-		return nil, i18n.Errorf("Datenbankfehler")
+		return nil, a.Errorf("Datenbankfehler")
 	}
 	var found []*store.List
 	for _, l := range lists {
@@ -113,9 +113,9 @@ func (a *App) mcpResolveList(ref string) (*store.List, error) {
 	case 1:
 		return found[0], nil
 	case 0:
-		return nil, i18n.Errorf("Liste %s gibt es nicht", ref)
+		return nil, a.Errorf("Liste %s gibt es nicht", ref)
 	}
-	return nil, i18n.Errorf("Liste „%s“ gibt es mehrmals – als Nummer angeben", ref)
+	return nil, a.Errorf("Liste „%s“ gibt es mehrmals – als Nummer angeben", ref)
 }
 
 // mcpChangeOne prüft eine Änderung, beschreibt sie und führt sie bei run aus.
@@ -130,12 +130,12 @@ func (a *App) mcpChangeOne(c mcpChange, run bool) (string, error) {
 	case "liste_anlegen":
 		name, group := str(c.Name), str(c.Gruppe)
 		if name == "" {
-			return "", i18n.Errorf("Name fehlt")
+			return "", a.Errorf("Name fehlt")
 		}
 		if l, err := a.mcpResolveList(name); err == nil && strings.EqualFold(l.Project, group) {
-			return "", i18n.Errorf("Liste „%s“ gibt es schon (L%d)", name, l.Nr)
+			return "", a.Errorf("Liste „%s“ gibt es schon (L%d)", name, l.Nr)
 		}
-		desc := i18n.Tf("Neue Liste „%s“ in %s", name, groupLabel(group))
+		desc := a.Tf("Neue Liste „%s“ in %s", name, groupLabel(group))
 		if !run {
 			return desc, nil
 		}
@@ -159,9 +159,9 @@ func (a *App) mcpChangeOne(c mcpChange, run bool) (string, error) {
 			group = str(c.Gruppe)
 		}
 		if name == l.Name && strings.EqualFold(group, l.Project) {
-			return "", i18n.Errorf("L%d: keine Änderung angegeben", l.Nr)
+			return "", a.Errorf("L%d: keine Änderung angegeben", l.Nr)
 		}
-		desc := i18n.Tf("%s → „%s“ in %s", mcpListLabel(l), name, groupLabel(group))
+		desc := a.Tf("%s → „%s“ in %s", mcpListLabel(l), name, groupLabel(group))
 		if !run {
 			return desc, nil
 		}
@@ -177,13 +177,13 @@ func (a *App) mcpChangeOne(c mcpChange, run bool) (string, error) {
 			return "", err
 		}
 		if src.ID == dst.ID {
-			return "", i18n.Errorf("Liste und Ziel sind gleich")
+			return "", a.Errorf("Liste und Ziel sind gleich")
 		}
 		items, err := a.DB.ListItems(src.ID)
 		if err != nil {
-			return "", i18n.Errorf("Datenbankfehler")
+			return "", a.Errorf("Datenbankfehler")
 		}
-		desc := i18n.Tf("%s → %s: %d Punkte verschieben, danach %s löschen", mcpListLabel(src), mcpListLabel(dst), len(items), fmt.Sprintf("L%d", src.Nr))
+		desc := a.Tf("%s → %s: %d Punkte verschieben, danach %s löschen", mcpListLabel(src), mcpListLabel(dst), len(items), fmt.Sprintf("L%d", src.Nr))
 		if !run {
 			return desc, nil
 		}
@@ -191,7 +191,7 @@ func (a *App) mcpChangeOne(c mcpChange, run bool) (string, error) {
 		for _, it := range items {
 			it.ListID = dst.ID
 			if err := a.DB.SaveListItem(it); err != nil {
-				return "", i18n.Errorf("Punkt „%s“: %v", it.Text, err)
+				return "", a.Errorf("Punkt „%s“: %v", it.Text, err)
 			}
 			if it.JobID != "" {
 				a.changed(it.JobID)
@@ -209,7 +209,7 @@ func (a *App) mcpChangeOne(c mcpChange, run bool) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		desc := i18n.Tf("%s löschen (%d Punkte fallen weg, die Notizen bleiben im Verlauf)", mcpListLabel(l), l.Total)
+		desc := a.Tf("%s löschen (%d Punkte fallen weg, die Notizen bleiben im Verlauf)", mcpListLabel(l), l.Total)
 		if !run {
 			return desc, nil
 		}
@@ -221,11 +221,11 @@ func (a *App) mcpChangeOne(c mcpChange, run bool) (string, error) {
 			return "", err
 		}
 		if len(c.Punkte) == 0 {
-			return "", i18n.Errorf("Keine Punkte angegeben")
+			return "", a.Errorf("Keine Punkte angegeben")
 		}
 		_, items, err := a.mcpItems()
 		if err != nil {
-			return "", i18n.Errorf("Datenbankfehler")
+			return "", a.Errorf("Datenbankfehler")
 		}
 		var moves []mcpItem
 		for _, ref := range c.Punkte {
@@ -240,19 +240,19 @@ func (a *App) mcpChangeOne(c mcpChange, run bool) (string, error) {
 			}
 		}
 		if len(moves) == 0 {
-			return "", i18n.Errorf("Die Punkte stehen schon in %s", mcpListLabel(dst))
+			return "", a.Errorf("Die Punkte stehen schon in %s", mcpListLabel(dst))
 		}
 		names := make([]string, len(moves))
 		for i, m := range moves {
 			names[i] = fmt.Sprintf("#%s %s", m.ref, m.item.Text)
 		}
-		desc := i18n.Tf("%s → %s", strings.Join(names, ", "), mcpListLabel(dst))
+		desc := a.Tf("%s → %s", strings.Join(names, ", "), mcpListLabel(dst))
 		if !run {
 			return desc, nil
 		}
 		for _, m := range moves {
 			if err := a.mcpHandler(a.handleItemMove, "POST", m.item.ID, map[string]any{"ziel": dst.ID}); err != nil {
-				return "", i18n.Errorf("#%s: %v", m.ref, err)
+				return "", a.Errorf("#%s: %v", m.ref, err)
 			}
 		}
 		return desc, nil
@@ -260,13 +260,13 @@ func (a *App) mcpChangeOne(c mcpChange, run bool) (string, error) {
 	case "gruppe_umbenennen":
 		old, ok := a.groupName(str(c.Gruppe))
 		if !ok {
-			return "", i18n.Errorf("Gruppe „%s“ gibt es nicht", str(c.Gruppe))
+			return "", a.Errorf("Gruppe „%s“ gibt es nicht", str(c.Gruppe))
 		}
 		name := str(c.Name)
 		if name == "" {
-			return "", i18n.Errorf("Name fehlt")
+			return "", a.Errorf("Name fehlt")
 		}
-		desc := i18n.Tf("Gruppe „%s“ → „%s“", old, name)
+		desc := a.Tf("Gruppe „%s“ → „%s“", old, name)
 		if !run {
 			return desc, nil
 		}
@@ -275,15 +275,15 @@ func (a *App) mcpChangeOne(c mcpChange, run bool) (string, error) {
 	case "gruppe_aufloesen":
 		name, ok := a.groupName(str(c.Gruppe))
 		if !ok {
-			return "", i18n.Errorf("Gruppe „%s“ gibt es nicht", str(c.Gruppe))
+			return "", a.Errorf("Gruppe „%s“ gibt es nicht", str(c.Gruppe))
 		}
-		desc := i18n.Tf("Gruppe „%s“ auflösen (ihre Listen bleiben, ohne Gruppe)", name)
+		desc := a.Tf("Gruppe „%s“ auflösen (ihre Listen bleiben, ohne Gruppe)", name)
 		if !run {
 			return desc, nil
 		}
 		return desc, a.mcpHandler(a.handleGroupDelete, "POST", "", map[string]any{"name": name})
 	}
-	return "", i18n.Errorf("Unbekannte Aktion „%s“", c.Aktion)
+	return "", a.Errorf("Unbekannte Aktion „%s“", c.Aktion)
 }
 
 func groupLabel(group string) string {

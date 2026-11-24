@@ -16,14 +16,14 @@ const donateKey = "spenden-link"
 var koFiRe = regexp.MustCompile(`(?m)^\s*ko_fi:\s*["']?([A-Za-z0-9_]+)["']?\s*(?:#.*)?$`)
 
 // donateURL: gespeicherter Link ("" = keiner).
-func (a *App) donateURL() string {
+func (a *System) donateURL() string {
 	v, _ := a.DB.Get(donateKey)
 	return v
 }
 
 // refreshDonate holt FUNDING.yml der Update-Quelle. Netzfehler lassen den bisherigen Link stehen; fehlt die
 // Datei (404) oder der Eintrag, wird der Link entfernt.
-func (a *App) refreshDonate(ctx context.Context) {
+func (a *System) refreshDonate(ctx context.Context) {
 	repo := a.Cfg.UpdateRepo
 	if repo == "" {
 		return
@@ -32,7 +32,7 @@ func (a *App) refreshDonate(ctx context.Context) {
 	defer cancel()
 	req, _ := http.NewRequestWithContext(ctx, "GET", githubAPI+"/repos/"+repo+"/contents/.github/FUNDING.yml", nil)
 	req.Header.Set("Accept", "application/vnd.github.raw")
-	req.Header.Set("User-Agent", "pebble-webhook/"+strings.Fields(a.Version+" dev")[0])
+	req.Header.Set("User-Agent", "pebble-webhook/"+strings.Fields(a.Version + " dev")[0])
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return

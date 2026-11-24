@@ -9,6 +9,29 @@ Version numbers X.Y.Z:
 
 Own builds show X.Y.Z.A: **A** is a local build counter (one per deployed change, starting at 1 for every new X.Y.Z); it never appears in Git or releases, so one version can collect several changes.
 
+## [3.0.0] - 2026-11-24
+
+### New
+- Multiple users (prepared): user 1 is admin; roles admin/user; admins manage updates, backups, system settings and users.
+- Every user sees only own data, settings, devices, tokens, calendar and MCP connections – admins included.
+- Own encrypted database per user (`users/<id>/daten.db`, Adiantum) and encrypted recordings (`AUDIO_DIR/<id>/…enc`).
+- Keys per user in `/etc/pebble-webhook/keys` (never in backups); recovery code to reopen data on a new server.
+- Setup wizard asks for your name; menu says "Hello <name>"; welcome page shows the recovery code once.
+- Users page (admin): invite link, role, lock, delete; only usage numbers, never content.
+- Personal settings (language, Pebble gestures, Joplin, display and memory values) apply instantly without restart.
+- Status → Access and security: own API token, new recovery code.
+- CLI: `nutzer-anlegen`, `schluessel-wiederherstellen`; `PEBBLE_NUTZER=<id>` for per-user commands.
+- One input window for new note, AI instruction and planning answer: type or record.
+- System card on the status page (admin): OS, CPU, RAM, load, this service, top processes.
+
+### Changed
+- Database driver ncruces/go-sqlite3 (still without cgo).
+- `pebble.db` moves to `system.db` + `users/1/daten.db` on update; old file kept as `pebble.db.vor-3.0`.
+- Backups format 2: system database plus encrypted user data; only encrypted recordings.
+- Pebble app token, API token and calendar link belong to a user (Pebble app needs no new setup).
+- Webhook, API token, MCP and calendar link resolve the user from their token.
+- Recordings until 2.x get encrypted and moved 24 h after the update.
+
 ## [2.3.0] - 2026-11-24
 
 ### Changed

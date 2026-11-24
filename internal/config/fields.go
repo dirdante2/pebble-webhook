@@ -16,7 +16,20 @@ type Field struct {
 	Default  string   `json:"vorgabe"`
 	Required bool     `json:"pflicht,omitempty"`
 	Choices  []string `json:"auswahl,omitempty"`
-	Generate bool     `json:"erzeugen,omitempty"` // Geheimnis, das der Assistent selbst erzeugt
+	Generate bool     `json:"erzeugen,omitempty"`    // Geheimnis, das der Assistent selbst erzeugt
+	Personal bool     `json:"persoenlich,omitempty"` // je Nutzer (in seiner Datenbank), sonst für das ganze System
+}
+
+// personal: Einstellungen, die jeder Nutzer selbst setzt (überlagern den Wert des Systems).
+var personal = map[string]bool{"LANGUAGE": true, "TRIGGER_SINGLE": true, "TRIGGER_DOUBLE": true, "RING_CAPACITY_HOURS": true,
+	"JOPLIN_ENABLED": true, "JOPLIN_URL": true, "JOPLIN_EMAIL": true, "JOPLIN_PASSWORD": true, "JOPLIN_NOTEBOOK": true,
+	"LIST_DONE_ACTIVE_MINUTES": true, "VISIT_GAP_MINUTES": true, "NOTE_CONTEXT_MINUTES": true, "HISTORY_MIN_ENTRIES": true,
+	"MEMORY_TRAIN_ENTRIES": true, "MEMORY_REJECTED": true}
+
+func init() {
+	for i := range Fields {
+		Fields[i].Personal = personal[Fields[i].Key]
+	}
 }
 
 // Fields: alle Einstellungen außer den Start-Werten (LISTEN, DATA_DIR, AUDIO_DIR, BACKUP_DIR).
@@ -27,8 +40,6 @@ var Fields = []Field{
 	{Key: "TRUSTED_PROXY", Group: "Adresse", Label: "Reverse-Proxy", Help: "IP des Proxys davor; nur von dort wird X-Real-IP geglaubt. Leer = keiner.", Kind: "text"},
 
 	{Key: "HOOK_TOKEN_HEADER", Group: "Pebble-App", Label: "Header für den Token", Help: "Name des Headers, in dem die Pebble-App das Webhook-Token mitschickt.", Kind: "text", Default: "X-Webhook-Token", Required: true},
-	{Key: "HOOK_TOKEN", Group: "Pebble-App", Label: "Webhook-Token", Help: "Wird in der Pebble-App als eigener Header eingetragen.", Kind: "secret", Required: true, Generate: true},
-	{Key: "HOOK_SIGNING_SECRET", Group: "Pebble-App", Label: "Signatur-Secret", Help: "Signatur der Pebble-App; nicht gleich dem Token.", Kind: "secret", Required: true, Generate: true},
 	{Key: "TRIGGER_SINGLE", Group: "Pebble-App", Label: "Geste „Halten“", Help: "Was eine Aufnahme mit „Halten“ auslöst: diktat = Notiz, planung = Recherche mit Antwort.", Kind: "choice", Default: "diktat", Choices: []string{"diktat", "planung"}},
 	{Key: "TRIGGER_DOUBLE", Group: "Pebble-App", Label: "Geste „Klick + Halten“", Help: "Was eine Aufnahme mit „Klick + Halten“ auslöst: diktat = Notiz, planung = Recherche mit Antwort.", Kind: "choice", Default: "planung", Choices: []string{"diktat", "planung"}},
 	{Key: "RING_ID_HEADER", Group: "Pebble-App", Label: "Header für die Ring-ID", Help: "Name des Headers, in dem die Pebble-App die ID des Rings mitschickt (Pflicht, Form #12345). Ohne gültige ID scheitert das Test-Event; bei Aufnahmen erscheint ein Fehler. Die ID wird je Aufnahme gespeichert; ändert sie sich, schlägt die App einen Ringwechsel vor.", Kind: "text", Default: "X-Ring-ID", Required: true},
@@ -73,7 +84,6 @@ var Fields = []Field{
 	{Key: "MEMORY_TRAIN_ENTRIES", Group: "Anzeige und Gedächtnis", Label: "Lernlauf: jüngste Einträge", Help: "So viele der jüngsten Einträge wertet der Lernlauf des Gedächtnisses aus.", Kind: "int", Default: "30"},
 	{Key: "MEMORY_REJECTED", Group: "Anzeige und Gedächtnis", Label: "Gedächtnis: gelöschte als „nicht erwünscht“", Help: "So viele gelöschte Gedächtnis-Einträge bekommt die KI als „nicht erwünscht“ mit.", Kind: "int", Default: "30"},
 
-	{Key: "API_TOKEN", Group: "Zugang und Updates", Label: "Maschinenzugang (API-Token)", Help: "Authorization: Bearer; nur Lesen, Einsortieren, Abhaken. Leer = aus, sonst mind. 32 Zeichen.", Kind: "secret"},
 	{Key: "VAPID_SUBJECT", Group: "Zugang und Updates", Label: "Kontakt für Web-Push", Help: "mailto:… oder https-Adresse; leer = öffentliche Adresse.", Kind: "text"},
 	{Key: "UPDATE_CHANNEL", Group: "Zugang und Updates", Label: "Update-Kanal", Help: "stable = Langzeit-Versionen; beta = neue, noch nicht ausgereifte Funktionen; nightly = jede Änderung, auch ungetestet.", Kind: "choice", Default: "stable", Choices: []string{"stable", "beta", "nightly"}},
 	{Key: "AUTO_UPDATE", Group: "Zugang und Updates", Label: "Automatisches Update", Help: "aktiv = jeden Tag zur gewählten Uhrzeit die neueste Version des Update-Kanals installieren, wenn es eine neuere gibt (vorher Backup).", Kind: "choice", Default: "aktiv", Choices: []string{"aktiv", "inaktiv"}},

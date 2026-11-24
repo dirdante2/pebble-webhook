@@ -9,7 +9,6 @@ import (
 	"regexp"
 	"strings"
 
-	"pebble-webhook/internal/i18n"
 	"pebble-webhook/internal/openai"
 	"pebble-webhook/internal/store"
 )
@@ -97,7 +96,7 @@ func cleanName(s string) string {
 func (a *App) findList(group, name string) (*store.List, error) {
 	group, name = cleanName(group), cleanName(name)
 	if name == "" || len([]rune(name)) > 40 || len([]rune(group)) > 40 {
-		return nil, errNotSorted{i18n.Tf("Liste „%s“ (Gruppe „%s“) ist leer oder länger als 40 Zeichen", name, group)}
+		return nil, errNotSorted{a.Tf("Liste „%s“ (Gruppe „%s“) ist leer oder länger als 40 Zeichen", name, group)}
 	}
 	lists, err := a.DB.Lists()
 	if err != nil {
@@ -536,7 +535,7 @@ func (a *App) handleGroupDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if conflict != "" {
-		writeErr(w, http.StatusConflict, "doppelt", i18n.Tf("Die Liste „%s“ gibt es schon ohne Gruppe; erst umbenennen oder verschieben", conflict))
+		writeErr(w, http.StatusConflict, "doppelt", a.Tf("Die Liste „%s“ gibt es schon ohne Gruppe; erst umbenennen oder verschieben", conflict))
 		return
 	}
 	a.observe("korrektur", fmt.Sprintf("Korrektur: Die Gruppe „%s“ hat der Nutzer aufgelöst; ihre Listen gehören zu keiner Gruppe.", name))

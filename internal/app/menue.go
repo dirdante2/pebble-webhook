@@ -5,7 +5,6 @@ import (
 	"slices"
 	"sort"
 	"strconv"
-
 )
 
 // Zahlen für das Seitenmenü (Nutzervorgabe 23.11.2026: Menü bleibt aktuell, auch ohne Verlauf oder Listen zu öffnen).
@@ -118,4 +117,3 @@ func (a *App) openQuestionsTotal() int {
 	}
 	return total
 }
-

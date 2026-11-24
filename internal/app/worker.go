@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"slices"
+	"strings"
 	"time"
 
-	"pebble-webhook/internal/i18n"
 	"pebble-webhook/internal/joplin"
+	"pebble-webhook/internal/schluessel"
 	"pebble-webhook/internal/store"
 )
 
@@ -17,9 +19,6 @@ var backoff = []time.Duration{30 * time.Second, 2 * time.Minute, 10 * time.Minut
 // Run verarbeitet Aufträge, bis ctx endet. Der Stand liegt je Schritt in der Datenbank,
 // ein Neustart setzt also beim letzten fertigen Schritt fort.
 func (a *App) Run(ctx context.Context) {
-	go a.CheckUpdates(ctx)
-	go a.AutoUpdate(ctx)
-	go a.BackupSchedule(ctx)
 	a.initRing() // vor sortAudio: die Pfade der Einträge stimmen noch
 	a.sortAudio()
 	a.fixItemYears()
@@ -111,7 +110,7 @@ func (a *App) process(ctx context.Context, j *store.Job) {
 			a.changed(j.ID)
 			// Benachrichtigt wird nur zu Planungen; Diktate und leere Aufnahmen stehen im Verlauf und auf der Statusseite.
 			if j.Failed && !j.Empty && j.Mode == "planung" {
-				a.notify(i18n.T("Planung fehlgeschlagen"), store.Preview(j.Error, 120), "/eintrag/"+j.ID)
+				a.notify(a.T("Planung fehlgeschlagen"), store.Preview(j.Error, 120), "/eintrag/"+j.ID)
 			}
 			return
 		}
@@ -161,7 +160,7 @@ func (a *App) step(ctx context.Context, j *store.Job) error {
 			j.State = store.StateAssigned
 			return nil
 		}
-		return permanentError{i18n.T("Kein Aktionsmodus für diesen Auftrag")}
+		return permanentError{a.T("Kein Aktionsmodus für diesen Auftrag")}
 	case store.StateAssigned:
 		p, err := a.DB.Planning(j.PlanningID)
 		if err != nil {
@@ -188,7 +187,7 @@ func (a *App) step(ctx context.Context, j *store.Job) error {
 		j.State = store.StateDone
 		return nil
 	}
-	return permanentError{i18n.T("Unbekannter Verarbeitungsstand") + " " + j.State}
+	return permanentError{a.T("Unbekannter Verarbeitungsstand") + " " + j.State}
 }
 
 func (a *App) transcribe(ctx context.Context, j *store.Job) error {
@@ -202,19 +201,24 @@ func (a *App) transcribe(ctx context.Context, j *store.Job) error {
 		}
 	case a.Cfg.Transcription == "pebble" && j.Source == "pebble":
 		if j.PebbleText == "" {
-			return emptyError{i18n.T("Pebble hat kein Transkript mitgeschickt (TRANSCRIPTION=pebble)")}
+			return emptyError{a.T("Pebble hat kein Transkript mitgeschickt (TRANSCRIPTION=pebble)")}
 		}
 		j.Transcript, j.TranscriptSource = j.PebbleText, "pebble"
 	default:
 		if j.AudioPath == "" || j.AudioDeletedAt != 0 {
 			if j.PebbleText == "" {
-				return permanentError{i18n.T("Kein Audio (mehr) vorhanden – Transkription nicht möglich")}
+				return permanentError{a.T("Kein Audio (mehr) vorhanden – Transkription nicht möglich")}
 			}
 			// Ohne Aufnahme bleibt das Transkript der Pebble-App.
 			j.Transcript, j.TranscriptSource = j.PebbleText, "pebble"
 			break
 		}
-		text, seconds, err := a.AI.Transcribe(ctx, a.Cfg.TranscribeModel, j.AudioPath, j.AudioMime, i18n.TranscribeLanguage())
+		audio, err := a.readAudio(j.AudioPath)
+		if err != nil {
+			return a.Errorf("Audio nicht lesbar: %w", err)
+		}
+		name := strings.TrimSuffix(filepath.Base(j.AudioPath), schluessel.AudioExt)
+		text, seconds, err := a.AI.Transcribe(ctx, a.Cfg.TranscribeModel, name, audio, j.AudioMime, a.Cfg.Language)
 		if err != nil {
 			return err
 		}
@@ -230,7 +234,7 @@ func (a *App) transcribe(ctx context.Context, j *store.Job) error {
 			// OpenAI hört nichts, die Pebble-App hat aber Text erkannt: den nehmen.
 			j.Transcript, j.TranscriptSource = j.PebbleText, "pebble"
 		default:
-			return emptyError{i18n.T("Die Transkription ist leer – keine Sprache erkannt")}
+			return emptyError{a.T("Die Transkription ist leer – keine Sprache erkannt")}
 		}
 	}
 	j.State = store.StateTranscribed
@@ -305,7 +309,7 @@ func (a *App) pushJob(j *store.Job) (err error) {
 func (a *App) pushPlanning(p *store.Planning) error {
 	plan := parsePlan(p.Plan)
 	if plan == nil {
-		return permanentError{i18n.T("Planung ohne Ergebnis")}
+		return permanentError{a.T("Planung ohne Ergebnis")}
 	}
 	rounds, err := a.DB.Rounds(p.ID)
 	if err != nil {
@@ -398,14 +402,14 @@ func (a *App) notifyDone(j *store.Job) {
 	if j.Mode != "planung" {
 		return
 	}
-	title, body := i18n.T("Planung fertig"), j.Title
+	title, body := a.T("Planung fertig"), j.Title
 	if plan := parsePlan(j.Result); plan != nil && len(plan.OffeneFragen) == 1 {
-		title = i18n.T("Planung fertig · 1 Frage")
+		title = a.T("Planung fertig · 1 Frage")
 	} else if plan != nil && len(plan.OffeneFragen) > 1 {
-		title = i18n.Tf("Planung fertig · %d Fragen", len(plan.OffeneFragen))
+		title = a.Tf("Planung fertig · %d Fragen", len(plan.OffeneFragen))
 	}
 	if j.LimitHit {
-		body += i18n.T(" (Kostenlimit erreicht)")
+		body += a.T(" (Kostenlimit erreicht)")
 	}
 	a.notify(title, body, "/planung/"+j.PlanningID)
 }
@@ -433,10 +437,12 @@ func (a *App) AutoClose() {
 }
 
 // Cleanup (täglich): abgelaufenen Papierkorb endgültig leeren – nur dort werden Aufnahmen gelöscht –,
-// Backups bereinigen, Aufnahmen ohne Eintrag suchen, leere Audio-Ordner entfernen.
+// Aufnahmen ohne Eintrag suchen, leere Audio-Ordner entfernen (Backups bereinigt das System).
 func (a *App) Cleanup() {
+	if _, err := a.migrateLegacyAudio(false); err != nil {
+		logf("Aufnahmen bis 2.x: %v", err)
+	}
 	a.trashExpired()
-	a.cleanBackups()
 	a.scanAudio()
-	a.removeEmptyDirs(a.Cfg.AudioDir)
+	a.removeEmptyDirs(a.audioRoot())
 }

@@ -14,10 +14,12 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
 	"pebble-webhook/internal/i18n"
+	"pebble-webhook/internal/schluessel"
 	"pebble-webhook/internal/store"
 )
 
@@ -27,7 +29,7 @@ const backupUploadMax = 2 << 30
 // handleBackupUpload: POST /api/backups/hochladen?name=<Dateiname> mit dem Archiv als Rumpf. Angenommen wird nur genau
 // die Form, die der Download liefert (Name, Einträge, Reihenfolge, meta.json passend zum Namen, lesbare Datenbank).
 // Danach liegt es in BACKUP_DIR und wird sofort eingespielt – wie „Wiederherstellen“ samt Version aus dem Backup.
-func (a *App) handleBackupUpload(w http.ResponseWriter, r *http.Request) {
+func (a *System) handleBackupUpload(w http.ResponseWriter, r *http.Request) {
 	name := r.URL.Query().Get("name")
 	m := archiveNameRe.FindStringSubmatch(name)
 	if m == nil {
@@ -83,8 +85,9 @@ func (a *App) handleBackupUpload(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"ok": true, "name": name})
 }
 
-// checkBackupArchive prüft ein hochgeladenes Archiv gegen die Form von writeArchive: meta.json, env, pebble.db in dieser
-// Reihenfolge, dann nur bei „-audio“ Dateien unter audio/; nur normale Dateien, keine Ordner, Links oder fremden Namen.
+// checkBackupArchive prüft ein hochgeladenes Archiv gegen die Form von writeArchive: meta.json, env, dann die Daten –
+// Format 1: pebble.db; Format 2: system.db und je Nutzer users/<id>/daten.db (verschlüsselt) –, dann nur bei „-audio“
+// Dateien unter audio/ (Format 2: audio/<id>/….enc); nur normale Dateien, keine Ordner, Links oder fremden Namen.
 // m ist der Treffer von archiveNameRe auf den Dateinamen.
 func checkBackupArchive(p string, m []string, tmpDir string) error {
 	f, err := os.Open(p)
@@ -99,7 +102,7 @@ func checkBackupArchive(p string, m []string, tmpDir string) error {
 	tr := tar.NewReader(gz)
 	audio := m[5] != ""
 	order := []string{"meta.json", "env", "pebble.db"}
-	n := 0
+	n, format, users := 0, 0, 0
 	for {
 		h, err := tr.Next()
 		if err == io.EOF {
@@ -111,13 +114,25 @@ func checkBackupArchive(p string, m []string, tmpDir string) error {
 		if h.Typeflag != tar.TypeReg {
 			return fmt.Errorf("%s ist keine normale Datei", h.Name)
 		}
-		if n < len(order) {
+		switch {
+		case n < len(order):
 			if h.Name != order[n] {
 				return fmt.Errorf("erwartet %s, gefunden %s", order[n], h.Name)
 			}
-		} else if !audio {
+		case format == 2 && userFileRe.MatchString(h.Name):
+			if err := checkSealedDB(tr, h.Name); err != nil {
+				return err
+			}
+			if !strings.HasSuffix(h.Name, "-wal") {
+				users++
+			}
+			n++
+			continue
+		case !audio:
 			return fmt.Errorf("unerwartete Datei %s", h.Name)
-		} else if !strings.HasPrefix(h.Name, "audio/") || path.Clean(h.Name) != h.Name || strings.Contains(h.Name, "\\") || strings.Contains(h.Name, "..") {
+		case !strings.HasPrefix(h.Name, "audio/") || path.Clean(h.Name) != h.Name || strings.Contains(h.Name, "\\") || strings.Contains(h.Name, ".."):
+			return fmt.Errorf("unerwartete Datei %s", h.Name)
+		case format == 2 && (!audioFileRe.MatchString(h.Name) || !strings.HasSuffix(h.Name, schluessel.AudioExt)):
 			return fmt.Errorf("unerwartete Datei %s", h.Name)
 		}
 		switch h.Name {
@@ -131,8 +146,12 @@ func checkBackupArchive(p string, m []string, tmpDir string) error {
 			if err := dec.Decode(&meta); err != nil {
 				return errors.New("meta.json nicht lesbar")
 			}
-			if meta.Format != 1 || meta.Version != m[1] || meta.Channel != m[2] || meta.Kind != m[4] || meta.Audio != audio {
+			if (meta.Format != 1 && meta.Format != 2) || meta.Version != m[1] || meta.Channel != m[2] || meta.Kind != m[4] || meta.Audio != audio {
 				return errors.New("meta.json passt nicht zum Dateinamen")
+			}
+			format = meta.Format
+			if format == 2 {
+				order[2] = "system.db"
 			}
 		case "env":
 			if h.Size > 4<<10 {
@@ -148,15 +167,25 @@ func checkBackupArchive(p string, m []string, tmpDir string) error {
 					return errors.New("env enthält fremde Werte")
 				}
 			}
-		case "pebble.db":
-			if err := checkBackupDB(tr, tmpDir); err != nil {
+		case "pebble.db", "system.db":
+			want := "jobs"
+			if format == 2 {
+				want = "users"
+			}
+			if h.Name != order[2] {
+				return fmt.Errorf("unerwartete Datei %s", h.Name)
+			}
+			if err := checkBackupDB(tr, tmpDir, h.Name, want); err != nil {
 				return err
 			}
 		}
 		n++
 	}
 	if n < len(order) {
-		return errors.New("unvollständig (meta.json, env, pebble.db)")
+		return errors.New("unvollständig (meta.json, env, Datenbank)")
+	}
+	if format == 2 && users == 0 {
+		return errors.New("unvollständig (keine Nutzerdaten)")
 	}
 	// Nach dem Ende-Block des Archivs darf nur noch Füllung (Nullen) folgen – auch keine angehängten gzip-Teile.
 	rest, err := io.ReadAll(io.LimitReader(gz, 1<<20))
@@ -166,8 +195,9 @@ func checkBackupArchive(p string, m []string, tmpDir string) error {
 	return nil
 }
 
-// checkBackupDB legt die Datenbank aus dem Archiv kurz ab und öffnet sie nur lesend: SQLite, unbeschädigt, mit Aufträgen.
-func checkBackupDB(r io.Reader, dir string) error {
+// checkBackupDB legt eine Datenbank aus dem Archiv kurz ab und öffnet sie nur lesend: SQLite, unbeschädigt, mit der
+// Tabelle want (pebble.db bis 2.x: jobs; system.db: users).
+func checkBackupDB(r io.Reader, dir, name, want string) error {
 	b := make([]byte, 8)
 	rand.Read(b)
 	p := filepath.Join(dir, ".pruefen-"+hex.EncodeToString(b)+".db")
@@ -187,7 +217,7 @@ func checkBackupDB(r io.Reader, dir string) error {
 		g.Close()
 	}
 	if string(head) != "SQLite format 3\x00" {
-		return errors.New("pebble.db ist keine SQLite-Datenbank")
+		return fmt.Errorf("%s ist keine SQLite-Datenbank", name)
 	}
 	db, err := store.OpenReadOnly(p, nil)
 	if err != nil {
@@ -196,11 +226,28 @@ func checkBackupDB(r io.Reader, dir string) error {
 	defer db.Close()
 	var check string
 	if err := db.QueryRow("PRAGMA quick_check").Scan(&check); err != nil || check != "ok" {
-		return errors.New("pebble.db beschädigt")
+		return fmt.Errorf("%s beschädigt", name)
 	}
 	var n int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM jobs`).Scan(&n); err != nil {
-		return errors.New("pebble.db ist keine Datenbank dieser App")
+	if err := db.QueryRow(`SELECT COUNT(*) FROM ` + want).Scan(&n); err != nil {
+		return fmt.Errorf("%s ist keine Datenbank dieser App", name)
 	}
 	return nil
 }
+
+// checkSealedDB: die Datenbank eines Nutzers muss verschlüsselt sein (kein Klartext-Kopf) – lesen kann sie hier niemand.
+func checkSealedDB(r io.Reader, name string) error {
+	head := make([]byte, 16)
+	n, _ := io.ReadFull(r, head)
+	if n == 16 && string(head) == "SQLite format 3\x00" {
+		return fmt.Errorf("%s ist nicht verschlüsselt", name)
+	}
+	if n < 16 {
+		return fmt.Errorf("%s ist leer", name)
+	}
+	_, err := io.Copy(io.Discard, r)
+	return err
+}
+
+var userFileRe = regexp.MustCompile(`^users/[1-9][0-9]{0,8}/daten\.db(-wal)?$`)
+var audioFileRe = regexp.MustCompile(`^audio/[1-9][0-9]{0,8}/`)

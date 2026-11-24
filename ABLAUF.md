@@ -35,9 +35,9 @@ In der Web-App und in Joplin heißt die Art „Notiz“ (Nutzervorgabe 15.11.202
 
 ## Aufnahme in der Web-App (Notiz)
 
-1. Kopf → „+“ (Akzentfarbe, rechts neben der Suche) → Drawer mit großem Aufnahmeknopf: tippen = Start, nochmal tippen = Stopp; nach 60 s stoppt sie selbst. Schließen während der Aufnahme verwirft sie.
-2. Aufnahme kommt mit eigener Kennung in den Ausgang (IndexedDB) und wird sofort gesendet: `POST /api/notizen` (multipart `client_id`, `zeit`, `audio`, höchstens 8 MB). Ohne Verbindung bleibt sie vorgemerkt; gelöscht wird sie erst nach `200`.
-3. Server: Zustellung `web:<client_id>` schon bekannt → `200 bekannt`. Sonst Audio nach `AUDIO_DIR/diktat/JJJJ/MM/<id>-web.<ext>` (fsync) → Eintrag `source=web`, `mode=diktat` → erst dann `200`.
+1. Kopf → „+“ (Akzentfarbe, rechts neben der Suche) → Eingabe-Fenster (`oeffneEingabe`, dasselbe für KI-Anweisung und Antwort auf eine Planung): oben Textfeld (mit Text: „Senden“, Aufnahme gesperrt), darunter Aufnahmeknopf: tippen = Start, nochmal tippen = Stopp und Senden; nach 60 s stoppt sie selbst. Schließen während der Aufnahme verwirft sie; getippter Text bleibt als Entwurf.
+2. Aufnahme bzw. Text kommt mit eigener Kennung in den Ausgang (IndexedDB) und wird sofort gesendet: `POST /api/notizen` (multipart `client_id`, `zeit`, `audio` oder `text`, höchstens 8 MB). KI-Anweisung: `POST /api/eintraege/{id}/anweisung` multipart (`text` oder `audio` → sofort transkribiert, Kosten zur Notiz; `client_id` gegen Doppelte, kv `anweisung:<id>`). Ohne Verbindung bleibt sie vorgemerkt; gelöscht wird sie erst nach `200`.
+3. Server: Zustellung `web:<client_id>` schon bekannt → `200 bekannt`. Sonst Audio verschlüsselt nach `AUDIO_DIR/<nutzer>/diktat/JJJJ/MM/<id>-web.<ext>.enc` (fsync) → Eintrag `source=web`, `mode=diktat` → erst dann `200`.
 4. Weiter wie Notiz vom Pebble ab Schritt 6 (Transkription per OpenAI, Auswertung, Einsortieren).
 5. Zählt **nicht** zum Ring: keine Zeile in `ring_recordings`, nicht in „Wörter je Aufnahme“, der Ring-Nachtrag überspringt `-web`-Dateien. Antworten aus der Web-App (Planung) heißen ebenso `<id>-web.<ext>`.
 6. Reimport („Aufnahmen ohne Eintrag“): Dateiname `<id>-web.<ext>` → Eintrag mit `source=web` statt `import`, also wieder ohne Ring.
@@ -190,9 +190,21 @@ In der Web-App und in Joplin heißt die Art „Notiz“ (Nutzervorgabe 15.11.202
 
 ## Anmeldung
 
-1. Erstes Gerät: auf dem Server `pebble enroll` → Einmal-Link (15 min) → im Browser öffnen → Passkey anlegen (`/api/auth/einrichten/start|ende`) → Sitzung (Cookie, 90 Tage gleitend).
+1. Erstes Gerät: auf dem Server `pebble enroll` (Nutzer 1; anderer: `PEBBLE_NUTZER=<id>`) → Einmal-Link (15 min) → im Browser öffnen → Passkey anlegen (`/api/auth/einrichten/start|ende`) → Sitzung (Cookie, 90 Tage gleitend).
 2. Weiteres Gerät (seit 21.11.2026 per Kurz-Code): Status → „Weiteres Gerät hinzufügen“ (`/status/geraet`) → `POST /api/geraete/code` erzeugt 4 Ziffern (nur im Speicher, immer nur einer, höchstens 5 min) → die Seite meldet sich alle 10 s (`POST /api/geraete/code/halten`), ohne Meldung verfällt der Code nach 25 s, beim Verlassen `DELETE /api/geraete/code` → neues Gerät: Anmeldeseite „Mit Code hinzufügen“ → `POST /api/auth/code` (öffentlich; höchstens ein Versuch je 5 s für alle zusammen, sonst 429 „Nächster Versuch in N s“, der Knopf zählt herunter; nach 5 Fehlversuchen verfällt der Code) → Einmal-Token → `/einrichten#token` → Passkey anlegen. Der lange Einmal-Link (`POST /api/geraete/link`, `pebble enroll`) bleibt für die CLI.
 3. Anmelden: `/api/auth/anmelden/start|ende` mit dem Passkey des Geräts. Kein Passwort.
+
+## Mehrere Nutzer (seit 24.11.2026, 3.0.0)
+
+1. Aufbau: `DATA_DIR/system.db` (Klartext: Nutzer, Rollen, Passkeys, Sitzungen, Einmal-Links, Zugangs-Hashes, Systemeinstellungen) + je Nutzer `DATA_DIR/users/<id>/daten.db` (Adiantum-verschlüsselt, `user_id` in jeder Tabelle) + Aufnahmen `AUDIO_DIR/<id>/<diktat|planung>/JJJJ/MM/<name>.enc` (AES-GCM). Schlüssel: `KEY_DIR/<id>.key` (`/etc/pebble-webhook/keys`, nie im Backup), daraus per HKDF DB- und Audio-Schlüssel; in `users.key_wrap` der Schlüssel eingewickelt mit dem Wiederherstellungscode.
+2. Anfrage der Web-App: Sitzung → Nutzer → seine App (eigene DB, Worker, SSE, Push); Daten nicht geöffnet → 423 (gesperrt, Schlüssel fehlt). Systemrouten (Updates, Backups, Systemeinstellungen, Nutzer) nur Admin (403).
+3. Webhook: Token-Header → Hash in `user_tokens` → Nutzer → Signatur mit seinem Secret (Klartext nur in seiner DB) → Aufnahme bei ihm. Gesperrt → 503 (Pebble-App wiederholt). API-Token, Kalender-Link, MCP-OAuth ebenso je Nutzer.
+4. Ersteinrichtung: Assistent fragt Namen → Nutzer 1 (Admin) samt Schlüssel und DB → erster Passkey → `/willkommen` zeigt einmal den Wiederherstellungscode (bis „notiert“ verschlüsselt in seiner DB).
+5. Einladung (Admin): `/admin/nutzer/neu` → Link 7 Tage → neuer Nutzer legt Passkey an → erst dann angelegt → `/willkommen`. CLI: `pebble nutzer-anlegen <Name> [admin]`, dann `PEBBLE_NUTZER=<id> pebble enroll`.
+6. Umzug von 2.x: Installer (`vorbereiten`, Dienst gestoppt) oder Start → Staging `.umzug/` → system.db + verschlüsselte Kopie (VACUUM INTO) → Zeilen vergleichen → umbenennen → `pebble.db.vor-3.0`, an Stelle von pebble.db Platzhalter (Schema 1000). WebAuthn-Id, Sitzungen, Hook-Token/Secret, API-Token, Kalender-Link, OAuth gehen an Nutzer 1. Alte Aufnahmen: 24 h später verschlüsselt verschoben.
+7. Schlüssel fehlt (z. B. Restore auf neuem Server): Anmeldung → `/wiederherstellen` → Code → Schlüsseldatei neu → Daten offen. CLI: `pebble schluessel-wiederherstellen <id> <code>`.
+8. Backup Format 2: `system.db` + `users/<id>/daten.db` (verschlüsselte Kopie) + nur `.enc`-Aufnahmen; Format 1 (pebble.db) bleibt wiederherstellbar und zieht beim Start erneut um.
+9. Persönliche Einstellungen (`/api/einstellungen/persoenlich`): Sprache, Gesten, Joplin, Anzeige/Gedächtnis – in der DB des Nutzers, gelten sofort (nur seine App wird neu geöffnet); ohne eigenen Wert gilt der des Systems.
 
 ## Bereinigung
 

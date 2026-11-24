@@ -10,7 +10,6 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/textproto"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -76,13 +75,9 @@ func (c *Client) send(req *http.Request, out any) error {
 	return nil
 }
 
-// Transcribe schickt eine Audiodatei zur Transkription und liefert den Text und die
+// Transcribe schickt eine Aufnahme (name: Dateiname mit Endung) zur Transkription und liefert den Text und die
 // abgerechnete Dauer in Sekunden (-1, wenn die Antwort keine Dauer nennt).
-func (c *Client) Transcribe(ctx context.Context, model, path, mime, language string) (string, float64, error) {
-	audio, err := os.ReadFile(path)
-	if err != nil {
-		return "", -1, i18n.Errorf("Audio nicht lesbar: %w", err)
-	}
+func (c *Client) Transcribe(ctx context.Context, model, name string, audio []byte, mime, language string) (string, float64, error) {
 	var body bytes.Buffer
 	w := multipart.NewWriter(&body)
 	w.WriteField("model", model)
@@ -96,7 +91,7 @@ func (c *Client) Transcribe(ctx context.Context, model, path, mime, language str
 		}
 	}
 	h := textproto.MIMEHeader{}
-	h.Set("Content-Disposition", fmt.Sprintf(`form-data; name="file"; filename="%s"`, filepath.Base(path)))
+	h.Set("Content-Disposition", fmt.Sprintf(`form-data; name="file"; filename="%s"`, filepath.Base(name)))
 	h.Set("Content-Type", mime)
 	part, _ := w.CreatePart(h)
 	part.Write(audio)

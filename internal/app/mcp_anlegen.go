@@ -6,7 +6,6 @@ import (
 	"strconv"
 	"strings"
 
-	"pebble-webhook/internal/i18n"
 	"pebble-webhook/internal/store"
 )
 
@@ -56,17 +55,17 @@ const (
 // mcpEnrich: fertige Notizen nachträglich auswerten lassen (Anweisung enrichInstruction, ohne Gedächtnis-Eintrag).
 func (a *App) mcpEnrich(refs []string) (string, error) {
 	if len(refs) == 0 {
-		return "", i18n.Errorf("Keine Nummern angegeben")
+		return "", a.Errorf("Keine Nummern angegeben")
 	}
 	if len(refs) > enrichNotesMax {
-		return "", i18n.Errorf("Zu viele Notizen (höchstens %d je Aufruf)", enrichNotesMax)
+		return "", a.Errorf("Zu viele Notizen (höchstens %d je Aufruf)", enrichNotesMax)
 	}
 	var b strings.Builder
 	n := 0
 	for _, ref := range refs {
 		nr, err := strconv.ParseInt(strings.TrimPrefix(strings.TrimSpace(ref), "#"), 10, 64)
 		if err != nil {
-			fmt.Fprintf(&b, "%s: %s\n", ref, i18n.T("keine Nummer"))
+			fmt.Fprintf(&b, "%s: %s\n", ref, a.T("keine Nummer"))
 			continue
 		}
 		msg := a.enrichJob(nr)
@@ -76,45 +75,45 @@ func (a *App) mcpEnrich(refs []string) (string, error) {
 		}
 		fmt.Fprintf(&b, "#%d: %s\n", nr, msg)
 	}
-	return strings.TrimSpace(i18n.Tf("%d Notizen werden ausgewertet.", n) + "\n" + b.String()), nil
+	return strings.TrimSpace(a.Tf("%d Notizen werden ausgewertet.", n) + "\n" + b.String()), nil
 }
 
 // enrichJob startet die nachträgliche Auswertung; Rückgabe = Grund, warum nicht (leer = gestartet).
 func (a *App) enrichJob(nr int64) string {
 	j, err := a.DB.JobByNr(nr)
 	if err != nil {
-		return i18n.T("gibt es nicht")
+		return a.T("gibt es nicht")
 	}
 	d := parseDictation(j.Result)
 	if j.Mode != "diktat" || j.PlanningID != "" || j.State != store.StateDone || j.Failed || d == nil {
-		return i18n.T("keine fertige Notiz")
+		return a.T("keine fertige Notiz")
 	}
 	items, err := a.DB.ItemsByJob(j.ID)
 	if err != nil {
-		return i18n.T("Datenbankfehler")
+		return a.T("Datenbankfehler")
 	}
 	if len(items) > enrichItemsMax {
-		return i18n.Tf("mehr als %d Punkte – nicht in einer Auswertung", enrichItemsMax)
+		return a.Tf("mehr als %d Punkte – nicht in einer Auswertung", enrichItemsMax)
 	}
 	for _, it := range items {
 		if it.DoneAt != 0 {
-			return i18n.T("hat abgehakte Punkte – übersprungen")
+			return a.T("hat abgehakte Punkte – übersprungen")
 		}
 	}
 	if len(d.Anweisungen) >= 10 {
-		return i18n.T("Höchstens 10 Anweisungen je Notiz")
+		return a.T("Höchstens 10 Anweisungen je Notiz")
 	}
 	// Titel und Punkte ausdrücklich nennen: der Text eines Imports kann ein Kommentar ohne den Namen sein.
-	instruction := enrichInstruction + " " + i18n.Tf("Titel: „%s“.", d.Titel)
+	instruction := enrichInstruction + " " + a.Tf("Titel: „%s“.", d.Titel)
 	if len(items) > 0 {
 		names := make([]string, len(items))
 		for i, it := range items {
 			names[i] = "„" + it.Text + "“"
 		}
-		instruction += " " + i18n.Tf("Punkte: %s.", strings.Join(names, ", "))
+		instruction += " " + a.Tf("Punkte: %s.", strings.Join(names, ", "))
 	}
 	if err := a.reevaluate(j, d, store.Preview(instruction, 2000)); err != nil {
-		return i18n.T("Datenbankfehler")
+		return a.T("Datenbankfehler")
 	}
 	return ""
 }
@@ -123,10 +122,10 @@ func (a *App) enrichJob(nr int64) string {
 func (a *App) mcpStructure() (string, error) {
 	lists, err := a.DB.Lists()
 	if err != nil {
-		return "", i18n.Errorf("Datenbankfehler")
+		return "", a.Errorf("Datenbankfehler")
 	}
 	if len(lists) == 0 {
-		return i18n.T("Noch keine Listen."), nil
+		return a.T("Noch keine Listen."), nil
 	}
 	groups, _ := a.DB.Groups()
 	desc := map[string]string{}
@@ -145,7 +144,7 @@ func (a *App) mcpStructure() (string, error) {
 	for _, g := range order {
 		name := g
 		if name == "" {
-			name = i18n.T("Ohne Gruppe")
+			name = a.T("Ohne Gruppe")
 		}
 		fmt.Fprintf(&b, "# %s", name)
 		if d := desc[strings.ToLower(g)]; d != "" {
@@ -153,7 +152,7 @@ func (a *App) mcpStructure() (string, error) {
 		}
 		b.WriteString("\n")
 		for _, l := range byGroup[g] {
-			fmt.Fprintf(&b, "- L%d %s (%s)", l.Nr, l.Name, i18n.Tf("%d von %d offen", l.Open, l.Total))
+			fmt.Fprintf(&b, "- L%d %s (%s)", l.Nr, l.Name, a.Tf("%d von %d offen", l.Open, l.Total))
 			if l.Description != "" {
 				fmt.Fprintf(&b, ": %s", store.Preview(l.Description, 200))
 			}
@@ -171,7 +170,7 @@ func (a *App) mcpImport(raw json.RawMessage) (string, error) {
 		Eintraege []string `json:"eintraege"`
 	}
 	if json.Unmarshal(raw, &in) != nil {
-		return "", i18n.Errorf("Argumente nicht lesbar")
+		return "", a.Errorf("Argumente nicht lesbar")
 	}
 	var texts []string
 	seen := map[string]bool{}
@@ -181,20 +180,20 @@ func (a *App) mcpImport(raw json.RawMessage) (string, error) {
 			continue
 		}
 		if len([]rune(t)) > mcpTextMax {
-			return "", i18n.Errorf("Eintrag zu lang (höchstens %d Zeichen): %s", mcpTextMax, store.Preview(t, 60))
+			return "", a.Errorf("Eintrag zu lang (höchstens %d Zeichen): %s", mcpTextMax, store.Preview(t, 60))
 		}
 		seen[strings.ToLower(t)] = true
 		texts = append(texts, t)
 	}
 	if len(texts) == 0 {
-		return "", i18n.Errorf("Keine Einträge angegeben")
+		return "", a.Errorf("Keine Einträge angegeben")
 	}
 	if len(texts) > mcpImportMax {
-		return "", i18n.Errorf("Zu viele Einträge (höchstens %d je Aufruf) – bitte aufteilen", mcpImportMax)
+		return "", a.Errorf("Zu viele Einträge (höchstens %d je Aufruf) – bitte aufteilen", mcpImportMax)
 	}
-	prefix := i18n.T("Import")
+	prefix := a.T("Import")
 	if q := store.Preview(strings.TrimSpace(in.Quelle), 60); q != "" {
-		prefix = i18n.Tf("Import von %s", q)
+		prefix = a.Tf("Import von %s", q)
 	}
 	var nrs []string
 	for _, t := range texts {
@@ -203,13 +202,13 @@ func (a *App) mcpImport(raw json.RawMessage) (string, error) {
 			State: store.StateNew, Transcript: prefix + ": " + t}
 		j.DeliveryID = "mcp-" + j.ID
 		if _, err := a.DB.InsertJob(j); err != nil {
-			return "", i18n.Errorf("Datenbankfehler")
+			return "", a.Errorf("Datenbankfehler")
 		}
 		nrs = append(nrs, a.mcpNr(j.ID))
 		a.changed(j.ID)
 	}
 	a.Wake()
-	return i18n.Tf("%d Notizen angelegt (%s); die KI wertet sie nacheinander aus und sortiert sie ein.", len(nrs), mcpRange(nrs)), nil
+	return a.Tf("%d Notizen angelegt (%s); die KI wertet sie nacheinander aus und sortiert sie ein.", len(nrs), mcpRange(nrs)), nil
 }
 
 // mcpRange: „#5“ bzw. „#5–#9“ (fortlaufende Nummern eines Imports).

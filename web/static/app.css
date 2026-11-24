@@ -716,13 +716,13 @@ code.kopierbar { display: block; margin: .15rem 0 .4rem; overflow-wrap: anywhere
 .neuknopf svg { width: 1.45rem; height: 1.45rem; }
 .neuknopf:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
 .aufnahmedrawer .zeile h2 { margin: .3rem 0; }
-.aufnahmeknopf { position: relative; display: grid; place-items: center; width: min(13rem, 62vw); aspect-ratio: 1; margin: 1rem auto .5rem; padding: 0;
+.aufnahmeknopf { position: relative; display: grid; place-items: center; width: min(10.5rem, 50vw); aspect-ratio: 1; margin: 1rem auto .5rem; padding: 0;
   border: 0; border-radius: 50%; background: var(--akzent); color: var(--akzent-text); cursor: pointer; touch-action: manipulation; }
 .aufnahmeknopf > svg { position: absolute; inset: -.55rem; width: calc(100% + 1.1rem); height: calc(100% + 1.1rem); transform: rotate(-90deg); }
 .aufnahmeknopf circle { fill: none; stroke-width: 3.5; }
 .aufnahmeknopf .spur { stroke: var(--linie); }
 .aufnahmeknopf .fortschritt { stroke: var(--schlecht); stroke-linecap: round; transition: stroke-dashoffset .2s linear; }
-.aufnahmeknopf .symbol svg { width: 4.2rem; height: 4.2rem; }
+.aufnahmeknopf .symbol svg { width: 3.6rem; height: 3.6rem; }
 .aufnahmeknopf.laeuft { background: var(--schlecht); color: #fff; animation: aufnahmepuls 1.4s ease-in-out infinite; }
 .aufnahmeknopf:disabled { opacity: .6; cursor: default; }
 @keyframes aufnahmepuls { 50% { box-shadow: 0 0 0 .9rem color-mix(in srgb, var(--schlecht) 18%, transparent); } }
@@ -740,3 +740,15 @@ code.kopierbar { display: block; margin: .15rem 0 .4rem; overflow-wrap: anywhere
 .zielgruppe > summary > span:first-child::before { content: "›"; display: inline-block; width: 1rem; color: var(--leise); transition: transform .15s; }
 .zielgruppe[open] > summary > span:first-child::before { transform: rotate(90deg); }
 .karte .besetzung { margin: .1rem 0 .2rem; font-size: .85rem; color: var(--leise); }
+.eingabetext { width: 100%; min-height: 3rem; resize: none; padding: .6rem .75rem; border: 1px solid var(--linie); border-radius: 10px; background: var(--bg); color: var(--text); font: inherit; }
+.eingabetext:focus { outline: 2px solid var(--akzent); outline-offset: -1px; }
+.eingabeleiste { display: flex; justify-content: flex-end; margin: .4rem 0 0; }
+.eingabeleiste[hidden] { display: none; }
+.aufnahmeknopf:disabled:not(.laeuft) { opacity: .35; }
+.systemliste { display: grid; grid-template-columns: auto 1fr; gap: .15rem .75rem; margin: .3rem 0 0; font-size: .88rem; }
+.systemliste dt { color: var(--leise); }
+.systemliste dd { margin: 0; overflow-wrap: anywhere; min-width: 0; }
+.prozessliste { list-style: none; margin: .3rem 0 0; padding: 0; font-size: .88rem; }
+.prozessliste li { display: flex; justify-content: space-between; gap: .75rem; padding: .1rem 0; }
+.prozessliste li > span:last-child { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.prozessliste .pfad { overflow-wrap: anywhere; min-width: 0; }

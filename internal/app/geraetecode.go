@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"pebble-webhook/internal/i18n"
+	"pebble-webhook/internal/store"
 )
 
 // Weiteres Gerät per Kurz-Code: ein angemeldetes Gerät erzeugt einen 4-stelligen Code (höchstens 5 Minuten, nur im
@@ -28,6 +29,7 @@ const (
 
 type deviceCode struct {
 	mu      sync.Mutex
+	uid     int64 // Nutzer, dessen angemeldetes Gerät den Code erzeugt hat
 	code    string
 	expires time.Time
 	seen    time.Time // letztes Lebenszeichen der Seite mit dem Code
@@ -44,7 +46,7 @@ func (c *deviceCode) valid(now time.Time) bool {
 func (a *App) handleDeviceCodeKeep(w http.ResponseWriter, r *http.Request) {
 	c := &a.devCode
 	c.mu.Lock()
-	ok := c.valid(time.Now())
+	ok := c.valid(time.Now()) && c.uid == a.UserID
 	if ok {
 		c.seen = time.Now()
 	}
@@ -56,7 +58,9 @@ func (a *App) handleDeviceCodeKeep(w http.ResponseWriter, r *http.Request) {
 func (a *App) handleDeviceCodeDrop(w http.ResponseWriter, r *http.Request) {
 	c := &a.devCode
 	c.mu.Lock()
-	c.code = ""
+	if c.uid == a.UserID {
+		c.code = ""
+	}
 	c.mu.Unlock()
 	writeJSON(w, 200, map[string]any{"ok": true})
 }
@@ -70,14 +74,14 @@ func (a *App) handleDeviceCode(w http.ResponseWriter, r *http.Request) {
 	}
 	c := &a.devCode
 	c.mu.Lock()
-	c.code, c.expires, c.seen, c.fails = fmt.Sprintf("%04d", n.Int64()), time.Now().Add(codeTTL), time.Now(), 0
+	c.uid, c.code, c.expires, c.seen, c.fails = a.UserID, fmt.Sprintf("%04d", n.Int64()), time.Now().Add(codeTTL), time.Now(), 0
 	code, exp := c.code, c.expires
 	c.mu.Unlock()
 	writeJSON(w, 200, map[string]any{"code": code, "bis": exp.UnixMilli(), "gueltig_minuten": int(codeTTL.Minutes())})
 }
 
 // handleDeviceCodeRedeem tauscht den Code gegen einen Einrichtungs-Token (öffentlich).
-func (a *App) handleDeviceCodeRedeem(w http.ResponseWriter, r *http.Request) {
+func (a *System) handleDeviceCodeRedeem(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Code string `json:"code"`
 	}
@@ -95,6 +99,7 @@ func (a *App) handleDeviceCodeRedeem(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	c.tried = time.Now()
+	uid := c.uid
 	ok := c.valid(time.Now()) && len(code) == 4 &&
 		subtle.ConstantTimeCompare([]byte(code), []byte(c.code)) == 1
 	if ok {
@@ -110,7 +115,7 @@ func (a *App) handleDeviceCodeRedeem(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusForbidden, "code", "Code falsch oder abgelaufen – auf dem angemeldeten Gerät einen neuen erzeugen")
 		return
 	}
-	token, err := a.DB.NewEnrollToken(enrollTTL)
+	token, err := a.DB.NewEnrollToken(store.Enroll{UserID: uid, Purpose: store.EnrollDevice}, enrollTTL)
 	if err != nil {
 		writeErr(w, 500, "speicher", "Einrichtung nicht möglich")
 		return

@@ -52,13 +52,14 @@ Open the printed link (`/ersteinrichtung?code=…`) – ideally already through 
 |---|---|
 | Program | `/usr/local/bin/pebble-webhook`, CLI `/usr/local/bin/pebble` |
 | Start values | `/etc/pebble-webhook/env` (`LISTEN`, `DATA_DIR`, `AUDIO_DIR`) |
-| Database | `/var/lib/pebble-webhook/pebble.db` (SQLite; settings, entries, passkeys) |
-| Audio | `/var/lib/pebble-webhook/audio/YYYY/MM/` |
+| Database | `/var/lib/pebble-webhook/system.db` (users, passkeys, system settings) and `users/<id>/daten.db` per user (encrypted) |
+| Audio | `/var/lib/pebble-webhook/audio/<id>/…` (encrypted per user) |
+| Keys | `/etc/pebble-webhook/keys/<id>.key` (`KEY_DIR`) – one per user, never part of a backup |
 | Service | `systemctl status pebble-webhook`, logs `journalctl -u pebble-webhook` |
 | Updater | `/usr/local/lib/pebble-webhook/install.sh`, units `pebble-webhook-update.{path,service}` |
 | Backups | `/srv/pebble-backup/` (`BACKUP_DIR`) – archives with database, settings, version and channel: before every update (30 days) and scheduled (see [updates](updates.md#backups)) |
 
-Back up `/var/lib/pebble-webhook`; it holds everything.
+Back up `/var/lib/pebble-webhook` and, separately and safely, `/etc/pebble-webhook/keys`. Without its key file a user's data opens only with their recovery code (shown once after setup; a new one under *Status → Access and security*). The keys protect backups and copies of the data folder, not a server someone has root access to.
 
 ## Uninstall
 

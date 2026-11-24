@@ -6,7 +6,6 @@ import (
 	"sort"
 	"time"
 
-	"pebble-webhook/internal/i18n"
 	"pebble-webhook/internal/store"
 )
 
@@ -127,7 +126,7 @@ func (a *App) restoreJob(id string) error {
 	if j.PlanningID != "" {
 		p, err := a.DB.PlanningAny(j.PlanningID)
 		if errors.Is(err, store.ErrNotFound) {
-			return errRestore(i18n.T("Die Planung zu dieser Runde gibt es nicht mehr"))
+			return errRestore(a.T("Die Planung zu dieser Runde gibt es nicht mehr"))
 		}
 		if err != nil {
 			return err

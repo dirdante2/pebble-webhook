@@ -18,7 +18,7 @@ import (
 	"strings"
 	"time"
 
-	"pebble-webhook/internal/i18n"
+	"pebble-webhook/internal/schluessel"
 	"pebble-webhook/internal/store"
 )
 
@@ -60,13 +60,26 @@ func hookReply(w http.ResponseWriter, status int, msg string) {
 }
 
 // handleHook nimmt eine Pebble-Aufnahme an: prüfen, dauerhaft speichern, erst dann 2xx.
-func (a *App) handleHook(w http.ResponseWriter, r *http.Request) {
+func (a *System) handleHook(w http.ResponseWriter, r *http.Request) {
 	if !a.allow("hook:"+a.clientIP(r), a.Cfg.HookRatePerMin) {
 		hookReply(w, http.StatusTooManyRequests, "zu viele Anfragen")
 		return
 	}
-	token := r.Header.Get(a.Cfg.HookTokenHeader)
-	if subtle.ConstantTimeCompare([]byte(token), []byte(a.Cfg.HookToken)) != 1 {
+	// Der Token ordnet die Aufnahme ihrem Nutzer zu (nur sein Hash steht in system.db).
+	tok, ok := a.DB.TokenUser(store.TokenHook, r.Header.Get(a.Cfg.HookTokenHeader))
+	if !ok {
+		hookReply(w, http.StatusUnauthorized, "nicht angemeldet")
+		return
+	}
+	app, reason := a.app(tok.UserID)
+	if app == nil {
+		logf("hook: Daten von Nutzer %d nicht geöffnet (%s) – Aufnahme abgewiesen, die Pebble-App wiederholt sie", tok.UserID, reason)
+		hookReply(w, http.StatusServiceUnavailable, "Daten gesperrt")
+		return
+	}
+	access, err := app.pebbleAccess()
+	if err != nil || access.Secret == "" || subtle.ConstantTimeCompare([]byte(store.Hash(access.Token)), []byte(store.Hash(r.Header.Get(a.Cfg.HookTokenHeader)))) != 1 {
+		logf("hook: Zugang von Nutzer %d unvollständig: %v", tok.UserID, err)
 		hookReply(w, http.StatusUnauthorized, "nicht angemeldet")
 		return
 	}
@@ -86,7 +99,7 @@ func (a *App) handleHook(w http.ResponseWriter, r *http.Request) {
 		hookReply(w, http.StatusBadRequest, "Zustellungskennung oder Geste fehlt")
 		return
 	}
-	switch err := VerifySignature(a.Cfg.HookSecret, r.Header.Get("X-Index-Timestamp"), delivery, trigger, isTest, body,
+	switch err := VerifySignature(access.Secret, r.Header.Get("X-Index-Timestamp"), delivery, trigger, isTest, body,
 		r.Header.Get("X-Index-Signature"), time.Now()); err {
 	case nil:
 	case errBadTimestamp:
@@ -96,7 +109,11 @@ func (a *App) handleHook(w http.ResponseWriter, r *http.Request) {
 		hookReply(w, http.StatusUnauthorized, err.Error())
 		return
 	}
+	app.acceptHook(w, r, body, delivery, trigger, isTest)
+}
 
+// acceptHook speichert eine geprüfte Aufnahme beim Nutzer.
+func (a *App) acceptHook(w http.ResponseWriter, r *http.Request, body []byte, delivery, trigger string, isTest bool) {
 	known, err := a.DB.DeliveryKnown(delivery)
 	if err != nil {
 		logf("hook: Datenbank: %v", err)
@@ -123,7 +140,7 @@ func (a *App) handleHook(w http.ResponseWriter, r *http.Request) {
 	case j.IsTest || trigger == "test-event":
 		// Test-Event: nur anzeigen, nichts verarbeiten.
 		j.IsTest, j.Mode, j.State = true, "test", store.StateDone
-		j.Transcript, j.TranscriptSource, j.Title = j.PebbleText, "pebble", i18n.T("Test-Event")
+		j.Transcript, j.TranscriptSource, j.Title = j.PebbleText, "pebble", a.T("Test-Event")
 	case trigger == "single-click-hold":
 		j.Mode = a.Cfg.TriggerSingle
 	case trigger == "double-click-hold":
@@ -131,7 +148,7 @@ func (a *App) handleHook(w http.ResponseWriter, r *http.Request) {
 	default:
 		// Unbekannte Geste: sichtbar abweisen statt still verwerfen.
 		j.FailedAt = now
-		j.Mode, j.Failed, j.Error = "unbekannt", true, i18n.Tf("Unbekannte Geste „%s“ – keine Aktion zugeordnet", store.Preview(trigger, 60))
+		j.Mode, j.Failed, j.Error = "unbekannt", true, a.Tf("Unbekannte Geste „%s“ – keine Aktion zugeordnet", store.Preview(trigger, 60))
 	}
 	// Ring-ID ist Pflicht: das Test-Event beim Einrichten scheitert ohne gültige ID, damit der Header gesetzt wird.
 	if j.IsTest && !ringIDRe.MatchString(strings.TrimSpace(r.Header.Get(a.Cfg.RingIDHeader))) {
@@ -222,8 +239,9 @@ func audioExt(mimeType string) string {
 	return ".m4a"
 }
 
-// saveAudio schreibt die Aufnahme dauerhaft (fsync) unter AUDIO_DIR/<diktat|planung>/JJJJ/MM/<id>.<ext>;
-// Aufnahmen aus der Web-App (web) heißen <id>-web.<ext>, damit ein Reimport sie nicht dem Ring zuschreibt.
+// saveAudio schreibt die Aufnahme dauerhaft (fsync) unter AUDIO_DIR/<nutzer>/<diktat|planung>/JJJJ/MM/<id>.<ext>.enc,
+// verschlüsselt mit dem Schlüssel des Nutzers. Aufnahmen aus der Web-App (web) heißen <id>-web.<ext>.enc, damit ein
+// Reimport sie nicht dem Ring zuschreibt.
 func (a *App) saveAudio(id, mode string, data []byte, mimeType string, web bool) (string, error) {
 	free, err := freeBytes(a.Cfg.AudioDir)
 	if err != nil {
@@ -232,7 +250,7 @@ func (a *App) saveAudio(id, mode string, data []byte, mimeType string, web bool)
 	if free < a.Cfg.MinFreeBytes+uint64(len(data)) {
 		return "", fmt.Errorf("nur noch %d MB frei", free>>20)
 	}
-	dir := filepath.Join(a.Cfg.AudioDir, audioSub(mode), time.Now().Format("2006/01"))
+	dir := filepath.Join(a.audioRoot(), audioSub(mode), time.Now().Format("2006/01"))
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return "", err
 	}
@@ -240,7 +258,14 @@ func (a *App) saveAudio(id, mode string, data []byte, mimeType string, web bool)
 	if web {
 		name += webMark
 	}
-	path := filepath.Join(dir, name+audioExt(mimeType))
+	name += audioExt(mimeType)
+	if a.audioKey != nil {
+		if data, err = schluessel.SealAudio(a.audioKey, name, data); err != nil {
+			return "", err
+		}
+		name += schluessel.AudioExt
+	}
+	path := filepath.Join(dir, name)
 	tmp := path + ".tmp"
 	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o640)
 	if err != nil {
@@ -261,4 +286,26 @@ func (a *App) saveAudio(id, mode string, data []byte, mimeType string, web bool)
 		return "", err
 	}
 	return path, nil
+}
+
+// audioRoot: Ablage der Aufnahmen dieses Nutzers.
+func (a *App) audioRoot() string {
+	return filepath.Join(a.Cfg.AudioDir, strconv.FormatInt(a.UserID, 10))
+}
+
+// readAudio liest eine Aufnahme; verschlüsselte (.enc) werden mit dem Schlüssel des Nutzers geöffnet.
+// Aufnahmen bis 2.x liegen bis zum bestätigten Umzug unverschlüsselt am alten Ort.
+func (a *App) readAudio(path string) ([]byte, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	name, sealed := strings.CutSuffix(filepath.Base(path), schluessel.AudioExt)
+	if !sealed {
+		return data, nil
+	}
+	if a.audioKey == nil {
+		return nil, errors.New("Aufnahme verschlüsselt, Schlüssel fehlt")
+	}
+	return schluessel.OpenAudio(a.audioKey, name, data)
 }

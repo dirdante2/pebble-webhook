@@ -2,7 +2,6 @@ package app
 
 import (
 	"crypto/rand"
-	"crypto/subtle"
 	"encoding/hex"
 	"fmt"
 	"net/http"
@@ -32,6 +31,13 @@ func (a *App) icalToken(renew bool) (string, error) {
 		return "", err
 	}
 	tok := hex.EncodeToString(b)
+	// Klartext in der (verschlüsselten) Datenbank des Nutzers für die Anzeige, der Hash in system.db zur Zuordnung.
+	if err := a.System.DB.DeleteTokens(a.UserID, store.TokenICal); err != nil {
+		return "", err
+	}
+	if err := a.System.DB.AddToken(store.UserToken{UserID: a.UserID, Kind: store.TokenICal, Label: "Kalender-Abo"}, store.Hash(tok)); err != nil {
+		return "", err
+	}
 	return tok, a.DB.Set(icalTokenKey, tok)
 }
 
@@ -63,18 +69,19 @@ func (a *App) handleCalendarNewLink(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleCalendarFeed liefert die .ics-Datei; falscher oder alter Link → 404.
-func (a *App) handleCalendarFeed(w http.ResponseWriter, r *http.Request) {
+func (a *System) handleCalendarFeed(w http.ResponseWriter, r *http.Request) {
 	tok, ok := strings.CutSuffix(r.PathValue("datei"), ".ics")
-	saved, err := a.DB.Get(icalTokenKey)
-	if err != nil {
-		http.Error(w, "Datenbankfehler", 500)
-		return
-	}
-	if !ok || saved == "" || subtle.ConstantTimeCompare([]byte(tok), []byte(saved)) != 1 {
+	t, found := a.DB.TokenUser(store.TokenICal, tok)
+	if !ok || !found {
 		http.NotFound(w, r)
 		return
 	}
-	jobs, err := a.DB.Appointments(true)
+	app, _ := a.app(t.UserID)
+	if app == nil {
+		http.Error(w, "Daten gesperrt", http.StatusServiceUnavailable)
+		return
+	}
+	jobs, err := app.DB.Appointments(true)
 	if err != nil {
 		http.Error(w, "Datenbankfehler", 500)
 		return
@@ -82,7 +89,7 @@ func (a *App) handleCalendarFeed(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/calendar; charset=utf-8")
 	w.Header().Set("Content-Disposition", `inline; filename="sprachnotizen.ics"`)
 	w.Header().Set("Cache-Control", "no-cache")
-	w.Write([]byte(a.icalFeed(jobs, time.Now())))
+	w.Write([]byte(app.icalFeed(jobs, time.Now())))
 }
 
 // icalFeed baut den Kalender (RFC 5545): Zeiten in UTC, ganztägige als Datum, erledigte mit „✓ “ im Titel.

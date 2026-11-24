@@ -10,7 +10,6 @@ import (
 
 	webpush "github.com/SherClockHolmes/webpush-go"
 
-	"pebble-webhook/internal/i18n"
 	"pebble-webhook/internal/store"
 )
 
@@ -79,7 +78,7 @@ func (a *App) handleEvents(w http.ResponseWriter, r *http.Request) {
 
 // --- Web-Push ---
 
-func (a *App) initPush() error {
+func (a *System) initPush() error {
 	pub, err := a.DB.Get("vapid_public")
 	if err != nil {
 		return err
@@ -170,6 +169,6 @@ func (a *App) handlePushUnsubscribe(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) handlePushTest(w http.ResponseWriter, r *http.Request) {
-	a.notify("Test", i18n.T("Benachrichtigungen funktionieren."), "/status")
+	a.notify("Test", a.T("Benachrichtigungen funktionieren."), "/status")
 	writeJSON(w, 200, map[string]any{"ok": true})
 }

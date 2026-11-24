@@ -54,7 +54,7 @@ var mcpTools = []map[string]any{
 func (a *App) handleMCP(w http.ResponseWriter, r *http.Request) {
 	var req mcpRequest
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil || req.JSONRPC != "2.0" {
-		mcpReply(w, nil, nil, &mcpErr{-32700, i18n.T("Anfrage nicht lesbar")})
+		mcpReply(w, nil, nil, &mcpErr{-32700, a.T("Anfrage nicht lesbar")})
 		return
 	}
 	if req.ID == nil { // Benachrichtigung (z. B. notifications/initialized): keine Antwort
@@ -73,7 +73,7 @@ func (a *App) handleMCP(w http.ResponseWriter, r *http.Request) {
 		}
 		mcpReply(w, req.ID, map[string]any{"protocolVersion": version, "capabilities": map[string]any{"tools": map[string]any{}},
 			"serverInfo":   map[string]any{"name": "pebble-webhook", "version": shortVersion(a.Version)},
-			"instructions": i18n.T("Sprachnotizen des Nutzers: Listen (listen_uebersicht, punkt_lesen, punkte_abhaken mit Kennung wie #59.2), Termine (termine), Suche in allen Notizen (notizen_suchen) und Notiz per Nummer (notiz_lesen). Anlegen: notizen_importieren (nur Texte; die Notiz-KI sortiert selbst ein). Listen umbauen (listen_aufraeumen) nur auf ausdrücklichen Wunsch und erst nach Zustimmung zum Vorschlag. Fragen nach Terminen immer mit termine beantworten, nicht aus den Listen.")}, nil)
+			"instructions": a.T("Sprachnotizen des Nutzers: Listen (listen_uebersicht, punkt_lesen, punkte_abhaken mit Kennung wie #59.2), Termine (termine), Suche in allen Notizen (notizen_suchen) und Notiz per Nummer (notiz_lesen). Anlegen: notizen_importieren (nur Texte; die Notiz-KI sortiert selbst ein). Listen umbauen (listen_aufraeumen) nur auf ausdrücklichen Wunsch und erst nach Zustimmung zum Vorschlag. Fragen nach Terminen immer mit termine beantworten, nicht aus den Listen.")}, nil)
 	case "ping":
 		mcpReply(w, req.ID, map[string]any{}, nil)
 	case "tools/list":
@@ -84,7 +84,7 @@ func (a *App) handleMCP(w http.ResponseWriter, r *http.Request) {
 			Arguments json.RawMessage `json:"arguments"`
 		}
 		if json.Unmarshal(req.Params, &p) != nil {
-			mcpReply(w, req.ID, nil, &mcpErr{-32602, i18n.T("Parameter nicht lesbar")})
+			mcpReply(w, req.ID, nil, &mcpErr{-32602, a.T("Parameter nicht lesbar")})
 			return
 		}
 		text, err := a.mcpCall(p.Name, p.Arguments)
@@ -94,7 +94,7 @@ func (a *App) handleMCP(w http.ResponseWriter, r *http.Request) {
 		}
 		mcpReply(w, req.ID, map[string]any{"content": []map[string]any{{"type": "text", "text": text}}}, nil)
 	default:
-		mcpReply(w, req.ID, nil, &mcpErr{-32601, i18n.T("Unbekannte Methode:") + " " + req.Method})
+		mcpReply(w, req.ID, nil, &mcpErr{-32601, a.T("Unbekannte Methode:") + " " + req.Method})
 	}
 }
 
@@ -177,7 +177,7 @@ func (a *App) mcpCall(name string, raw json.RawMessage) (string, error) {
 			Nummern []string `json:"nummern"`
 		}
 		if json.Unmarshal(raw, &in) != nil {
-			return "", i18n.Errorf("Argumente nicht lesbar")
+			return "", a.Errorf("Argumente nicht lesbar")
 		}
 		return a.mcpEnrich(in.Nummern)
 	}
@@ -193,7 +193,7 @@ func (a *App) mcpCall(name string, raw json.RawMessage) (string, error) {
 		Nummern    []string `json:"nummern"`
 	}
 	if len(raw) > 0 && json.Unmarshal(raw, &args) != nil {
-		return "", i18n.Errorf("Argumente nicht lesbar")
+		return "", a.Errorf("Argumente nicht lesbar")
 	}
 	switch name {
 	case "listen_struktur":
@@ -204,13 +204,13 @@ func (a *App) mcpCall(name string, raw json.RawMessage) (string, error) {
 		return a.mcpSearch(strings.TrimSpace(args.Suche)), nil
 	case "notiz_lesen":
 		if len(args.Nummern) == 0 {
-			return "", i18n.Errorf("Keine Nummern angegeben")
+			return "", a.Errorf("Keine Nummern angegeben")
 		}
 		return a.mcpReadNumbers(args.Nummern)
 	}
 	lists, items, err := a.mcpItems()
 	if err != nil {
-		return "", i18n.Errorf("Datenbankfehler")
+		return "", a.Errorf("Datenbankfehler")
 	}
 	switch name {
 	case "listen_uebersicht":
@@ -230,7 +230,7 @@ func (a *App) mcpCall(name string, raw json.RawMessage) (string, error) {
 		return strings.TrimSpace(b.String()), nil
 	case "punkte_abhaken":
 		if len(args.Punkte) == 0 {
-			return "", i18n.Errorf("Keine Punkte angegeben")
+			return "", a.Errorf("Keine Punkte angegeben")
 		}
 		var b strings.Builder
 		for _, ref := range args.Punkte {
@@ -241,15 +241,15 @@ func (a *App) mcpCall(name string, raw json.RawMessage) (string, error) {
 			}
 			for _, m := range found {
 				changed, err := a.setItemDone(m.item, !args.Offen)
-				state := i18n.T("erledigt")
+				state := a.T("erledigt")
 				if args.Offen {
-					state = i18n.T("offen")
+					state = a.T("offen")
 				}
 				switch {
 				case err != nil:
-					fmt.Fprintf(&b, i18n.T("#%s: FEHLER beim Speichern\n"), m.ref)
+					fmt.Fprintf(&b, a.T("#%s: FEHLER beim Speichern\n"), m.ref)
 				case !changed:
-					fmt.Fprintf(&b, i18n.T("#%s %s: war schon %s\n"), m.ref, m.item.Text, state)
+					fmt.Fprintf(&b, a.T("#%s %s: war schon %s\n"), m.ref, m.item.Text, state)
 				default:
 					fmt.Fprintf(&b, "#%s %s: %s\n", m.ref, m.item.Text, state)
 				}
@@ -257,7 +257,7 @@ func (a *App) mcpCall(name string, raw json.RawMessage) (string, error) {
 		}
 		return strings.TrimSpace(b.String()), nil
 	}
-	return "", i18n.Errorf("Unbekanntes Werkzeug: %s", name)
+	return "", a.Errorf("Unbekanntes Werkzeug: %s", name)
 }
 
 func mcpListLabel(l *store.List) string {
@@ -376,20 +376,20 @@ func (a *App) mcpFullText(it *store.ListItem) string {
 	if it.PlanningID != "" {
 		p, err := a.DB.Planning(it.PlanningID)
 		if err != nil {
-			return i18n.T("(Planung nicht gefunden)")
+			return a.T("(Planung nicht gefunden)")
 		}
 		rounds, _ := a.DB.Rounds(p.ID)
 		if plan := parsePlan(p.Plan); plan != nil {
 			return "# " + plan.Titel + "\n\n" + a.renderPlan(plan, rounds)
 		}
-		return i18n.T("(Planung ohne Stand)")
+		return a.T("(Planung ohne Stand)")
 	}
 	if it.JobID == "" {
-		return i18n.T("(Punkt ohne Notiz)")
+		return a.T("(Punkt ohne Notiz)")
 	}
 	j, err := a.DB.Job(it.JobID)
 	if err != nil {
-		return i18n.T("(Notiz nicht gefunden)")
+		return a.T("(Notiz nicht gefunden)")
 	}
 	var b strings.Builder
 	if d := parseDictation(j.Result); d != nil && d.Notiz != "" {

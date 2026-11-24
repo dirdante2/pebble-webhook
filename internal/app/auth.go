@@ -2,11 +2,9 @@ package app
 
 import (
 	"context"
-	"crypto/rand"
-	"crypto/sha256"
-	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"time"
@@ -14,6 +12,7 @@ import (
 	"github.com/go-webauthn/webauthn/protocol"
 	"github.com/go-webauthn/webauthn/webauthn"
 
+	"pebble-webhook/internal/schluessel"
 	"pebble-webhook/internal/store"
 )
 
@@ -27,81 +26,84 @@ type ceremony struct {
 	data    webauthn.SessionData
 	token   string // Einmal-Link bei der Einrichtung
 	name    string
+	uid     int64 // Gerät für diesen Nutzer (0 = neuer Nutzer aus einer Einladung)
+	invite  *store.Enroll
+	newWID  string // WebAuthn-Id des eingeladenen Nutzers (erst nach dem Passkey angelegt)
 	expires time.Time
 }
 
-// user ist der einzige Benutzer des Dienstes mit allen seinen Passkeys.
-type user struct {
+// waUser: ein Nutzer mit allen seinen Passkeys (für WebAuthn).
+type waUser struct {
 	id    []byte
+	name  string
 	creds []webauthn.Credential
 }
 
-func (u *user) WebAuthnID() []byte                         { return u.id }
-func (u *user) WebAuthnName() string                       { return "sprachnotizen" }
-func (u *user) WebAuthnDisplayName() string                { return "Sprachnotizen" }
-func (u *user) WebAuthnCredentials() []webauthn.Credential { return u.creds }
+func (u *waUser) WebAuthnID() []byte                         { return u.id }
+func (u *waUser) WebAuthnName() string                       { return "sprachnotizen" }
+func (u *waUser) WebAuthnDisplayName() string                { return u.name }
+func (u *waUser) WebAuthnCredentials() []webauthn.Credential { return u.creds }
 
-func (a *App) initAuth() error {
-	wa, err := webauthn.New(&webauthn.Config{RPID: a.Cfg.Host(), RPDisplayName: "Sprachnotizen", RPOrigins: []string{a.Cfg.PublicURL}})
+func (s *System) initAuth() error {
+	wa, err := webauthn.New(&webauthn.Config{RPID: s.Cfg.Host(), RPDisplayName: "Sprachnotizen", RPOrigins: []string{s.Cfg.PublicURL}})
 	if err != nil {
 		return err
 	}
-	a.wa = wa
-	if id, err := a.DB.Get("webauthn_user"); err != nil {
-		return err
-	} else if id == "" {
-		b := make([]byte, 32)
-		rand.Read(b)
-		return a.DB.Set("webauthn_user", base64.RawURLEncoding.EncodeToString(b))
-	}
+	s.wa = wa
 	return nil
 }
 
-func (a *App) loadUser() (*user, error) {
-	id, err := a.DB.Get("webauthn_user")
-	if err != nil {
-		return nil, err
+func displayName(name string) string {
+	if name == "" {
+		return "Sprachnotizen"
 	}
-	raw, _ := base64.RawURLEncoding.DecodeString(id)
-	keys, err := a.DB.Passkeys()
-	if err != nil {
-		return nil, err
-	}
-	u := &user{id: raw}
-	for _, k := range keys {
-		var c webauthn.Credential
-		// Prüfzugänge (CLI „zugang“) haben keinen Passkey und zählen hier nicht.
-		if json.Unmarshal([]byte(k.Credential), &c) == nil && len(c.ID) > 0 {
-			u.creds = append(u.creds, c)
-		}
-	}
-	return u, nil
+	return "Sprachnotizen · " + name
 }
 
-func (a *App) putCeremony(c ceremony) string {
-	a.cerMu.Lock()
-	defer a.cerMu.Unlock()
-	for k, v := range a.cer {
+// loadUser: Nutzer mit seinen Passkeys (Prüfzugänge ohne Passkey zählen nicht).
+func (s *System) loadUser(u *store.User) (*waUser, error) {
+	raw, err := base64.RawURLEncoding.DecodeString(u.WebAuthnID)
+	if err != nil {
+		return nil, err
+	}
+	keys, err := s.DB.Passkeys(u.ID)
+	if err != nil {
+		return nil, err
+	}
+	w := &waUser{id: raw, name: displayName(u.Name)}
+	for _, k := range keys {
+		var c webauthn.Credential
+		if json.Unmarshal([]byte(k.Credential), &c) == nil && len(c.ID) > 0 {
+			w.creds = append(w.creds, c)
+		}
+	}
+	return w, nil
+}
+
+func (s *System) putCeremony(c ceremony) string {
+	s.cerMu.Lock()
+	defer s.cerMu.Unlock()
+	for k, v := range s.cer {
 		if time.Now().After(v.expires) {
-			delete(a.cer, k)
+			delete(s.cer, k)
 		}
 	}
 	id := store.NewID()
 	c.expires = time.Now().Add(5 * time.Minute)
-	a.cer[id] = c
+	s.cer[id] = c
 	return id
 }
 
-func (a *App) takeCeremony(id string) (ceremony, bool) {
-	a.cerMu.Lock()
-	defer a.cerMu.Unlock()
-	c, ok := a.cer[id]
-	delete(a.cer, id)
+func (s *System) takeCeremony(id string) (ceremony, bool) {
+	s.cerMu.Lock()
+	defer s.cerMu.Unlock()
+	c, ok := s.cer[id]
+	delete(s.cer, id)
 	return c, ok && time.Now().Before(c.expires)
 }
 
-func (a *App) setSession(w http.ResponseWriter, passkeyID string) error {
-	token, err := a.DB.NewSession(passkeyID, sessionTTL)
+func (s *System) setSession(w http.ResponseWriter, uid int64, passkeyID string) error {
+	token, err := s.DB.NewSession(uid, passkeyID, sessionTTL)
 	if err != nil {
 		return err
 	}
@@ -110,31 +112,27 @@ func (a *App) setSession(w http.ResponseWriter, passkeyID string) error {
 	return nil
 }
 
-func (a *App) sessionOf(r *http.Request) (passkeyID string, ok bool) {
-	c, err := r.Cookie(sessionCookie)
-	if err != nil {
-		return "", false
-	}
-	return a.DB.Session(c.Value, sessionTTL)
+// session: angemeldeter Nutzer und Gerät der Anfrage.
+type session struct {
+	uid       int64
+	passkeyID string
 }
 
-// requireSession schützt die API: gültige Sitzung, bei Schreibzugriffen zusätzlich gleiche Herkunft.
-func (a *App) requireSession(next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if !a.sameOrigin(w, r) {
-			return
-		}
-		if _, ok := a.sessionOf(r); !ok {
-			writeErr(w, http.StatusUnauthorized, "anmeldung", "Nicht angemeldet")
-			return
-		}
-		next(w, r)
+func (s *System) sessionOf(r *http.Request) (session, bool) {
+	c, err := r.Cookie(sessionCookie)
+	if err != nil {
+		return session{}, false
 	}
+	uid, pk, ok := s.DB.Session(c.Value, sessionTTL)
+	return session{uid: uid, passkeyID: pk}, ok
 }
 
 type ctxKey int
 
-const machineKey ctxKey = 1
+const (
+	machineKey ctxKey = iota + 1
+	sessionKey
+)
 
 // isMachine: die Anfrage kam über den Maschinenzugang, nicht aus der Web-App.
 func isMachine(r *http.Request) bool {
@@ -142,162 +140,289 @@ func isMachine(r *http.Request) bool {
 	return v
 }
 
-// machine öffnet eine Route zusätzlich für den Maschinenzugang (Authorization: Bearer <API_TOKEN>).
-// Trägt die Anfrage den Header, zählt nur der Token – kein Rückfall auf die Sitzung. Ohne Header gilt der Weg der Web-App.
-func (a *App) machine(next http.HandlerFunc) http.HandlerFunc {
-	session := a.requireSession(next)
+// currentPasskey: Gerät der Sitzung (leer beim Maschinenzugang).
+func currentPasskey(r *http.Request) string {
+	v, _ := r.Context().Value(sessionKey).(session)
+	return v.passkeyID
+}
+
+// userHandler: Handler auf der App des angemeldeten Nutzers.
+type userHandler func(*App, http.ResponseWriter, *http.Request)
+
+// withApp löst den Nutzer zur App auf; sind seine Daten nicht geöffnet, antwortet sie 423 mit dem Grund.
+func (s *System) withApp(w http.ResponseWriter, r *http.Request, uid int64, h userHandler) {
+	a, reason := s.app(uid)
+	if a == nil {
+		writeJSON(w, http.StatusLocked, map[string]any{"code": "gesperrt", "grund": reason,
+			"fehler": "Deine Daten sind gesperrt"})
+		return
+	}
+	h(a, &langWriter{ResponseWriter: w, lang: a.Cfg.Language}, r)
+}
+
+// user schützt eine Route der Web-App: gültige Sitzung, bei Schreibzugriffen zusätzlich gleiche Herkunft.
+func (s *System) user(h userHandler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		h := r.Header.Get("Authorization")
-		if h == "" {
+		if !s.sameOrigin(w, r) {
+			return
+		}
+		sess, ok := s.sessionOf(r)
+		if !ok {
+			writeErr(w, http.StatusUnauthorized, "anmeldung", "Nicht angemeldet")
+			return
+		}
+		s.withApp(w, r.WithContext(context.WithValue(r.Context(), sessionKey, sess)), sess.uid, h)
+	}
+}
+
+// signedIn: Route mit Sitzung, die auch bei gesperrten Daten erreichbar ist (Wiederherstellen, Abmelden).
+func (s *System) signedIn(h func(http.ResponseWriter, *http.Request, *store.User)) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !s.sameOrigin(w, r) {
+			return
+		}
+		sess, ok := s.sessionOf(r)
+		if !ok {
+			writeErr(w, http.StatusUnauthorized, "anmeldung", "Nicht angemeldet")
+			return
+		}
+		u, err := s.DB.User(sess.uid)
+		if err != nil {
+			writeErr(w, http.StatusUnauthorized, "anmeldung", "Nicht angemeldet")
+			return
+		}
+		h(w, r.WithContext(context.WithValue(r.Context(), sessionKey, sess)), u)
+	}
+}
+
+// admin schützt eine Route der Systemverwaltung (Updates, Backups, Einstellungen des Systems, Nutzer).
+func (s *System) admin(h http.HandlerFunc) http.HandlerFunc {
+	return s.signedIn(func(w http.ResponseWriter, r *http.Request, u *store.User) {
+		if !u.Admin() {
+			writeErr(w, http.StatusForbidden, "rolle", "Nur für Administratoren")
+			return
+		}
+		h(w, r)
+	})
+}
+
+// machine öffnet eine Route zusätzlich für den Maschinenzugang (Authorization: Bearer <API-Token des Nutzers>).
+// Trägt die Anfrage den Header, zählt nur der Token – kein Rückfall auf die Sitzung. Ohne Header gilt der Weg der Web-App.
+func (s *System) machine(h userHandler) http.HandlerFunc {
+	session := s.user(h)
+	return func(w http.ResponseWriter, r *http.Request) {
+		auth := r.Header.Get("Authorization")
+		if auth == "" {
 			session(w, r)
 			return
 		}
-		if !a.allow("api:"+a.clientIP(r), 300) {
+		if !s.allow("api:"+s.clientIP(r), 300) {
 			writeErr(w, http.StatusTooManyRequests, "limit", "Zu viele Anfragen")
 			return
 		}
-		got := sha256.Sum256([]byte(strings.TrimPrefix(h, "Bearer ")))
-		want := sha256.Sum256([]byte(a.Cfg.APIToken))
-		if a.Cfg.APIToken == "" || !strings.HasPrefix(h, "Bearer ") || subtle.ConstantTimeCompare(got[:], want[:]) != 1 {
+		tok, isBearer := strings.CutPrefix(auth, "Bearer ")
+		t, ok := s.DB.TokenUser(store.TokenAPI, tok)
+		if !isBearer || !ok {
 			writeErr(w, http.StatusUnauthorized, "anmeldung", "Token ungültig")
 			return
 		}
-		next(w, r.WithContext(context.WithValue(r.Context(), machineKey, true)))
+		s.withApp(w, r.WithContext(context.WithValue(r.Context(), machineKey, true)), t.UserID, h)
 	}
 }
 
 // sameOrigin weist Schreibzugriffe ab, die nicht aus der Web-App selbst stammen.
-func (a *App) sameOrigin(w http.ResponseWriter, r *http.Request) bool {
+func (s *System) sameOrigin(w http.ResponseWriter, r *http.Request) bool {
 	if r.Method == http.MethodGet || r.Method == http.MethodHead {
 		return true
 	}
-	if o := r.Header.Get("Origin"); r.Header.Get("X-App") != "1" || (o != "" && o != a.Cfg.PublicURL) {
+	if o := r.Header.Get("Origin"); r.Header.Get("X-App") != "1" || (o != "" && o != s.Cfg.PublicURL) {
 		writeErr(w, http.StatusForbidden, "herkunft", "Anfrage nicht aus der Web-App")
 		return false
 	}
 	return true
 }
 
-func (a *App) public(next http.HandlerFunc) http.HandlerFunc {
+func (s *System) public(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !a.allow("auth:"+a.clientIP(r), 30) {
+		if !s.allow("auth:"+s.clientIP(r), 30) {
 			writeErr(w, http.StatusTooManyRequests, "limit", "Zu viele Versuche")
 			return
 		}
-		if a.sameOrigin(w, r) {
+		if s.sameOrigin(w, r) {
 			next(w, r)
 		}
 	}
 }
 
-func (a *App) handleSession(w http.ResponseWriter, r *http.Request) {
-	_, ok := a.sessionOf(r)
-	keys, _ := a.DB.Passkeys()
-	writeJSON(w, 200, map[string]any{"angemeldet": ok, "eingerichtet": len(keys) > 0})
+// handleSession: Anmeldestand für die Web-App – mit Name und Rolle, gesperrten Daten und offenem Wiederherstellungscode.
+func (s *System) handleSession(w http.ResponseWriter, r *http.Request) {
+	setUp, _ := s.DB.AnyPasskey()
+	out := map[string]any{"angemeldet": false, "eingerichtet": setUp}
+	sess, ok := s.sessionOf(r)
+	if !ok {
+		writeJSON(w, 200, out)
+		return
+	}
+	u, err := s.DB.User(sess.uid)
+	if err != nil {
+		writeJSON(w, 200, out)
+		return
+	}
+	out["angemeldet"], out["id"], out["name"], out["rolle"] = true, u.ID, u.Name, u.Role
+	if a, reason := s.app(u.ID); a == nil {
+		out["gesperrt"] = reason
+	} else if code, _ := a.DB.Get(recoveryPendingKey); code != "" {
+		out["code_offen"] = true
+	}
+	writeJSON(w, 200, out)
 }
 
-func (a *App) handleEnrollStart(w http.ResponseWriter, r *http.Request) {
+func (s *System) handleEnrollStart(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Token string `json:"token"`
 		Name  string `json:"name"`
 	}
-	if err := readJSON(r, &in); err != nil || !a.DB.EnrollTokenValid(in.Token) {
+	e, ok := (*store.Enroll)(nil), false
+	if readJSON(r, &in) == nil {
+		e, ok = s.DB.EnrollToken(in.Token)
+	}
+	if !ok {
 		writeErr(w, http.StatusForbidden, "link", "Der Einrichtungs-Link ist ungültig oder abgelaufen")
 		return
 	}
-	u, err := a.loadUser()
-	if err != nil {
-		writeErr(w, 500, "speicher", "Datenbankfehler")
-		return
+	c := ceremony{token: in.Token, name: store.Preview(in.Name, 40)}
+	if c.name == "" {
+		c.name = "Gerät"
+	}
+	var wu *waUser
+	if e.Purpose == store.EnrollInvite {
+		// Neuer Nutzer: angelegt wird er erst mit dem fertigen Passkey.
+		c.invite, c.newWID = e, base64.RawURLEncoding.EncodeToString([]byte(store.NewID()+store.NewID()))
+		raw, _ := base64.RawURLEncoding.DecodeString(c.newWID)
+		wu = &waUser{id: raw, name: displayName(e.Name)}
+	} else {
+		u, err := s.DB.User(e.UserID)
+		if err == nil {
+			wu, err = s.loadUser(u)
+		}
+		if err != nil {
+			writeErr(w, 500, "speicher", "Datenbankfehler")
+			return
+		}
+		c.uid = u.ID
 	}
 	var exclude []protocol.CredentialDescriptor
-	for _, c := range u.creds {
-		exclude = append(exclude, c.Descriptor())
+	for _, cr := range wu.creds {
+		exclude = append(exclude, cr.Descriptor())
 	}
-	opts, data, err := a.wa.BeginRegistration(u,
+	opts, data, err := s.wa.BeginRegistration(wu,
 		webauthn.WithResidentKeyRequirement(protocol.ResidentKeyRequirementRequired),
 		webauthn.WithExclusions(exclude))
 	if err != nil {
 		writeErr(w, 500, "webauthn", "Passkey-Einrichtung nicht möglich")
 		return
 	}
-	name := store.Preview(in.Name, 40)
-	if name == "" {
-		name = "Gerät"
-	}
-	writeJSON(w, 200, map[string]any{"vorgang": a.putCeremony(ceremony{data: *data, token: in.Token, name: name}), "optionen": opts})
+	c.data = *data
+	writeJSON(w, 200, map[string]any{"vorgang": s.putCeremony(c), "optionen": opts})
 }
 
-func (a *App) handleEnrollFinish(w http.ResponseWriter, r *http.Request) {
-	c, ok := a.takeCeremony(r.URL.Query().Get("vorgang"))
+func (s *System) handleEnrollFinish(w http.ResponseWriter, r *http.Request) {
+	c, ok := s.takeCeremony(r.URL.Query().Get("vorgang"))
 	if !ok {
 		writeErr(w, http.StatusBadRequest, "vorgang", "Vorgang abgelaufen, bitte neu beginnen")
 		return
 	}
-	u, err := a.loadUser()
-	if err != nil {
-		writeErr(w, 500, "speicher", "Datenbankfehler")
-		return
+	var wu *waUser
+	if c.invite != nil {
+		raw, _ := base64.RawURLEncoding.DecodeString(c.newWID)
+		wu = &waUser{id: raw, name: displayName(c.invite.Name)}
+	} else {
+		u, err := s.DB.User(c.uid)
+		if err == nil {
+			wu, err = s.loadUser(u)
+		}
+		if err != nil {
+			writeErr(w, 500, "speicher", "Datenbankfehler")
+			return
+		}
 	}
-	cred, err := a.wa.FinishRegistration(u, c.data, r)
+	cred, err := s.wa.FinishRegistration(wu, c.data, r)
 	if err != nil {
 		logf("Passkey-Einrichtung: %v", err)
 		writeErr(w, http.StatusBadRequest, "webauthn", "Passkey wurde nicht angenommen")
 		return
 	}
-	if !a.DB.UseEnrollToken(c.token) {
+	if !s.DB.UseEnrollToken(c.token) {
 		writeErr(w, http.StatusForbidden, "link", "Der Einrichtungs-Link wurde schon benutzt")
 		return
 	}
+	uid := c.uid
+	if c.invite != nil {
+		a, _, err := createUser(s.DB, s.Cfg.DataDir, s.Cfg.KeyDir, 0, c.invite.Name, c.invite.Role, c.newWID,
+			func(u *store.User) (*App, error) { return s.openUser(u) })
+		if err != nil {
+			logf("Einladung: Nutzer nicht angelegt: %v", err)
+			writeErr(w, 500, "speicher", "Zugang nicht angelegt")
+			return
+		}
+		uid = a.UserID
+		logf("Nutzer %d („%s“) per Einladung angelegt", uid, c.invite.Name)
+	}
 	data, _ := json.Marshal(cred)
 	id := base64.RawURLEncoding.EncodeToString(cred.ID)
-	if err := a.DB.AddPasskey(store.Passkey{ID: id, Name: c.name, Credential: string(data)}); err != nil {
+	if err := s.DB.AddPasskey(store.Passkey{ID: id, UserID: uid, Name: c.name, Credential: string(data)}); err != nil {
 		writeErr(w, 500, "speicher", "Passkey nicht gespeichert")
 		return
 	}
-	if err := a.setSession(w, id); err != nil {
+	if err := s.setSession(w, uid, id); err != nil {
 		writeErr(w, 500, "speicher", "Sitzung nicht angelegt")
 		return
 	}
 	writeJSON(w, 200, map[string]any{"ok": true})
 }
 
-func (a *App) handleLoginStart(w http.ResponseWriter, r *http.Request) {
-	opts, data, err := a.wa.BeginDiscoverableLogin()
+func (s *System) handleLoginStart(w http.ResponseWriter, r *http.Request) {
+	opts, data, err := s.wa.BeginDiscoverableLogin()
 	if err != nil {
 		writeErr(w, 500, "webauthn", "Anmeldung nicht möglich")
 		return
 	}
-	writeJSON(w, 200, map[string]any{"vorgang": a.putCeremony(ceremony{data: *data}), "optionen": opts})
+	writeJSON(w, 200, map[string]any{"vorgang": s.putCeremony(ceremony{data: *data}), "optionen": opts})
 }
 
-func (a *App) handleLoginFinish(w http.ResponseWriter, r *http.Request) {
-	c, ok := a.takeCeremony(r.URL.Query().Get("vorgang"))
+func (s *System) handleLoginFinish(w http.ResponseWriter, r *http.Request) {
+	c, ok := s.takeCeremony(r.URL.Query().Get("vorgang"))
 	if !ok {
 		writeErr(w, http.StatusBadRequest, "vorgang", "Vorgang abgelaufen, bitte neu beginnen")
 		return
 	}
-	cred, err := a.wa.FinishDiscoverableLogin(func(rawID, userHandle []byte) (webauthn.User, error) {
-		return a.loadUser()
+	var who *store.User
+	cred, err := s.wa.FinishDiscoverableLogin(func(rawID, userHandle []byte) (webauthn.User, error) {
+		u, err := s.DB.UserByWebAuthnID(base64.RawURLEncoding.EncodeToString(userHandle))
+		if err != nil {
+			return nil, err
+		}
+		who = u
+		return s.loadUser(u)
 	}, c.data, r)
-	if err != nil {
+	if err != nil || who == nil {
 		logf("Anmeldung: %v", err)
 		writeErr(w, http.StatusUnauthorized, "webauthn", "Passkey nicht erkannt")
 		return
 	}
 	id := base64.RawURLEncoding.EncodeToString(cred.ID)
 	data, _ := json.Marshal(cred)
-	a.DB.UpdatePasskey(id, string(data))
-	if err := a.setSession(w, id); err != nil {
+	s.DB.UpdatePasskey(who.ID, id, string(data))
+	if err := s.setSession(w, who.ID, id); err != nil {
 		writeErr(w, 500, "speicher", "Sitzung nicht angelegt")
 		return
 	}
 	writeJSON(w, 200, map[string]any{"ok": true})
 }
 
-func (a *App) handleLogout(w http.ResponseWriter, r *http.Request) {
+func (s *System) handleLogout(w http.ResponseWriter, r *http.Request) {
 	if c, err := r.Cookie(sessionCookie); err == nil {
-		a.DB.DeleteSession(c.Value)
+		s.DB.DeleteSession(c.Value)
 	}
 	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: "", Path: "/", MaxAge: -1, HttpOnly: true, Secure: true,
 		SameSite: http.SameSiteStrictMode})
@@ -305,8 +430,8 @@ func (a *App) handleLogout(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) handleDevices(w http.ResponseWriter, r *http.Request) {
-	current, _ := a.sessionOf(r)
-	keys, err := a.DB.Passkeys()
+	current := currentPasskey(r)
+	keys, err := a.System.DB.Passkeys(a.UserID)
 	if err != nil {
 		writeErr(w, 500, "speicher", "Datenbankfehler")
 		return
@@ -319,7 +444,7 @@ func (a *App) handleDevices(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) handleDeviceDelete(w http.ResponseWriter, r *http.Request) {
-	keys, err := a.DB.Passkeys()
+	keys, err := a.System.DB.Passkeys(a.UserID)
 	if err != nil {
 		writeErr(w, 500, "speicher", "Datenbankfehler")
 		return
@@ -328,16 +453,20 @@ func (a *App) handleDeviceDelete(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusConflict, "letztes", "Das letzte Gerät kann nicht entfernt werden")
 		return
 	}
-	if err := a.DB.DeletePasskey(r.PathValue("id")); err != nil {
+	switch err := a.System.DB.DeletePasskey(a.UserID, r.PathValue("id")); {
+	case errors.Is(err, store.ErrNotFound):
+		writeErr(w, 404, "fehlt", "Gerät nicht gefunden")
+		return
+	case err != nil:
 		writeErr(w, 500, "speicher", "Gerät nicht entfernt")
 		return
 	}
 	writeJSON(w, 200, map[string]any{"ok": true})
 }
 
-// handleDeviceLink erzeugt aus einer Sitzung einen Einmal-Link für ein weiteres Gerät.
+// handleDeviceLink erzeugt aus einer Sitzung einen Einmal-Link für ein weiteres Gerät des Nutzers.
 func (a *App) handleDeviceLink(w http.ResponseWriter, r *http.Request) {
-	url, err := a.EnrollLink()
+	url, err := a.EnrollLink(a.UserID)
 	if err != nil {
 		writeErr(w, 500, "speicher", "Link nicht erzeugt")
 		return
@@ -345,25 +474,149 @@ func (a *App) handleDeviceLink(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"link": url, "gueltig_minuten": int(enrollTTL.Minutes())})
 }
 
-// TestAccess legt ein Gerät ohne Passkey samt Sitzung an und liefert das Sitzungs-Cookie.
+// TestAccess legt für einen Nutzer ein Gerät ohne Passkey samt Sitzung an und liefert das Sitzungs-Cookie.
 // Für Prüfungen im Browser ohne Authenticator; erscheint in der Geräteliste und ist dort entfernbar.
-func (a *App) TestAccess(name string) (cookie string, err error) {
-	id := "zugang-" + store.NewID()[:12]
-	if err := a.DB.AddPasskey(store.Passkey{ID: id, Name: name, Credential: "{}"}); err != nil {
+func (s *System) TestAccess(uid int64, name string) (cookie string, err error) {
+	if _, err := s.DB.User(uid); err != nil {
 		return "", err
 	}
-	token, err := a.DB.NewSession(id, sessionTTL)
+	id := "zugang-" + store.NewID()[:12]
+	if err := s.DB.AddPasskey(store.Passkey{ID: id, UserID: uid, Name: name, Credential: "{}"}); err != nil {
+		return "", err
+	}
+	token, err := s.DB.NewSession(uid, id, sessionTTL)
 	if err != nil {
 		return "", err
 	}
 	return sessionCookie + "=" + token, nil
 }
 
-// EnrollLink erzeugt einen Einmal-Link zur Passkey-Einrichtung (CLI und „weiteres Gerät“).
-func (a *App) EnrollLink() (string, error) {
-	token, err := a.DB.NewEnrollToken(enrollTTL)
+// EnrollLink erzeugt einen Einmal-Link zur Passkey-Einrichtung für ein weiteres Gerät des Nutzers.
+func (s *System) EnrollLink(uid int64) (string, error) {
+	token, err := s.DB.NewEnrollToken(store.Enroll{UserID: uid, Purpose: store.EnrollDevice}, enrollTTL)
 	if err != nil {
 		return "", err
 	}
-	return strings.TrimRight(a.Cfg.PublicURL, "/") + "/einrichten#" + token, nil
+	return strings.TrimRight(s.Cfg.PublicURL, "/") + "/einrichten#" + token, nil
+}
+
+// --- Wiederherstellungscode ---
+
+// handleRecoveryCode zeigt den noch nicht bestätigten Code (einmalig nach Einrichtung oder Umzug).
+func (a *App) handleRecoveryCode(w http.ResponseWriter, r *http.Request) {
+	code, err := a.DB.Get(recoveryPendingKey)
+	if err != nil {
+		writeErr(w, 500, "speicher", "Datenbankfehler")
+		return
+	}
+	u, _ := a.System.DB.User(a.UserID)
+	name := ""
+	if u != nil {
+		name = u.Name
+	}
+	writeJSON(w, 200, map[string]any{"code": code, "name": name})
+}
+
+// handleRecoveryConfirm: Name (Pflicht, falls noch leer) speichern und den Code als notiert bestätigen – er wird gelöscht.
+func (a *App) handleRecoveryConfirm(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Name    string `json:"name"`
+		Notiert bool   `json:"notiert"`
+	}
+	if readJSON(r, &in) != nil || !in.Notiert {
+		writeErr(w, 400, "ungueltig", "Bitte bestätigen, dass der Code notiert ist")
+		return
+	}
+	name := store.Preview(strings.TrimSpace(in.Name), 40)
+	u, err := a.System.DB.User(a.UserID)
+	if err != nil {
+		writeErr(w, 500, "speicher", "Datenbankfehler")
+		return
+	}
+	if name == "" && u.Name == "" {
+		writeErr(w, 400, "name", "Bitte einen Namen eingeben")
+		return
+	}
+	if name != "" && name != u.Name {
+		if err := a.System.DB.SetUserName(a.UserID, name); err != nil {
+			writeErr(w, 500, "speicher", "Name nicht gespeichert")
+			return
+		}
+	}
+	if err := a.DB.Set(recoveryPendingKey, ""); err != nil {
+		writeErr(w, 500, "speicher", "Datenbankfehler")
+		return
+	}
+	writeJSON(w, 200, map[string]any{"ok": true})
+}
+
+// handleRecoveryNew erzeugt einen neuen Wiederherstellungscode (der alte gilt danach nicht mehr) und zeigt ihn einmal.
+func (a *App) handleRecoveryNew(w http.ResponseWriter, r *http.Request) {
+	u, err := a.System.DB.User(a.UserID)
+	if err != nil {
+		writeErr(w, 500, "speicher", "Datenbankfehler")
+		return
+	}
+	dek, err := schluessel.Read(a.Cfg.KeyDir, a.UserID, u.KeyID)
+	if err != nil {
+		writeErr(w, 500, "schluessel", "Schlüssel nicht lesbar")
+		return
+	}
+	code, err := schluessel.NewCode()
+	if err != nil {
+		writeErr(w, 500, "zufall", "Code nicht erzeugt")
+		return
+	}
+	wrap, err := schluessel.Wrap(code, a.UserID, dek)
+	if err == nil {
+		err = a.System.DB.SetUserKey(a.UserID, dek.ID(), wrap)
+	}
+	if err == nil {
+		err = a.DB.Set(recoveryPendingKey, code)
+	}
+	if err != nil {
+		writeErr(w, 500, "speicher", "Code nicht gespeichert")
+		return
+	}
+	writeJSON(w, 200, map[string]any{"code": code})
+}
+
+// handleRecover: gesperrte Daten (Schlüsseldatei fehlt, z. B. nach Restore auf neuer Maschine) mit dem Code öffnen.
+func (s *System) handleRecover(w http.ResponseWriter, r *http.Request, u *store.User) {
+	if a, _ := s.app(u.ID); a != nil {
+		writeJSON(w, 200, map[string]any{"ok": true})
+		return
+	}
+	if u.LockedAt > 0 {
+		writeErr(w, http.StatusForbidden, "gesperrt", "Dein Zugang ist vom Admin gesperrt")
+		return
+	}
+	if !s.allow("wiederherstellen:"+u.WebAuthnID, 5) {
+		writeErr(w, http.StatusTooManyRequests, "limit", "Zu viele Versuche – bitte eine Minute warten")
+		return
+	}
+	var in struct {
+		Code string `json:"code"`
+	}
+	if readJSON(r, &in) != nil {
+		writeErr(w, 400, "ungueltig", "Code fehlt")
+		return
+	}
+	dek, err := schluessel.Unwrap(in.Code, u.KeyWrap, u.ID)
+	if err != nil || dek.ID() != u.KeyID {
+		writeErr(w, http.StatusForbidden, "code", "Wiederherstellungscode falsch")
+		return
+	}
+	if err := schluessel.Write(s.Cfg.KeyDir, u.ID, dek); err != nil {
+		logf("Wiederherstellen Nutzer %d: %v", u.ID, err)
+		writeErr(w, 500, "schluessel", "Schlüsseldatei nicht geschrieben")
+		return
+	}
+	if _, err := s.openUser(u); err != nil {
+		logf("Wiederherstellen Nutzer %d: %v", u.ID, err)
+		writeErr(w, 500, "speicher", "Daten lassen sich nicht öffnen")
+		return
+	}
+	logf("Nutzer %d: Schlüssel mit Wiederherstellungscode zurückgeholt", u.ID)
+	writeJSON(w, 200, map[string]any{"ok": true})
 }

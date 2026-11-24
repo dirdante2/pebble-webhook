@@ -164,7 +164,7 @@ func (a *App) remindDue() {
 			if d := parseDictation(j.Result); d != nil && d.Termin != nil && d.Termin.Ort != "" {
 				body += " · " + d.Termin.Ort
 			}
-			a.notify(i18n.T("Termin: ")+shortTitle(j.Title), body, "/eintrag/"+j.ID)
+			a.notify(a.T("Termin: ")+shortTitle(j.Title), body, "/eintrag/"+j.ID)
 		}
 		if err := a.DB.MarkReminded(j.ID); err != nil {
 			logf("Erinnerung %s: %v", j.ID, err)
@@ -443,7 +443,7 @@ func (a *App) handleReschedule(w http.ResponseWriter, r *http.Request) {
 		if d.Termin != nil {
 			ap.Ort = d.Termin.Ort
 		}
-		d.Hinweise = append(d.Hinweise, i18n.Tf("Verschoben am %s; vorher: %s", i18n.DateTime(time.Now()), old))
+		d.Hinweise = append(d.Hinweise, a.Tf("Verschoben am %s; vorher: %s", i18n.DateTime(time.Now()), old))
 
 		d.Termin = ap
 		if b, err := json.Marshal(d); err == nil {

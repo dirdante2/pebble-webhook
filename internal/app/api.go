@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -26,9 +27,26 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 }
 
 func writeErr(w http.ResponseWriter, status int, code, msg string) {
-	writeJSON(w, status, map[string]string{"code": code, "fehler": i18n.T(msg)})
+	lang := i18n.Lang()
+	if lw, ok := w.(*langWriter); ok {
+		lang = lw.lang
+	}
+	writeJSON(w, status, map[string]string{"code": code, "fehler": i18n.In(lang, msg)})
 
 }
+
+// langWriter trägt die Sprache des angemeldeten Nutzers zu writeErr.
+type langWriter struct {
+	http.ResponseWriter
+	lang string
+}
+
+func (w *langWriter) Flush() {
+	if f, ok := w.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+func (w *langWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
 func readJSON(r *http.Request, v any) error {
 	return json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(v)
@@ -131,7 +149,7 @@ func (a *App) jobSummary(j *store.Job) map[string]any {
 		}
 	}
 	if j.State != store.StateDone {
-		m["schritt"] = i18n.T(stepLabel[j.State])
+		m["schritt"] = a.T(stepLabel[j.State])
 	}
 	if j.Error != "" {
 		m["fehler"] = j.Error
@@ -162,7 +180,7 @@ func (a *App) planningSummary(p *store.Planning, rounds []*store.Job) map[string
 		m["nr"] = p.Nr
 	}
 	if last.State != store.StateDone {
-		m["schritt"] = i18n.T(stepLabel[last.State])
+		m["schritt"] = a.T(stepLabel[last.State])
 	}
 	if last.Error != "" {
 		m["fehler"] = last.Error
@@ -437,7 +455,7 @@ func (a *App) handlePlanning(w http.ResponseWriter, r *http.Request) {
 			"naechster_versuch": rd.NextTryAt, "limit_erreicht": rd.LimitHit, "zuordnung": rd.AssignHow, "audio": audioState(rd),
 			"letzte": i == len(rounds)-1, "aktuell": i == current, "loeschbar": true}
 		if rd.State != store.StateDone {
-			rm["schritt"] = i18n.T(stepLabel[rd.State])
+			rm["schritt"] = a.T(stepLabel[rd.State])
 		}
 		if rd.Error != "" {
 			rm["fehler"] = rd.Error
@@ -556,17 +574,19 @@ func (a *App) handleAudio(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusGone, "abgelaufen", "Aufnahme abgelaufen")
 		return
 	}
-	f, err := os.Open(j.AudioPath)
+	st, err := os.Stat(j.AudioPath)
+	var data []byte
+	if err == nil {
+		data, err = a.readAudio(j.AudioPath)
+	}
 	if err != nil {
 		writeErr(w, 404, "fehlt", "Aufnahme nicht lesbar")
 		return
 	}
-	defer f.Close()
-	st, _ := f.Stat()
 	w.Header().Set("Content-Type", j.AudioMime)
 	// Eine Aufnahme ändert sich nie: einmal geladen, kommt sie 30 Tage aus dem Browser-Speicher.
 	w.Header().Set("Cache-Control", "private, max-age=2592000, immutable")
-	http.ServeContent(w, r, "", st.ModTime(), f)
+	http.ServeContent(w, r, "", st.ModTime(), bytes.NewReader(data))
 }
 
 func (a *App) handleRestart(w http.ResponseWriter, r *http.Request) {
@@ -838,7 +858,7 @@ func (a *App) insertWebJob(w http.ResponseWriter, j *store.Job) {
 // webNoteMaxBytes: Obergrenze einer Notiz-Aufnahme aus der Web-App (60 s sind je nach Browser 0,5–1 MB).
 const webNoteMaxBytes = 8 << 20
 
-// handleWebNote: Notiz, in der Web-App aufgenommen (höchstens 60 s). Wird verarbeitet wie eine Notiz vom
+// handleWebNote: Notiz aus der Web-App – aufgenommen (höchstens 60 s) oder getippt (Feld text). Wird verarbeitet wie eine Notiz vom
 // Ring, zählt aber nicht zur Ring-Nutzung (kein recordRecording, Datei <id>-web.<ext>).
 func (a *App) handleWebNote(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, webNoteMaxBytes)
@@ -862,15 +882,20 @@ func (a *App) handleWebNote(w http.ResponseWriter, r *http.Request) {
 	if ms, err := strconv.ParseInt(r.FormValue("zeit"), 10, 64); err == nil && ms > 0 && ms <= now {
 		j.RecordedAt = ms
 	}
+	// Getippt statt gesprochen: der Text ist der Wortlaut (keine Transkription).
+	j.Transcript = store.Preview(strings.TrimSpace(r.FormValue("text")), webNoteTextMax)
 	if !a.saveWebAudio(w, r, j) {
 		return
 	}
-	if j.AudioPath == "" {
-		writeErr(w, 400, "leer", "Aufnahme fehlt")
+	if j.AudioPath == "" && j.Transcript == "" {
+		writeErr(w, 400, "leer", "Notiz ist leer")
 		return
 	}
 	a.insertWebJob(w, j)
 }
+
+// webNoteTextMax: Zeichen einer getippten Notiz bzw. Anweisung aus der Web-App.
+const webNoteTextMax = 4000
 
 // wordDays: Zeitraum der Wortzahl-Auswertung auf der Statusseite.
 const wordDays = 30
@@ -916,22 +941,33 @@ func (a *App) handleStatus(w http.ResponseWriter, r *http.Request) {
 		m["belegt"], m["frei"], m["gesamt"], m["knapp"] = size(), free, total, free < a.Cfg.MinFreeBytes
 		return m
 	}
-	// DATA_DIR getrennt: Datenbank (pebble.db samt -wal/-shm) und zwischengespeicherte App-Versionen (releases/).
-	dbFile := filepath.Join(a.Cfg.DataDir, "pebble.db")
-	dbSize := func() (n int64) {
-		for _, suf := range []string{"", "-wal", "-shm"} {
-			if fi, err := os.Stat(dbFile + suf); err == nil {
-				n += fi.Size()
+	// Eigene Ablagen des Nutzers; der Admin sieht dazu die des Systems (Datenbanken, App-Versionen, alle Aufnahmen, Backups).
+	files := func(paths ...string) func() (n int64) {
+		return func() (n int64) {
+			for _, p := range paths {
+				if fi, err := os.Stat(p); err == nil {
+					n += fi.Size()
+				}
 			}
+			return n
 		}
-		return n
 	}
-	releases := filepath.Join(a.Cfg.DataDir, "releases")
-	appSize := func() int64 { return dirSize(releases) }
-	out["speicher"] = []map[string]any{disk("Datenbank", dbFile, dbSize), disk("App-Versionen", releases, appSize),
-		disk("Aufnahmen", a.Cfg.AudioDir, nil), disk("Backups", a.Cfg.BackupDir, nil)}
-	cb, cr, cbb, crb := a.cleanupPlan()
-	out["aufraeumen"] = map[string]any{"backups": len(cb), "backups_groesse": cbb, "versionen": len(cr), "versionen_groesse": crb}
+	own := UserDB(a.Cfg.DataDir, a.UserID)
+	audioRoot := a.audioRoot()
+	speicher := []map[string]any{disk("Deine Daten", own, files(own, own+"-wal", own+"-shm")),
+		disk("Deine Aufnahmen", audioRoot, func() int64 { return dirSize(audioRoot) })}
+	if a.isAdmin() {
+		sysDB := filepath.Join(a.Cfg.DataDir, "system.db")
+		users := filepath.Join(a.Cfg.DataDir, "users")
+		releases := filepath.Join(a.Cfg.DataDir, "releases")
+		speicher = append(speicher,
+			disk("Datenbanken (alle Nutzer)", users, func() int64 { return files(sysDB, sysDB+"-wal", sysDB+"-shm")() + dirSize(users) }),
+			disk("App-Versionen", releases, func() int64 { return dirSize(releases) }),
+			disk("Aufnahmen (alle Nutzer)", a.Cfg.AudioDir, nil), disk("Backups", a.Cfg.BackupDir, nil))
+		cb, cr, cbb, crb := a.cleanupPlan()
+		out["aufraeumen"] = map[string]any{"backups": len(cb), "backups_groesse": cbb, "versionen": len(cr), "versionen_groesse": crb}
+	}
+	out["speicher"] = speicher
 	tj, _ := a.DB.TrashedJobs(0)
 	tp, _ := a.DB.TrashedPlannings(0)
 	out["papierkorb"] = len(tj) + len(tp)
@@ -1042,15 +1078,28 @@ func (a *App) handleCosts(w http.ResponseWriter, r *http.Request) {
 
 // handlePebbleSetup liefert die Werte, die in der Pebble-App einzutragen sind (nur mit Sitzung).
 func (a *App) handlePebbleSetup(w http.ResponseWriter, r *http.Request) {
+	access, err := a.pebbleAccess()
+	if err != nil {
+		writeErr(w, 500, "speicher", "Datenbankfehler")
+		return
+	}
 	writeJSON(w, 200, map[string]any{
-		"url": a.Cfg.PublicURL + "/hook", "header": a.Cfg.HookTokenHeader, "token": a.Cfg.HookToken, "secret": a.Cfg.HookSecret,
+		"url": a.Cfg.PublicURL + "/hook", "header": a.Cfg.HookTokenHeader, "token": access.Token, "secret": access.Secret,
 		"halten": a.Cfg.TriggerSingle, "doppelklick_halten": a.Cfg.TriggerDouble, "transkription": a.Cfg.Transcription,
 		"max_mb": a.Cfg.HookMaxBytes >> 20, "ring_header": a.Cfg.RingIDHeader, "ring_id": a.activeRingID(),
 	})
 }
 
-func (a *App) handleHealth(w http.ResponseWriter, r *http.Request) {
-	if _, err := a.DB.Counts(); err != nil {
+// handleHealth: system.db lesbar und die Daten aller geöffneten Nutzer lesbar (gesperrte zählen nicht als krank).
+func (a *System) handleHealth(w http.ResponseWriter, r *http.Request) {
+	var n int
+	err := a.DB.DB.QueryRow(`SELECT COUNT(*) FROM users`).Scan(&n)
+	for _, app := range a.Apps() {
+		if err == nil {
+			_, err = app.DB.Counts()
+		}
+	}
+	if err != nil {
 		http.Error(w, "Datenbank", http.StatusServiceUnavailable)
 		return
 	}

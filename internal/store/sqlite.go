@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net/url"
+	"strings"
 
 	"github.com/ncruces/go-sqlite3"
 	"github.com/ncruces/go-sqlite3/driver"
@@ -75,4 +76,43 @@ func snapshotURI(path string, key []byte) string {
 // OpenReadOnly öffnet eine Datenbankdatei nur lesend (Prüfung hochgeladener Backups, Schema-Abfrage).
 func OpenReadOnly(path string, key []byte) (*sql.DB, error) {
 	return openSQLite(path, key, true)
+}
+
+// SnapshotTo schreibt eine in sich stimmige Kopie der Datenbank nach path – mit key verschlüsselt, ohne als Klartext
+// (für den Umzug der Datenbank bis 2.x in die verschlüsselte Datenbank des ersten Nutzers).
+func (s *Store) SnapshotTo(path string, key []byte) error {
+	_, err := s.DB.Exec(`VACUUM INTO ?`, snapshotURI(path, key))
+	return err
+}
+
+// Tombstone legt an path eine leere Datenbank mit Schema-Stand 1000 an: Programme bis 2.x weigern sich damit zu
+// starten (statt still mit leerer Datenbank), der Installer lehnt den Wechsel zu ihnen ab.
+func Tombstone(path, note string) error {
+	db, err := openSQLite(path, nil, false)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	for _, q := range []string{`CREATE TABLE IF NOT EXISTS umgezogen (hinweis TEXT NOT NULL)`, `DELETE FROM umgezogen`,
+		`INSERT INTO umgezogen VALUES (?)`, `PRAGMA user_version = 1000`, `PRAGMA journal_mode = DELETE`} {
+		var args []any
+		if strings.Contains(q, "?") {
+			args = append(args, note)
+		}
+		if _, err := db.Exec(q, args...); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// IsTombstone: path ist der Platzhalter aus Tombstone (nicht die Datenbank bis 2.x).
+func IsTombstone(path string) bool {
+	db, err := OpenReadOnly(path, nil)
+	if err != nil {
+		return false
+	}
+	defer db.Close()
+	var n int
+	return db.QueryRow(`SELECT COUNT(*) FROM umgezogen`).Scan(&n) == nil
 }

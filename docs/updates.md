@@ -36,14 +36,17 @@ sudo bash /usr/local/lib/pebble-webhook/install.sh --channel nightly       # new
 
 *Backups* (menu, below Updates) lists all backups, newest first. Each is one archive `pebble-<version>-<channel>-<time>-<kind>[-audio].tar.gz` in `BACKUP_DIR` (start value in `/etc/pebble-webhook/env`, default `/srv/pebble-backup`; after changing it run `install.sh` again) with
 
-- `meta.json` – version, build, channel, time, kind, recordings yes/no,
-- `pebble.db` – the database with all settings,
+- `meta.json` – version, build, channel, time, kind, recordings yes/no, users with key id,
+- `system.db` – users, sign-in (only hashes and public keys) and system settings,
+- `users/<id>/daten.db` – each user's data, encrypted with their key,
 - `env` – the start values,
-- `audio/` – the recordings, if chosen.
+- `audio/<id>/` – the encrypted recordings, if chosen.
+
+The keys are never in a backup. Restored on another server, each user opens their data with their recovery code after signing in. Backups up to 2.x (`pebble.db`, unencrypted) can still be restored; the data moves to the new layout on start.
 
 Kinds: *before update* (by the installer before every update or version switch, kept 30 days), *scheduled* (daily, weekly on Mondays or monthly on the 1st at the chosen time) and *manual* (*Back up now*); scheduled and manual ones are kept `BACKUP_RETENTION_DAYS` (default 30). The program itself is not backed up.
 
-*Restore* backs up the current state, brings back database and recordings and installs the version named in the backup from its channel (cache or GitHub). Backups of own builds (`lokal`) restore the data only and keep the installed program. Recordings in the audio folder that the restored database does not know show up on the status page as *recordings without entry* and can be imported again (new entry, received = file time, evaluated by the AI again). Recordings are kept in `diktat/` and `planung/` under the audio folder, so an import knows the kind: notes first, then planning rounds – one round each without questions, assigned to a planning by the AI. By hand: `tar -xzf <backup> -C <dir>`, stop the service, copy `pebble.db` to `/var/lib/pebble-webhook/`, start the service.
+*Restore* backs up the current state, brings back database and recordings and installs the version named in the backup from its channel (cache or GitHub). Backups of own builds (`lokal`) restore the data only and keep the installed program. Recordings in the audio folder that the restored database does not know show up on the status page as *recordings without entry* and can be imported again (new entry, received = file time, evaluated by the AI again). Recordings are kept in `<user>/diktat/` and `<user>/planung/` under the audio folder, so an import knows the kind: notes first, then planning rounds – one round each without questions, assigned to a planning by the AI. By hand: `tar -xzf <backup> -C <dir>`, stop the service, copy `system.db` and `users/` to `/var/lib/pebble-webhook/` (remove the old ones first), start the service.
 
 ## Releases (maintainers)
 

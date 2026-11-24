@@ -130,7 +130,7 @@ func (a version) less(b version) bool {
 }
 
 // updateChannel liefert den aktiven Kanal (in der App umschaltbar, ohne Neustart).
-func (a *App) updateChannel() string {
+func (a *System) updateChannel() string {
 	a.updates.mu.Lock()
 	defer a.updates.mu.Unlock()
 	if a.updates.channel == "" {
@@ -152,7 +152,7 @@ var buildStampRe = regexp.MustCompile(`\(Build (\d{8}-\d{4})`)
 // installedTime: wann die laufende Version entstand – Veröffentlichung des passenden Releases, sonst der
 // Build-Stempel („(Build 20261122-0016, …)“), der Zeitstempel einer nightly, zuletzt der Installationszeitpunkt.
 // Die Nummern der Kanäle hängen nicht zusammen; „neuer“ heißt deshalb später entstanden.
-func (a *App) installedTime(releases []release) time.Time {
+func (a *System) installedTime(releases []release) time.Time {
 	current := strings.Fields(a.Version + " ")[0]
 	ch := a.installedChannel()
 	for _, rel := range releases {
@@ -195,7 +195,7 @@ func channelsFor(channel string) []string {
 // channelList: Versionen eines Kanals samt der Kanäle, die er mit anbietet (channelsFor), neueste Veröffentlichung
 // zuerst (die Nummern der Kanäle hängen nicht zusammen – eine stable kann eine höhere Nummer haben als die
 // laufende nightly und umgekehrt).
-func (a *App) channelList(releases []release, channel string) []channelRelease {
+func (a *System) channelList(releases []release, channel string) []channelRelease {
 	current := strings.Fields(a.Version + " ")[0]
 	curChannel := a.installedChannel()
 	curBase, _, curOK := parseVersion(a.Version)
@@ -232,7 +232,7 @@ func (a *App) channelList(releases []release, channel string) []channelRelease {
 }
 
 // channelView: Versionen des gewählten Kanals (mit channelsFor); empfohlen ist die neueste, sofern sie nicht schon läuft.
-func (a *App) channelView(releases []release) (list []channelRelease, recommended string, installedChannel string) {
+func (a *System) channelView(releases []release) (list []channelRelease, recommended string, installedChannel string) {
 	list = a.channelList(releases, a.updateChannel())
 	for _, r := range list {
 		if r.Newer {
@@ -245,7 +245,7 @@ func (a *App) channelView(releases []release) (list []channelRelease, recommende
 
 // installedChannel: Kanal der laufenden Version – vom Installer in DATA_DIR/installed-channel vermerkt
 // (stable, beta, nightly; lokal = eigener Build). Fehlt die Datei, zählt die Endung der Versionsnummer.
-func (a *App) installedChannel() string {
+func (a *System) installedChannel() string {
 	if b, err := os.ReadFile(filepath.Join(a.Cfg.DataDir, "installed-channel")); err == nil {
 		if ch := strings.TrimSpace(string(b)); ch != "" {
 			return ch
@@ -259,7 +259,7 @@ func (a *App) installedChannel() string {
 
 // AvailableUpdate: neueste Version des gewählten Kanals aus der letzten Prüfung, sofern sie später als die
 // laufende veröffentlicht wurde (Nummer egal); ohne GitHub zu fragen ("" = keine).
-func (a *App) AvailableUpdate() string {
+func (a *System) AvailableUpdate() string {
 	a.updates.mu.Lock()
 	releases := a.updates.releases
 	a.updates.mu.Unlock()
@@ -268,7 +268,7 @@ func (a *App) AvailableUpdate() string {
 }
 
 // CheckUpdates läuft im Hintergrund: beim Start und dann alle updateInterval.
-func (a *App) CheckUpdates(ctx context.Context) {
+func (a *System) CheckUpdates(ctx context.Context) {
 	if a.Cfg.UpdateRepo == "" {
 		return
 	}
@@ -316,7 +316,7 @@ type storedReleases struct {
 
 // fetchReleases liefert die zwischengespeicherten Releases; GitHub wird nur mit force gefragt (Prüfung im
 // Hintergrund alle updateInterval oder „Jetzt prüfen“) – oder einmal, wenn noch gar nichts gespeichert ist.
-func (a *App) fetchReleases(ctx context.Context, force bool) ([]release, string) {
+func (a *System) fetchReleases(ctx context.Context, force bool) ([]release, string) {
 	c := &a.updates
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -413,7 +413,7 @@ func updateInstallable() bool {
 	return err == nil
 }
 
-func (a *App) updateStatus() string {
+func (a *System) updateStatus() string {
 	b, _ := os.ReadFile(filepath.Join(a.Cfg.DataDir, "update-status"))
 	return strings.TrimSpace(string(b))
 }
@@ -542,7 +542,7 @@ func notesSince(from, current, channel string) []noteSection {
 	return pick(pebblewebhook.Changelog)
 }
 
-func (a *App) handleUpdate(w http.ResponseWriter, r *http.Request) {
+func (a *System) handleUpdate(w http.ResponseWriter, r *http.Request) {
 	current := strings.Fields(a.Version + " ")[0]
 	now, _, source := releaseNotes(current, a.updateChannel())
 	allNotes := ""
@@ -591,7 +591,7 @@ func (a *App) handleUpdate(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleUpdateAuto schaltet das automatische Update: gespeichert in den Einstellungen, wirksam sofort.
-func (a *App) handleUpdateAuto(w http.ResponseWriter, r *http.Request) {
+func (a *System) handleUpdateAuto(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Aktiv bool `json:"aktiv"`
 	}
@@ -614,7 +614,7 @@ func (a *App) handleUpdateAuto(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleUpdateChannel wechselt den Kanal: gespeichert in den Einstellungen, wirksam sofort (ohne Neustart).
-func (a *App) handleUpdateChannel(w http.ResponseWriter, r *http.Request) {
+func (a *System) handleUpdateChannel(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Kanal string `json:"kanal"`
 	}
@@ -632,7 +632,7 @@ func (a *App) handleUpdateChannel(w http.ResponseWriter, r *http.Request) {
 	a.handleUpdate(w, r)
 }
 
-func (a *App) handleUpdateInstall(w http.ResponseWriter, r *http.Request) {
+func (a *System) handleUpdateInstall(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Version string `json:"version"`
 	}
@@ -665,14 +665,14 @@ func (a *App) handleUpdateInstall(w http.ResponseWriter, r *http.Request) {
 }
 
 // requestInstall beauftragt den Updater (Path-Unit) mit einer Version.
-func (a *App) requestInstall(version string) error {
+func (a *System) requestInstall(version string) error {
 	v := strings.TrimPrefix(version, "v")
 	os.WriteFile(filepath.Join(a.Cfg.DataDir, "update-status"), []byte("requested "+v+"\n"), 0o640)
 	return os.WriteFile(filepath.Join(a.Cfg.DataDir, "update-request"), []byte(a.Cfg.UpdateRepo+" "+v+"\n"), 0o640)
 }
 
 // autoUpdateOn: automatisches Update an (Einstellung AUTO_UPDATE, in der App umschaltbar ohne Neustart).
-func (a *App) autoUpdateOn() bool {
+func (a *System) autoUpdateOn() bool {
 	a.updates.mu.Lock()
 	defer a.updates.mu.Unlock()
 	switch a.updates.auto {
@@ -688,7 +688,7 @@ const autoUpdateKey = "auto-update-letzt" // „2026-11-22 1.27.12 …“: letzt
 
 // AutoUpdate läuft im Hintergrund: einmal am Tag zur Uhrzeit AUTO_UPDATE_TIME die neueste Version des
 // gewählten Kanals installieren, wenn sie neuer ist als die laufende (der Installer sichert vorher).
-func (a *App) AutoUpdate(ctx context.Context) {
+func (a *System) AutoUpdate(ctx context.Context) {
 	t := time.NewTicker(time.Minute)
 	defer t.Stop()
 	for {
@@ -708,7 +708,7 @@ func (a *App) AutoUpdate(ctx context.Context) {
 	}
 }
 
-func (a *App) runAutoUpdate(ctx context.Context) string {
+func (a *System) runAutoUpdate(ctx context.Context) string {
 	releases, errMsg := a.fetchReleases(ctx, true)
 	if errMsg != "" {
 		logf("Automatisches Update: %s", errMsg)

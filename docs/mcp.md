@@ -3,7 +3,7 @@
 pebble-webhook has a built-in [MCP](https://modelcontextprotocol.io) server, so AI assistants (Claude, ChatGPT/OpenAI, …) can read your lists and tick items off in a chat.
 
 - **Endpoint:** `https://<your-domain>/mcp` (Streamable HTTP, JSON responses)
-- **Auth:** OAuth 2.1 (for connectors in Claude, ChatGPT and other apps) or a fixed `Authorization: Bearer <API token>` – set *Maschinenzugang (API-Token)* under *Status → Konfiguration* (at least 32 characters).
+- **Auth:** OAuth 2.1 (for connectors in Claude, ChatGPT and other apps) or a fixed `Authorization: Bearer <API token>` – create it under *Status → Access and security*. Both give access only to the data of the user who connected or created the token.
 
 ## Tools
 

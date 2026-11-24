@@ -53,7 +53,7 @@ func (a *App) mcpAppointments(days, past int) (string, error) {
 	now := time.Now()
 	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
 	var b strings.Builder
-	fmt.Fprintf(&b, i18n.T("Heute ist %s, %s Uhr.\n\n"), mcpWhen(now), now.Format("15:04"))
+	fmt.Fprintf(&b, a.T("Heute ist %s, %s Uhr.\n\n"), mcpWhen(now), now.Format("15:04"))
 	n := 0
 	for _, j := range jobs {
 		t := time.UnixMilli(j.TerminAt)
@@ -76,17 +76,17 @@ func (a *App) mcpAppointments(days, past int) (string, error) {
 		}
 		when := mcpWhen(t)
 		if j.TerminAllDay {
-			when += i18n.T(", ganztägig")
+			when += a.T(", ganztägig")
 		} else {
-			when += ", " + i18n.Tf("%s Uhr", t.Format("15:04"))
+			when += ", " + a.Tf("%s Uhr", t.Format("15:04"))
 		}
-		fmt.Fprintf(&b, i18n.T("- #%d %s – %s"), j.Nr, shortTitle(j.Title), when)
+		fmt.Fprintf(&b, a.T("- #%d %s – %s"), j.Nr, shortTitle(j.Title), when)
 		if d := parseDictation(j.Result); d != nil && d.Termin != nil && d.Termin.Ort != "" {
-			fmt.Fprintf(&b, i18n.T(" · Ort: %s"), d.Termin.Ort)
+			fmt.Fprintf(&b, a.T(" · Ort: %s"), d.Termin.Ort)
 		}
 		switch {
 		case missed:
-			b.WriteString(i18n.T(" [verpasst, nicht bestätigt]"))
+			b.WriteString(a.T(" [verpasst, nicht bestätigt]"))
 		case !upcoming:
 			b.WriteString(" [vorbei]")
 		}
@@ -94,7 +94,7 @@ func (a *App) mcpAppointments(days, past int) (string, error) {
 		n++
 	}
 	if n == 0 {
-		b.WriteString(i18n.T("Keine Termine im gewählten Zeitraum."))
+		b.WriteString(a.T("Keine Termine im gewählten Zeitraum."))
 	}
 	return strings.TrimSpace(b.String()), nil
 }
@@ -108,10 +108,10 @@ func (a *App) mcpSearch(q string) string {
 		Mehr    bool             `json:"mehr"`
 	}
 	if rec.Code != 200 || json.Unmarshal(rec.Body.Bytes(), &out) != nil {
-		return i18n.T("Suche fehlgeschlagen")
+		return a.T("Suche fehlgeschlagen")
 	}
 	if len(out.Treffer) == 0 {
-		return i18n.Tf("Keine Treffer für „%s“ (mindestens 2 Zeichen).", q)
+		return a.Tf("Keine Treffer für „%s“ (mindestens 2 Zeichen).", q)
 	}
 	var b strings.Builder
 	// Die Suche liefert seitenweise (50, neueste zuerst); mehr = es gibt ältere Treffer.
@@ -119,9 +119,9 @@ func (a *App) mcpSearch(q string) string {
 	if out.Mehr {
 		n += "+"
 	}
-	fmt.Fprintf(&b, i18n.T("%s Treffer für „%s“"), n, q)
+	fmt.Fprintf(&b, a.T("%s Treffer für „%s“"), n, q)
 	if len(out.Treffer) > 30 {
-		b.WriteString(i18n.T(" (die ersten 30)"))
+		b.WriteString(a.T(" (die ersten 30)"))
 	}
 	b.WriteString(":\n")
 	for i, t := range out.Treffer {
@@ -162,7 +162,7 @@ func (a *App) mcpReadNumbers(refs []string) (string, error) {
 	for _, ref := range refs {
 		nr, err := strconv.ParseInt(strings.TrimPrefix(strings.TrimSpace(ref), "#"), 10, 64)
 		if err != nil {
-			fmt.Fprintf(&b, i18n.T("%s: keine Nummer\n\n"), ref)
+			fmt.Fprintf(&b, a.T("%s: keine Nummer\n\n"), ref)
 			continue
 		}
 		if text, ok := a.mcpJobByNr(jobs, nr); ok {
@@ -170,7 +170,7 @@ func (a *App) mcpReadNumbers(refs []string) (string, error) {
 		} else if text, ok := a.mcpPlanningByNr(plans, nr); ok {
 			b.WriteString(text + "\n\n")
 		} else {
-			fmt.Fprintf(&b, i18n.T("#%d: nicht gefunden (oder im Papierkorb)\n\n"), nr)
+			fmt.Fprintf(&b, a.T("#%d: nicht gefunden (oder im Papierkorb)\n\n"), nr)
 		}
 	}
 	return strings.TrimSpace(b.String()), nil
@@ -186,9 +186,9 @@ func (a *App) mcpJobByNr(jobs []*store.Job, nr int64) (string, bool) {
 		if j.DoneAt > 0 {
 			b.WriteString(" [erledigt]")
 		}
-		fmt.Fprintf(&b, i18n.T("\nAufgenommen: %s, %s Uhr\n"), mcpWhen(time.UnixMilli(j.ReceivedAt)), time.UnixMilli(j.ReceivedAt).Format("15:04"))
+		fmt.Fprintf(&b, a.T("\nAufgenommen: %s, %s Uhr\n"), mcpWhen(time.UnixMilli(j.ReceivedAt)), time.UnixMilli(j.ReceivedAt).Format("15:04"))
 		if j.TerminAt > 0 {
-			fmt.Fprintf(&b, i18n.T("Termin: %s\n"), appointmentText(j))
+			fmt.Fprintf(&b, a.T("Termin: %s\n"), appointmentText(j))
 		}
 		b.WriteString("\n")
 		if d := parseDictation(j.Result); d != nil && d.Notiz != "" {
@@ -208,9 +208,9 @@ func (a *App) mcpPlanningByNr(plans []*store.Planning, nr int64) (string, bool) 
 		rounds, _ := a.DB.Rounds(p.ID)
 		plan := parsePlan(p.Plan)
 		if plan == nil {
-			return i18n.Tf("## #%d %s (Planung ohne Stand)", p.Nr, p.Title), true
+			return a.Tf("## #%d %s (Planung ohne Stand)", p.Nr, p.Title), true
 		}
-		return i18n.Tf("## #%d Planung: %s [%s]\n\n%s", p.Nr, plan.Titel, p.Status, a.renderPlan(plan, rounds)), true
+		return a.Tf("## #%d Planung: %s [%s]\n\n%s", p.Nr, plan.Titel, p.Status, a.renderPlan(plan, rounds)), true
 	}
 	return "", false
 }

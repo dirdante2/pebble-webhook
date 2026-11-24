@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"pebble-webhook/internal/i18n"
+	"pebble-webhook/internal/store"
 )
 
 // OAuth 2.1 für den MCP-Server (Claude, ChatGPT und andere Connectoren):
@@ -45,6 +46,7 @@ type oauthClient struct {
 
 type oauthGrant struct {
 	ID          string `json:"id"`
+	UserID      int64  `json:"user_id"` // Nutzer, der die Verbindung erlaubt hat (Zugriff nur auf seine Daten)
 	ClientID    string `json:"client_id"`
 	ClientName  string `json:"client_name"`
 	Created     int64  `json:"created"`
@@ -62,6 +64,7 @@ type oauthData struct {
 
 type oauthCode struct {
 	clientID, redirectURI, challenge string
+	uid                              int64
 	exp                              time.Time
 }
 
@@ -84,7 +87,7 @@ func oauthHash(s string) string {
 func hashEqual(a, b string) bool { return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1 }
 
 // load/save: Aufrufer hält a.oauth.mu.
-func (a *App) oauthLoad() (*oauthData, error) {
+func (a *System) oauthLoad() (*oauthData, error) {
 	d := &oauthData{}
 	v, err := a.DB.Get(oauthKey)
 	if err != nil {
@@ -104,7 +107,7 @@ func (a *App) oauthLoad() (*oauthData, error) {
 	return d, nil
 }
 
-func (a *App) oauthSave(d *oauthData) error {
+func (a *System) oauthSave(d *oauthData) error {
 	b, err := json.Marshal(d)
 	if err != nil {
 		return err
@@ -129,7 +132,7 @@ func (d *oauthData) prune(now time.Time) {
 	}
 }
 
-func (a *App) mcpURL() string { return a.Cfg.PublicURL + "/mcp" }
+func (a *System) mcpURL() string { return a.Cfg.PublicURL + "/mcp" }
 
 func oauthCORS(w http.ResponseWriter) {
 	h := w.Header()
@@ -139,14 +142,14 @@ func oauthCORS(w http.ResponseWriter) {
 	h.Set("Access-Control-Expose-Headers", "WWW-Authenticate, Mcp-Session-Id")
 }
 
-func (a *App) handleOAuthOptions(w http.ResponseWriter, r *http.Request) {
+func (a *System) handleOAuthOptions(w http.ResponseWriter, r *http.Request) {
 	oauthCORS(w)
 	w.WriteHeader(http.StatusNoContent)
 }
 
 // --- Metadaten ---
 
-func (a *App) handleProtectedResource(w http.ResponseWriter, r *http.Request) {
+func (a *System) handleProtectedResource(w http.ResponseWriter, r *http.Request) {
 	oauthCORS(w)
 	writeJSON(w, 200, map[string]any{
 		"resource":                 a.mcpURL(),
@@ -156,7 +159,7 @@ func (a *App) handleProtectedResource(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (a *App) handleAuthServerMeta(w http.ResponseWriter, r *http.Request) {
+func (a *System) handleAuthServerMeta(w http.ResponseWriter, r *http.Request) {
 	oauthCORS(w)
 	base := a.Cfg.PublicURL
 	writeJSON(w, 200, map[string]any{
@@ -196,7 +199,7 @@ func oauthError(w http.ResponseWriter, status int, code, desc string) {
 	writeJSON(w, status, map[string]string{"error": code, "error_description": desc})
 }
 
-func (a *App) handleOAuthRegister(w http.ResponseWriter, r *http.Request) {
+func (a *System) handleOAuthRegister(w http.ResponseWriter, r *http.Request) {
 	if !a.allow("oauthreg:"+a.clientIP(r), 10) {
 		oauthError(w, http.StatusTooManyRequests, "slow_down", "Zu viele Registrierungen")
 		return
@@ -276,7 +279,7 @@ type authRequest struct {
 }
 
 // checkAuthorize prüft die Parameter von /oauth/authorize. redirectOK: Fehler dürfen an die Rücksprung-Adresse gehen.
-func (a *App) checkAuthorize(q url.Values) (req authRequest, redirectOK bool, errCode, errDesc string) {
+func (a *System) checkAuthorize(q url.Values) (req authRequest, redirectOK bool, errCode, errDesc string) {
 	a.oauth.mu.Lock()
 	d, err := a.oauthLoad()
 	a.oauth.mu.Unlock()
@@ -320,7 +323,7 @@ func redirectWith(base string, v url.Values) string {
 }
 
 // handleOAuthAuthorize: gültige Anfrage → Freigabeseite der Web-App mit denselben Parametern.
-func (a *App) handleOAuthAuthorize(w http.ResponseWriter, r *http.Request) {
+func (a *System) handleOAuthAuthorize(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	req, redirectOK, code, desc := a.checkAuthorize(q)
 	if code != "" {
@@ -394,7 +397,7 @@ func (a *App) handleOAuthDecide(w http.ResponseWriter, r *http.Request) {
 			delete(a.oauth.codes, k)
 		}
 	}
-	a.oauth.codes[oauthHash(c)] = oauthCode{clientID: req.client.ID, redirectURI: req.redirectURI, challenge: req.challenge, exp: now.Add(oauthCodeTTL)}
+	a.oauth.codes[oauthHash(c)] = oauthCode{clientID: req.client.ID, redirectURI: req.redirectURI, challenge: req.challenge, uid: a.UserID, exp: now.Add(oauthCodeTTL)}
 	a.oauth.mu.Unlock()
 	v.Set("code", c)
 	v.Set("iss", a.Cfg.PublicURL)
@@ -422,7 +425,7 @@ func clientAuth(d *oauthData, r *http.Request) (*oauthClient, bool) {
 	return c, secret != "" && hashEqual(oauthHash(secret), c.SecretHash)
 }
 
-func (a *App) issueTokens(w http.ResponseWriter, d *oauthData, g *oauthGrant) {
+func (a *System) issueTokens(w http.ResponseWriter, d *oauthData, g *oauthGrant) {
 	access, refresh := oauthRandom(32), oauthRandom(32)
 	now := time.Now()
 	g.AccessHash, g.AccessExp = oauthHash(access), now.Add(oauthAccessTTL).UnixMilli()
@@ -438,7 +441,7 @@ func (a *App) issueTokens(w http.ResponseWriter, d *oauthData, g *oauthGrant) {
 		"refresh_token": refresh, "scope": "mcp"})
 }
 
-func (a *App) handleOAuthToken(w http.ResponseWriter, r *http.Request) {
+func (a *System) handleOAuthToken(w http.ResponseWriter, r *http.Request) {
 	if !a.allow("oauthtok:"+a.clientIP(r), 30) {
 		oauthError(w, http.StatusTooManyRequests, "slow_down", "Zu viele Anfragen")
 		return
@@ -480,7 +483,7 @@ func (a *App) handleOAuthToken(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		d.prune(time.Now())
-		g := &oauthGrant{ID: oauthRandom(12), ClientID: c.ID, ClientName: c.Name, Created: time.Now().UnixMilli()}
+		g := &oauthGrant{ID: oauthRandom(12), UserID: code.uid, ClientID: c.ID, ClientName: c.Name, Created: time.Now().UnixMilli()}
 		d.Grants[g.ID] = g
 		a.issueTokens(w, d, g)
 	case "refresh_token":
@@ -498,7 +501,7 @@ func (a *App) handleOAuthToken(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleOAuthRevoke (RFC 7009): Token widerrufen → die ganze Freigabe endet. Antwortet immer 200.
-func (a *App) handleOAuthRevoke(w http.ResponseWriter, r *http.Request) {
+func (a *System) handleOAuthRevoke(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 	if r.ParseForm() == nil {
 		h := oauthHash(r.PostForm.Get("token"))
@@ -522,7 +525,7 @@ func (a *App) handleOAuthRevoke(w http.ResponseWriter, r *http.Request) {
 
 // --- Zugang zu /mcp: API-Token oder OAuth-Zugangs-Token ---
 
-func (a *App) mcpAuth(next http.HandlerFunc) http.HandlerFunc {
+func (a *System) mcpAuth(next userHandler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		oauthCORS(w)
 		h := r.Header.Get("Authorization")
@@ -543,10 +546,8 @@ func (a *App) mcpAuth(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 		tok := strings.TrimPrefix(h, "Bearer ")
-		got := sha256.Sum256([]byte(tok))
-		want := sha256.Sum256([]byte(a.Cfg.APIToken))
-		if a.Cfg.APIToken != "" && subtle.ConstantTimeCompare(got[:], want[:]) == 1 {
-			next(w, r)
+		if t, ok := a.DB.TokenUser(store.TokenAPI, tok); ok {
+			a.withApp(w, r, t.UserID, next)
 			return
 		}
 		th := oauthHash(tok)
@@ -568,11 +569,11 @@ func (a *App) mcpAuth(next http.HandlerFunc) http.HandlerFunc {
 			}
 		}
 		a.oauth.mu.Unlock()
-		if hit == nil {
+		if hit == nil || hit.UserID == 0 {
 			deny("Token ungültig oder abgelaufen")
 			return
 		}
-		next(w, r)
+		a.withApp(w, r, hit.UserID, next)
 	}
 }
 
@@ -588,7 +589,7 @@ func (a *App) handleOAuthGrants(w http.ResponseWriter, r *http.Request) {
 	}
 	out := []map[string]any{}
 	for _, g := range d.Grants {
-		if g.RefreshExp > time.Now().UnixMilli() {
+		if g.UserID == a.UserID && g.RefreshExp > time.Now().UnixMilli() {
 			out = append(out, map[string]any{"id": g.ID, "name": g.ClientName, "angelegt": g.Created, "zuletzt": g.LastUsed})
 		}
 	}
@@ -604,7 +605,7 @@ func (a *App) handleOAuthGrantDelete(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, "speicher", "Datenbankfehler")
 		return
 	}
-	if d.Grants[r.PathValue("id")] == nil {
+	if g := d.Grants[r.PathValue("id")]; g == nil || g.UserID != a.UserID {
 		writeErr(w, 404, "fehlt", "Verbindung nicht gefunden")
 		return
 	}
