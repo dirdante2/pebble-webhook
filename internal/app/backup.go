@@ -583,7 +583,7 @@ func (a *System) handleUpdateRestore(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !updateInstallable() {
-		writeErr(w, http.StatusConflict, "nicht_moeglich", "Kein Updater installiert – Installation mit install.sh nötig")
+		writeErr(w, http.StatusConflict, "nicht_moeglich", noUpdater())
 		return
 	}
 	found := false

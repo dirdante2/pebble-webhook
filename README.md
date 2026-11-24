@@ -40,7 +40,9 @@ On a Debian/Ubuntu server with systemd:
 curl -fsSL https://raw.githubusercontent.com/dirdante2/pebble-webhook/main/install.sh | sudo bash -s -- --channel stable
 ```
 
-The installer prints a link to the setup wizard. Put the service behind an HTTPS reverse proxy (passkeys need HTTPS), enter your OpenAI key and the public address, then create your first passkey.
+Or with Docker: `docker run -d --restart unless-stopped -p 8080:8080 -v pebble-config:/config dirdante/pebble-index-webapp:stable` (details in [installation](docs/installation.md#docker)).
+
+The installer (or the container log) prints a link to the setup wizard. Put the service behind an HTTPS reverse proxy (passkeys need HTTPS), enter your OpenAI key and the public address, then create your first passkey.
 
 ## Tips
 
@@ -50,7 +52,7 @@ pebble-webhook is free and open source. If it is useful to you, a small tip on [
 
 ## Documentation
 
-- [Installation](docs/installation.md) – requirements, installer, reverse proxy, uninstall
+- [Installation](docs/installation.md) – requirements, installer, Docker, reverse proxy, uninstall
 - [Configuration](docs/configuration.md) – setup wizard and all settings
 - [Pebble app](docs/pebble-app.md) – connecting the ring
 - [Usage](docs/usage.md) – what the web app does

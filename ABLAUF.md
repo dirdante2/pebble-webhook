@@ -14,7 +14,7 @@ In der Web-App und in Joplin heißt die Art „Notiz“ (Nutzervorgabe 15.11.202
 6. Worker: Transkription `POST /v1/audio/transcriptions` (bei `TRANSCRIPTION=pebble` das Pebble-Transkript); der Pebble-Text wird immer mitgespeichert. Liefert OpenAI nichts oder fehlt die Aufnahme, gilt der Pebble-Text; gibt es keinen Text → leere Aufnahme (siehe Löschen).
 7. Auswertung `POST /v1/responses` (`OPENAI_DICTATION_MODEL`, höchstens eine Websuche, JSON-Schema): Kurztitel, Art (`notiz` | `listenpunkt`), `notiz` (kurze Fassung des Gesagten), `beschreibung` (Zusatzwissen, z. B. Inhalt eines Films), Eckdaten, höchstens 4 Hinweise, Quellen, Tags. Links stehen nur in den Quellen; Quellenverweise in Eckdaten werden entfernt. Kosten zählen wie Recherche (`PRICE_PLAN_*`, `RESEARCH_LIMIT_USD`). Scheitert sie auch beim letzten Versuch, bleibt das Diktat mit den ersten sechs Wörtern als Titel und ohne Auswertung.
 8. Einsortieren in Gruppen und Listen siehe unten. `listenpunkt` → Punkte in die Liste (vorhandener Punkt kein zweites Mal). `notiz` → eigene Notiz und **immer** ein Punkt in einer Liste (Nutzervorgabe 21.11.2026): die Liste ihres Themas, bei zu wenig Information die generische Liste „Unsortiert“ (ohne Gruppe). Termine kommen in keine Liste. Einmaliger Nachtrag für Altbestand: `pebble notizen-einsortieren`.
-9. Joplin-Push (siehe unten): Notiz nach `Sprachnotizen/Notizen` (Eckdaten, Hinweise, Wortlaut), Liste als eine Notiz mit Kästchen nach `Sprachnotizen/Listen` → `fertig` → SSE an offene Web-Apps. Kein Web-Push für Notizen. Das Notizbuch hieß bis 15.11.2026 „Diktate“: seine Id leitet sich weiter von diesem Namen ab, der Titel wird beim ersten Push einmal umgeschrieben (Merker `joplin_ordner_notizen` in `kv`).
+9. Joplin-Push (siehe unten): Notiz nach `Sprachnotizen/Notizen` (Eckdaten, Hinweise, Wortlaut), Liste als eine Notiz mit Kästchen nach `Sprachnotizen/Listen` → `fertig` → SSE an offene Web-Apps. Web-Push „Notiz gespeichert“ nur mit Kanal `NOTIFY_SAVED` (Vorgabe aus). Das Notizbuch hieß bis 15.11.2026 „Diktate“: seine Id leitet sich weiter von diesem Namen ab, der Titel wird beim ersten Push einmal umgeschrieben (Merker `joplin_ordner_notizen` in `kv`).
 
 ## Zusammenhang zwischen Notizen
 
@@ -31,7 +31,7 @@ In der Web-App und in Joplin heißt die Art „Notiz“ (Nutzervorgabe 15.11.202
 3. Recherche `POST /v1/responses` (`OPENAI_PLAN_MODEL`, Tool `web_search`, JSON-Schema): Eingabe = bisheriger Stand + alle bisherigen Transkripte + neue Runde. Tiefe: 3 Suchen (`search_context_size: low`), bei „ausführlich/gründlich/…“ im Text bis 10 (`medium`), gedeckelt durch das Kostenlimit.
 4. Kosten = Tokens × Preis + Suchen × Preis, je Auftrag aufsummiert. ≥ `RESEARCH_LIMIT_USD` → am Eintrag markiert; vor einem weiteren Versuch erreicht → Dauerfehler. Fehlt ein Preis in der Konfiguration, läuft keine Recherche.
 5. Ergebnis (Kernfrage in einem Satz, Eckdaten als Kurzantwort, Hintergrund in kurzen Absätzen, 3–6 Tipps, Rückfragen nur wenn die Antwort sonst nicht stimmt – meist keine, je 3 Antwortvorschläge, „Annahme / unklar“, Quellen nur am Ende, in der Web-App eingeklappt; Zitate im Text werden entfernt) wird Stand der Planung; die Runde behält ihren Stand als Schnappschuss.
-6. Joplin-Push der ganzen Planung als To-do in `Sprachnotizen/Planungsaufgaben` (aktueller Stand + Verlauf aller Runden mit Transkripten) → `fertig` → SSE, Web-Push „Planung fertig · n Fragen“. Web-Push gibt es nur für Planungen (fertig oder dauerhaft fehlgeschlagen).
+6. Joplin-Push der ganzen Planung als To-do in `Sprachnotizen/Planungsaufgaben` (aktueller Stand + Verlauf aller Runden mit Transkripten) → `fertig` → SSE, Web-Push „Planung fertig · n Fragen“. Jeder Web-Push läuft über einen Kanal (`NOTIFY_*`, je Nutzer, Status → Benachrichtigungen): Rückfragen, Fehler, Gespeichert (aus), Termine, Ring, Updates (nur Admins, einmal je Version).
 
 ## Aufnahme in der Web-App (Notiz)
 
@@ -170,7 +170,7 @@ In der Web-App und in Joplin heißt die Art „Notiz“ (Nutzervorgabe 15.11.202
 ## Fehler und „Erneut starten“
 
 1. Schritt scheitert → Versuch zählen, nächster Versuch nach 30 s, 2 min, 10 min, 30 min, 2 h, 6 h; der Eintrag zeigt „wird wiederholt“.
-2. Nach `MAX_ATTEMPTS` (oder bei Fehlern ohne Aussicht: Preise fehlen, kein Audio, leeres Transkript) → Dauerfehler, Eintrag steht in Verlauf und Statusseite, bis er gelöscht wird (siehe Löschen); Web-Push nur bei Planungen.
+2. Nach `MAX_ATTEMPTS` (oder bei Fehlern ohne Aussicht: Preise fehlen, kein Audio, leeres Transkript) → Dauerfehler, Eintrag steht in Verlauf und Statusseite, bis er gelöscht wird (siehe Löschen); Web-Push über Kanal Fehler (auch Notizen, abgewiesene Gesten, Joplin beim Wechsel auf Fehler).
 3. „Erneut starten“ → `POST /api/eintraege/{id}/neustart` → Zähler zurück, der gescheiterte Schritt läuft neu; fertige Zwischenstände bleiben.
 
 ## Joplin-Push (Einweg)
@@ -385,3 +385,11 @@ Token-Routen (alles andere bleibt bei der Passkey-Sitzung, kein Löschen): `GET 
 1. `install.sh`: `MEDIA_DIR` aus env, sonst alter `AUDIO_DIR`; Zeile `AUDIO_DIR=` wird zu `MEDIA_DIR=`; `ReadWritePaths` mit `/srv/pebble-audio` und `/srv/pebble-medien`.
 2. Start je Nutzer (`migrateMedia`): alles unter `MEDIA_DIR/<id>/` außer `audio/`, `bilder/` → `audio/` (Ordner zusammenführen, nie überschreiben) → `sortAudio` richtet `jobs.audio_path` nach dem Ort der Datei (auch nach Umhängen auf einen neuen Pfad).
 
+
+## Docker-Image (seit 24.11.2026)
+
+1. `deploy/release.sh <kanal>` → Tag `vX.Y.Z-<kanal>` → Workflow baut Binaries → `Dockerfile` packt `out/pebble-webhook-linux-<arch>` (ein Build, amd64+arm64) → Push `X.Y.Z-<kanal>` (stable auch `X.Y.Z`).
+2. Gleitende Tags umhängen ohne Neubau, wenn neue Version ≥ dort hängende: nightly → `nightly`; beta → `beta`, `nightly`; stable → `stable`, `latest`, `X.Y`, `X`, `beta`, `nightly`.
+3. Container (`PEBBLE_DOCKER=1`): `/api/update` liefert `docker.image`, `installierbar=false` → Seite zeigt `docker pull`; Install/Restore/Upload/Auto-Update → 409.
+4. Start: `serve` prüft Ordner unter `/config` (env überschreibbar), Einrichtungslink im Log; Speichern beendet den Prozess → `restart: unless-stopped` startet neu.
+5. Einstellungen: `OPENAI_API_KEY`/`YOUTUBE_API_KEY` aus env gehen der DB vor (`config.EnvLocked`), in der App gesperrt, nie gespeichert.

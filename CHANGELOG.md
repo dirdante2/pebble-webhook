@@ -9,6 +9,20 @@ Version numbers X.Y.Z:
 
 Own builds show X.Y.Z.A: **A** is a local build counter (one per deployed change, starting at 1 for every new X.Y.Z); it never appears in Git or releases, so one version can collect several changes.
 
+## [4.1.0] - 2026-11-24
+
+### New
+- Docker image on Docker Hub per release (amd64, arm64) with fixed and moving channel tags.
+- Docker: update page shows the `docker pull` command; install, restore and auto-update off.
+- API keys (`OPENAI_API_KEY`, `YOUTUBE_API_KEY`) from the environment win over the app and are locked there.
+- Command `healthcheck` (Docker HEALTHCHECK).
+- Status → Notifications: channels on/off per user (AI questions, errors, saved entries, appointments, ring, updates).
+- Push for every failed note and Joplin transfer (channel errors); push for saved notes (off by default).
+- Push when an update is available (admins, once per version).
+
+### Changed
+- Installer: old API keys in `/etc/pebble-webhook/env` commented out once (already in the database).
+
 ## [4.0.1] - 2026-11-24
 
 ### New

@@ -53,6 +53,8 @@ const usage = `pebble-webhook <Befehl>
   verzeichnisse
             Ordner (DATA_DIR, DATA_DIR/users, MEDIA_DIR, BACKUP_DIR, KEY_DIR) anlegen und Besitzer/Rechte richten
             (als root; vor jedem Start durch systemd und beim Installieren); ohne root nur prüfen
+  healthcheck
+            /healthz des laufenden Dienstes abfragen (Exit 0 = antwortet; HEALTHCHECK im Docker-Image)
   version   Version ausgeben
   schema [DATEI]
             Schema-Stand ausgeben, den dieses Programm kennt – mit DATEI den einer Datenbank (für den Installer)
@@ -106,6 +108,8 @@ func main() {
 			return
 		}
 		fail(dirs())
+	case "healthcheck":
+		fail(healthcheck())
 	case "version":
 		fmt.Println(version)
 	case "schema":
@@ -138,6 +142,24 @@ func loadBoot() (config.Bootstrap, error) {
 		return config.Bootstrap{}, fmt.Errorf("%s: %w", envFile, err)
 	}
 	return config.LoadBootstrap(), nil
+}
+
+// healthcheck fragt /healthz des laufenden Dienstes ab (Docker-Image ohne Shell und curl).
+func healthcheck() error {
+	boot, err := loadBoot()
+	if err != nil {
+		return err
+	}
+	c := http.Client{Timeout: 3 * time.Second}
+	resp, err := c.Get("http://127.0.0.1:" + port(boot.Listen) + "/healthz")
+	if err != nil {
+		return err
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return fmt.Errorf("/healthz antwortet %d", resp.StatusCode)
+	}
+	return nil
 }
 
 // dirs richtet als root die Ordner ein (Mounts nach Anlegen oder Wiederherstellen gehören oft root); sonst nur Prüfung.

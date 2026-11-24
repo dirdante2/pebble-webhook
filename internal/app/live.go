@@ -100,8 +100,12 @@ func (a *System) initPush() error {
 	return nil
 }
 
-// notify schickt eine Benachrichtigung an alle angemeldeten Geräte (im Hintergrund).
-func (a *App) notify(title, body, path string) {
+// notify schickt eine Benachrichtigung an alle angemeldeten Geräte (im Hintergrund), wenn der Nutzer den Kanal
+// (config.Notify…) eingeschaltet hat; channel "" = immer (Test-Push).
+func (a *App) notify(channel, title, body, path string) {
+	if channel != "" && !a.Cfg.Notify[channel] {
+		return
+	}
 	subs, err := a.DB.PushSubs()
 	if err != nil || len(subs) == 0 {
 		return
@@ -169,6 +173,6 @@ func (a *App) handlePushUnsubscribe(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) handlePushTest(w http.ResponseWriter, r *http.Request) {
-	a.notify("Test", a.T("Benachrichtigungen funktionieren."), "/status")
+	a.notify("", "Test", a.T("Benachrichtigungen funktionieren."), "/status")
 	writeJSON(w, 200, map[string]any{"ok": true})
 }

@@ -26,6 +26,35 @@ Options: `--version X.Y.Z` (specific release, also beta/nightly or older ones �
 
 Running the installer again updates the program; database, settings and env file stay untouched.
 
+## Docker
+
+Every release is also published as a Docker image for amd64 and arm64: `dirdante/pebble-index-webapp` on Docker Hub.
+
+```yaml
+services:
+  pebble:
+    image: dirdante/pebble-index-webapp:stable
+    restart: unless-stopped        # required: saving settings restarts the service
+    ports:
+      - "8080:8080"
+    environment:
+      TZ: Europe/Berlin
+      OPENAI_API_KEY: sk-…           # optional, see below
+      # MEDIA_DIR: /medien           # optional own paths, e.g. a NAS share
+      # BACKUP_DIR: /backup
+    volumes:
+      - pebble-config:/config
+volumes:
+  pebble-config:
+```
+
+- **`/config`** holds everything else: databases (`/config/data`), keys (`/config/keys`), media (`/config/medien`), backups (`/config/backup`) and an optional env file `/config/env`.
+- **Paths** come from the environment: `DATA_DIR`, `KEY_DIR`, `MEDIA_DIR`, `BACKUP_DIR`, `LISTEN`. The container runs as uid 65532; bind-mounted folders must be writable for it (`chown -R 65532:65532 <dir>`).
+- **API keys** (`OPENAI_API_KEY`, `YOUTUBE_API_KEY`) set in the environment always win over the web app and are locked there. Without them, enter the keys in the setup wizard as usual. The same applies to the systemd installation (`/etc/pebble-webhook/env`).
+- **Setup wizard:** the link is in the log (`docker compose logs pebble`).
+- **Updates:** the app shows new versions and the `docker pull` command, but installs nothing itself. Update with `docker compose pull && docker compose up -d`. The tag decides the channel – see [updates](updates.md#docker).
+- **Restore a backup:** stop the container, unpack the archive (`tar -xzf <backup> -C <dir>`), copy `system.db` and `users/` into `DATA_DIR` (remove the old ones first) and `medien/` into `MEDIA_DIR`, then start the image of the version named in the backup (`meta.json`).
+
 ## Storage: own mounts (recommended)
 
 Give the three data folders a volume each – in a Proxmox LXC a mount point per folder. They can then be sized, backed up and restored on their own, and a full disk in one does not stop the others. **1 GB each** is enough to start; grow them later if needed.

@@ -32,6 +32,20 @@ sudo bash /usr/local/lib/pebble-webhook/install.sh --channel nightly       # new
 
 `--channel` takes the moving release of that name on GitHub (`stable`, `beta`, `nightly`), which always holds the newest build of the channel. The usual way to change the channel is the web app; a new installation always starts with stable.
 
+## Docker
+
+In the container there is no updater: the update page shows new versions with the `docker pull` command; install, roll back, restore and automatic update are off. The channel chosen there only selects which versions are shown.
+
+| Tag | Points to |
+|---|---|
+| `X.Y.Z-nightly`, `X.Y.Z-beta`, `X.Y.Z-stable`, `X.Y.Z` | exactly that build (fixed) |
+| `stable`, `latest` | newest stable |
+| `X.Y`, `X` | newest stable of that minor / major line (stay on one `X` = no breaking changes) |
+| `beta` | newest beta or stable, whichever is higher |
+| `nightly` | newest of all channels |
+
+Each release builds one image; the moving tags are only re-pointed (same version: stable > beta > nightly).
+
 ## Backups
 
 *Backups* (menu, below Updates) lists all backups, newest first. Each is one archive `pebble-<version>-<channel>-<time>-<kind>[-audio].tar.gz` in `BACKUP_DIR` (start value in `/etc/pebble-webhook/env`, default `/srv/pebble-backup`; after changing it run `install.sh` again) with
@@ -57,6 +71,8 @@ A push to `main` builds nothing. After the push, `deploy/release.sh [nightly|bet
 - **nightly**: tag `vX.Y.Z-nightly` → pre-release, notes = the CHANGELOG.md section of that version, else the commit messages since the last nightly. The newest 10 are kept.
 - **beta**: push a tag `vX.Y.Z-beta` → pre-release, notes from `## [X.Y.Z-beta]` in RELEASES.md (required).
 - **stable**: push a tag `vX.Y.Z-stable` → release, notes from `## [X.Y.Z]` in RELEASES.md (required).
+
+The same run builds the Docker image from these binaries and pushes it to Docker Hub with the tags [above](#docker). Needs the repository variable `DOCKERHUB_IMAGE` (e.g. `owner/pebble-webhook`) and the secrets `DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN`; without the variable the Docker steps are skipped.
 
 Version numbers: **X** = breaking for database or app (new database needed or hard to roll back, e.g. migrations that change columns), **Y** = new feature, **Z** = other UI changes and small fixes that can be installed or rolled back freely. Roll back only within the same X.
 

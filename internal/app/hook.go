@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"pebble-webhook/internal/config"
 	"pebble-webhook/internal/schluessel"
 	"pebble-webhook/internal/store"
 )
@@ -183,6 +184,9 @@ func (a *App) acceptHook(w http.ResponseWriter, r *http.Request, body []byte, de
 	}
 	ringOK := a.recordRecording(j, strings.TrimSpace(r.Header.Get(a.Cfg.RingIDHeader)))
 	a.changed(j.ID)
+	if j.Failed {
+		a.notify(config.NotifyErrors, a.T("Notiz fehlgeschlagen"), store.Preview(j.Error, 120), "/eintrag/"+j.ID)
+	}
 	a.Wake()
 	if !ringOK {
 		hookReply(w, http.StatusOK, "angenommen, aber Ring-ID fehlt oder ungültig (Header "+a.Cfg.RingIDHeader+": #12345)")

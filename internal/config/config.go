@@ -85,6 +85,8 @@ type Config struct {
 	BackupTime          string // HH:MM
 	BackupRetentionDays int    // geplante und manuelle Backups so lange behalten
 	BackupAudio         bool   // Aufnahmen mit ins Backup
+
+	Notify map[string]bool // Benachrichtigungs-Kanal (NotifyUpdates …) → an
 }
 
 // LoadFile setzt Variablen aus einer KEY=VALUE-Datei, ohne vorhandene zu überschreiben.
@@ -147,6 +149,13 @@ func Load() (*Config, error) {
 // (Datenbank oder Umgebung); leere Werte gelten als nicht gesetzt.
 func FromValues(boot Bootstrap, lookup func(string) string) (*Config, error) {
 	var errs []string
+	base := lookup
+	lookup = func(k string) string {
+		if v, ok := EnvLocked(k); ok {
+			return v
+		}
+		return base(k)
+	}
 	// Altbestand ohne Schalter: Joplin ist aktiv, wenn ein Server eingetragen ist.
 	joplinSet := strings.TrimSpace(lookup("JOPLIN_ENABLED"))
 	if joplinSet == "" && strings.TrimSpace(lookup("JOPLIN_URL")) != "" {
@@ -300,6 +309,10 @@ func FromValues(boot Bootstrap, lookup func(string) string) (*Config, error) {
 	}
 	if c.UpdateRepo == "aus" {
 		c.UpdateRepo = ""
+	}
+	c.Notify = map[string]bool{}
+	for _, k := range NotifyChannels {
+		c.Notify[k] = lookup(k) != "inaktiv"
 	}
 	c.DictationModel = str("OPENAI_DICTATION_MODEL", c.PlanModel)
 	if c.Transcription != "openai" && c.Transcription != "pebble" {

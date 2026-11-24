@@ -500,6 +500,7 @@ const routen = [
   [/^\/status\/tags$/, 'tagsVerwalten', zeigeTagsVerwalten],
   [/^\/status\/darstellung$/, 'darstellung', zeigeDarstellung],
   [/^\/status\/joplin$/, 'joplin', zeigeJoplin],
+  [/^\/status\/benachrichtigungen$/, 'benachrichtigungen', zeigeBenachrichtigungen],
   [/^\/status\/kalender$/, 'kalender', zeigeKalender],
   [/^\/anmelden$/, 'anmelden', zeigeAnmelden],
   [/^\/verbinden$/, 'verbinden', zeigeVerbinden],
@@ -2864,7 +2865,7 @@ async function zeigeStatus() {
       <h2>Benachrichtigungen</h2>
       ${!pushDa ? T('<p class="leise">Dieser Browser unterstützt keine Benachrichtigungen. Auf dem iPhone die App erst zum Home-Bildschirm hinzufügen.</p>')
     : T`<p>${abo ? tx('Auf diesem Gerät eingeschaltet.') : tx('Auf diesem Gerät ausgeschaltet.')} <span class="leise">Geräte mit Benachrichtigung: ${s.push_abos}</span></p>
-        <div class="leiste">${abo ? T('<button class="btn" data-a="push-aus">Ausschalten</button><button class="btn" data-a="push-test">Test senden</button>') : T('<button class="btn haupt" data-a="push-an">Einschalten</button>')}</div>`}
+        <div class="leiste"><a class="btn" href="/status/benachrichtigungen">Einstellen</a></div>`}
       <h2>Geräte (Passkeys)</h2>
       ${g.geraete.map((d) => T`<div class="karte"><div class="zeile"><span><strong>${esc(d.name)}</strong>${d.dieses ? T(' <span class="badge neutral">dieses Gerät</span>') : ''}</span>
         ${g.geraete.length > 1 && !d.dieses ? T`<button class="btn klein gefahr" data-geraet="${esc(d.id)}">Entfernen</button>` : ''}</div>
@@ -2934,22 +2935,6 @@ async function zeigeStatus() {
           return laden();
         }
         case 'pruefen': b.disabled = true; await api('/api/status?pruefen=1'); melde(tx('Joplin geprüft')); return laden();
-        case 'push-an': {
-          if ((await Notification.requestPermission()) !== 'granted') return melde(tx('Benachrichtigungen wurden im Browser nicht erlaubt'));
-          const { schluessel } = await api('/api/push/schluessel');
-          const reg = await navigator.serviceWorker.ready;
-          const abo = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64zuBytes(schluessel) });
-          await api('/api/push/abo', { method: 'POST', body: abo.toJSON() });
-          melde(tx('Benachrichtigungen eingeschaltet'));
-          return laden();
-        }
-        case 'push-aus': {
-          const abo = await pushAbo();
-          if (abo) { await api('/api/push/abo/entfernen', { method: 'POST', body: { endpoint: abo.endpoint } }); await abo.unsubscribe(); }
-          melde(tx('Benachrichtigungen ausgeschaltet'));
-          return laden();
-        }
-        case 'push-test': await api('/api/push/test', { method: 'POST' }); return melde(tx('Test gesendet'));
         case 'abmelden': await api('/api/auth/abmelden', { method: 'POST' }); try { localStorage.setItem('angemeldet', '0'); } catch { /* nur Startabkürzung */ } return geheZu('/anmelden', true);
       }
     } catch (f) { b.disabled = false; melde(f.message); }
@@ -3307,8 +3292,10 @@ function einstellungsFormular(felder, { assistent }) {
       eingabe = T`<select id="${id}" name="${f.key}">${f.auswahl.map((c) => T`<option value="${esc(c)}"${c === f.wert ? ' selected' : ''}>${esc(WAHL[c] || tx(c))}</option>`).join('')}</select>`;
     } else if (f.art === 'secret') {
       const sichtbar = assistent && f.wert;
-      const platz = f.gesetzt ? tx('gesetzt – leer lassen zum Behalten') : '';
-      eingabe = T`<input type="${sichtbar ? 'text' : 'password'}" id="${id}" name="${f.key}" value="${esc(f.wert || '')}" placeholder="${platz}" autocomplete="off" spellcheck="false">`;
+      const platz = f.gesperrt ? tx('aus der Umgebung gesetzt') : f.gesetzt ? tx('gesetzt – leer lassen zum Behalten') : '';
+      // Aus der Umgebung gesetzt: gilt immer, hier nicht änderbar (ohne name, wird nicht mitgeschickt).
+      eingabe = f.gesperrt ? T`<input type="password" id="${id}" placeholder="${platz}" disabled>`
+        : T`<input type="${sichtbar ? 'text' : 'password'}" id="${id}" name="${f.key}" value="${esc(f.wert || '')}" placeholder="${platz}" autocomplete="off" spellcheck="false">`;
       if (f.key === 'OPENAI_API_KEY' && assistent) eingabe = T`<div class="mitknopf">${eingabe}<button type="button" class="btn klein" data-pruefen="1">Prüfen</button></div>`;
     } else {
       const modus = f.art === 'int' ? ' inputmode="numeric"' : f.art === 'num' ? ' inputmode="decimal"' : '';
@@ -3391,7 +3378,7 @@ async function zeigeErsteinrichtung() {
 // Reiter der Statusseite (Buttongruppe): Übersicht, Pebble-App, Joplin (nur wenn aktiv), Konfiguration, Theme.
 let joplinAktiv = (() => { try { return localStorage.getItem('joplin-aktiv') === '1'; } catch { return false; } })();
 const statusReiter = (aktiv) => T`<nav class="btn-group unter reiter4" aria-label="Status">${[['status', '/status', tx('Übersicht')], ['pebble', '/pebble', tx('Pebble-App')],
-  ...(joplinAktiv ? [['joplin', '/status/joplin', tx('Joplin')]] : []), ['einstellungen', '/status/einstellungen', tx('Konfiguration')], ['darstellung', '/status/darstellung', tx('Theme')]]
+  ...(joplinAktiv ? [['joplin', '/status/joplin', tx('Joplin')]] : []), ['benachrichtigungen', '/status/benachrichtigungen', tx('Push')], ['einstellungen', '/status/einstellungen', tx('Konfiguration')], ['darstellung', '/status/darstellung', tx('Theme')]]
   .map(([n, href, text]) => T`<a class="btn${n === aktiv ? ' aktiv' : ''}" href="${href}"${n === aktiv ? ' aria-current="page"' : ''}>${text}</a>`).join('')}</nav>`;
 
 // Konfiguration: je Wert „?“ (Erklärung darunter ein-/ausklappen) und ✎ (eigene Bearbeitungsseite für diesen Wert).
@@ -3419,13 +3406,13 @@ async function zeigeEinstellungen() {
   const d = await ladeEinstellungen();
   if (aktuell?.name !== 'einstellungen') return;
   // Joplin-Zugang wird unter Status → Joplin eingerichtet; hier steht nur der Schalter.
-  d.felder = d.felder.filter((f) => f.gruppe !== 'Joplin' || f.key === 'JOPLIN_ENABLED');
+  d.felder = d.felder.filter((f) => (f.gruppe !== 'Joplin' || f.key === 'JOPLIN_ENABLED') && f.gruppe !== 'Benachrichtigungen');
   const gruppen = [...new Set(d.felder.map((f) => f.gruppe))];
-  const wert = (f) => (f.art === 'secret' ? (f.gesetzt ? tx('gesetzt') : T('<span class="leise">leer</span>')) : f.wert ? esc(f.art === 'choice' ? WAHL[f.wert] || tx(f.wert) : f.wert) : T('<span class="leise">leer</span>'));
+  const wert = (f) => (f.art === 'secret' ? (f.gesperrt ? tx('aus der Umgebung') : f.gesetzt ? tx('gesetzt') : T('<span class="leise">leer</span>')) : f.wert ? esc(f.art === 'choice' ? WAHL[f.wert] || tx(f.wert) : f.wert) : T('<span class="leise">leer</span>'));
   const zeile = (f) => T`<div class="konfzeile">
       <button class="konfhilfe" data-hilfe="${f.key}" aria-expanded="false" aria-controls="hilfe-${f.key}" aria-label="${esc(tx('Erklärung zu {0}', tx(f.name)))}">?</button>
       <span class="konfname">${esc(tx(f.name))}</span>
-      <a class="konfedit" href="/status/einstellungen/${f.key}" aria-label="${esc(tx('{0} bearbeiten', tx(f.name)))}">${STIFT}</a>
+      ${f.gesperrt ? '<span></span>' : T`<a class="konfedit" href="/status/einstellungen/${f.key}" aria-label="${esc(tx('{0} bearbeiten', tx(f.name)))}">${STIFT}</a>`}
       <span class="konfwert">${wert(f)}</span>
       <p class="konfinfo" id="hilfe-${f.key}" hidden>${esc(f.hilfe ? tx(f.hilfe) : tx('Keine Erklärung hinterlegt.'))}${f.vorgabe ? T` <span class="leise">Vorgabe: ${esc(f.vorgabe)}</span>` : ''}</p></div>`;
   const teil = (persoenlich) => gruppen.filter((g) => d.felder.some((f) => f.gruppe === g && !!f.persoenlich === persoenlich))
@@ -3484,6 +3471,64 @@ async function zeigeJoplin() {
     } catch (f) { knopf.disabled = false; melde(f.message); }
   };
   aufraeumen = () => { form.onclick = null; };
+}
+
+// Benachrichtigungen: Web-Push auf diesem Gerät ein/aus und je Kanal (persönliche Einstellungen NOTIFY_*).
+async function zeigeBenachrichtigungen() {
+  seite.innerHTML = T`${statusReiter('benachrichtigungen')}<p class="leer">Lädt …</p>`;
+  const laden = async () => {
+    const [d, k] = await Promise.all([api('/api/einstellungen/persoenlich'), api('/api/push/schluessel')]);
+    if (aktuell?.name !== 'benachrichtigungen') return;
+    const abo = await pushAbo().catch(() => null);
+    const pushDa = 'PushManager' in window;
+    const kanaele = d.felder.filter((f) => f.gruppe === 'Benachrichtigungen' && (f.key !== 'NOTIFY_UPDATES' || istAdmin()));
+    const geraet = !pushDa ? T('<p class="leise">Dieser Browser unterstützt keine Benachrichtigungen. Auf dem iPhone die App erst zum Home-Bildschirm hinzufügen.</p>')
+      : T`<p>${abo ? tx('Auf diesem Gerät eingeschaltet.') : tx('Auf diesem Gerät ausgeschaltet.')} <span class="leise">Geräte mit Benachrichtigung: ${k.abos}</span></p>
+        <div class="leiste">${abo ? T('<button class="btn" type="button" data-a="push-aus">Ausschalten</button><button class="btn" type="button" data-a="push-test">Test senden</button>') : T('<button class="btn haupt" type="button" data-a="push-an">Einschalten</button>')}</div>`;
+    seite.innerHTML = T`${statusReiter('benachrichtigungen')}<h1>Benachrichtigungen</h1>
+      <h2>Dieses Gerät</h2><div class="karte">${geraet}</div>
+      <h2>Kanäle</h2><p class="leise">Gilt für alle deine Geräte.</p>
+      <form class="einstellungen" novalidate><fieldset>${kanaele.map((f) => T`<label class="schalter"><input type="checkbox" name="${f.key}"${f.wert === 'aktiv' ? ' checked' : ''}> ${esc(tx(f.name))}</label><p class="leise hilfe">${esc(tx(f.hilfe))}</p>`).join('')}</fieldset>
+        <div class="leiste"><button class="btn haupt" type="submit">Speichern</button></div></form>`;
+    const form = seite.querySelector('form');
+    form.onsubmit = async (ev) => {
+      ev.preventDefault();
+      const knopf = form.querySelector('[type=submit]');
+      knopf.disabled = true;
+      try {
+        const werte = Object.fromEntries([...form.querySelectorAll('input[type=checkbox]')].map((e) => [e.name, e.checked ? 'aktiv' : 'inaktiv']));
+        await speichereEinstellungen(werte, true);
+        await laden();
+      } catch (f) { knopf.disabled = false; melde(f.message); }
+    };
+  };
+  seite.onclick = async (ev) => {
+    const b = ev.target.closest('[data-a]');
+    if (!b) return;
+    b.disabled = true;
+    try {
+      switch (b.dataset.a) {
+        case 'push-an': {
+          if ((await Notification.requestPermission()) !== 'granted') { b.disabled = false; return melde(tx('Benachrichtigungen wurden im Browser nicht erlaubt')); }
+          const { schluessel } = await api('/api/push/schluessel');
+          const reg = await navigator.serviceWorker.ready;
+          const abo = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64zuBytes(schluessel) });
+          await api('/api/push/abo', { method: 'POST', body: abo.toJSON() });
+          melde(tx('Benachrichtigungen eingeschaltet'));
+          return laden();
+        }
+        case 'push-aus': {
+          const abo = await pushAbo();
+          if (abo) { await api('/api/push/abo/entfernen', { method: 'POST', body: { endpoint: abo.endpoint } }); await abo.unsubscribe(); }
+          melde(tx('Benachrichtigungen ausgeschaltet'));
+          return laden();
+        }
+        case 'push-test': await api('/api/push/test', { method: 'POST' }); b.disabled = false; return melde(tx('Test gesendet'));
+      }
+    } catch (f) { b.disabled = false; melde(f.message); }
+  };
+  aufraeumen = () => { seite.onclick = null; };
+  await laden();
 }
 
 // Kalender-Abo: geheimer iCal-Link mit Anleitung für Google, Apple und Outlook.
@@ -3801,8 +3846,11 @@ async function zeigeUpdate(teil) {
       ${status}${u.fehler ? T`<div class="hinweis warn">${esc(u.fehler)}</div>` : ''}`;
     // Neueste Version des gewählten Kanals, die später als die installierte erschienen ist: eigene Karte über „Installiert“.
     const neu = liste.find((r) => r.neu);
+    // Docker: kein Installieren aus der App – der Pull-Befehl der neuen Version zum Kopieren.
+    const pull = (v) => `docker pull ${u.docker.image || '<image>'}:${v}`;
+    const pullBlock = u.docker && neu ? T`<code class="kopierbar">${esc(pull(neu.version))}</code><div class="leiste"><button class="btn klein" data-pull="${esc(neu.version)}">Kopieren</button></div>` : '';
     const neuKarte = neu ? T`<div class="karte versionzeile neuekarte"><div class="versionkopf"><span class="leise">${updateSymbol} ${tx('Neue Version verfügbar')}</span><span class="versionzeile1"><span class="badge neutral">${esc(tx(neu.kanal))}</span><strong class="versiongross">${esc(versionNr(neu.version))}</strong></span><span class="leise">${esc(zeitText(neu.veroeffentlicht) || neu.datum || '')}</span></div>
-        <div class="versionknoepfe"><button class="btn klein" data-log="${esc(neu.version)}">Änderungen</button>${u.installierbar ? T`<button class="btn klein haupt" data-installieren="${esc(neu.version)}"${laeuft ? ' disabled' : ''}>Installieren</button>` : ''}</div></div>` : '';
+        <div class="versionknoepfe"><button class="btn klein" data-log="${esc(neu.version)}">Änderungen</button>${u.installierbar ? T`<button class="btn klein haupt" data-installieren="${esc(neu.version)}"${laeuft ? ' disabled' : ''}>Installieren</button>` : ''}</div>${pullBlock}</div>` : '';
     const updates = T`${neuKarte}<div class="karte versionzeile aktuell"><div class="versionkopf"><span class="leise">Installiert</span><span class="versionzeile1"><span class="badge neutral">${esc(tx(u.aktuell_kanal || ''))}</span><strong class="versiongross">${esc(versionNr(u.aktuell))}</strong></span>${versionZeit(u.aktuell) ? T`<span class="leise">${esc(versionZeit(u.aktuell))}</span>` : ''}</div>
         <div class="versionknoepfe"><button class="btn klein" data-log="">Änderungen</button></div></div>
       <h2>Kanal</h2>
@@ -3812,12 +3860,13 @@ async function zeigeUpdate(teil) {
       ${liste.length ? (alle ? liste : liste.slice(0, 3)).map(zeile).join('') : u.fehler ? '' : T('<p class="leise">In diesem Kanal gibt es noch keine Version.</p>')}
       ${!alle && liste.length > 3 ? T`<div class="leiste"><button class="btn" data-mehr-versionen="1">Mehr (${liste.length - 3})</button></div>` : ''}
       ${liste.length && !liste.some((r) => r.neu) ? T('<p class="leise">Keine neuere Version als die installierte in diesem Kanal.</p>') : ''}
-      ${u.installierbar ? T('<p class="leise">Vor jedem Wechsel werden Datenbank, Einstellungen, Version und Kanal gesichert. Zurück auf eine ältere Version nur ohne Datenbank-Änderung dazwischen, sonst über ein Backup.</p>') : T('<div class="hinweis">Installieren aus der App braucht die Installation per <code>install.sh</code>; sonst das Skript mit <code>--version</code> ausführen.</div>')}
-      <h2>Automatisches Update</h2>
+      ${u.docker ? T('<div class="hinweis">Docker: aktualisiert wird mit einem neuen Image (docker compose pull, dann docker compose up -d). Der Kanal hier wählt nur, welche Versionen angezeigt werden; das Image-Tag bestimmt, was läuft.</div>')
+        : u.installierbar ? T('<p class="leise">Vor jedem Wechsel werden Datenbank, Einstellungen, Version und Kanal gesichert. Zurück auf eine ältere Version nur ohne Datenbank-Änderung dazwischen, sonst über ein Backup.</p>') : T('<div class="hinweis">Installieren aus der App braucht die Installation per <code>install.sh</code>; sonst das Skript mit <code>--version</code> ausführen.</div>')}
+      ${u.docker ? '' : T`<h2>Automatisches Update</h2>
       <nav class="btn-group unter" aria-label="Automatisches Update">${[[true, tx('An')], [false, tx('Aus')]].map(([an, n]) => T`<button class="btn${u.auto === an ? ' aktiv' : ''}" data-auto="${an ? '1' : '0'}" aria-pressed="${u.auto === an}">${n}</button>`).join('')}</nav>
       <p class="leise">${u.auto ? esc(tx('Täglich um {0} die neueste Version aus {1} installieren, wenn sie neuer ist (vorher Backup).', u.auto_zeit, u.kanal)) : tx('Aus – Updates nur von Hand.')}
         <a class="konfedit" href="/status/einstellungen/AUTO_UPDATE_TIME?zurueck=/status/update" aria-label="${esc(tx('Uhrzeit ändern'))}" title="${esc(tx('Uhrzeit ändern'))}">${STIFT}</a></p>
-      ${u.auto_letzt ? T`<p class="leise">${esc(tx('Letzter Lauf: {0}', u.auto_letzt))}</p>` : ''}
+      ${u.auto_letzt ? T`<p class="leise">${esc(tx('Letzter Lauf: {0}', u.auto_letzt))}</p>` : ''}`}
       <p class="leise">${esc(u.quelle || 'aus')}${u.geprueft ? T` · geprüft ${zeit(u.geprueft)}` : ''}</p>
       <div class="leiste"><button class="btn" data-pruefen="1">Jetzt prüfen</button></div>`;
     const b = u.backup || {};
@@ -3832,13 +3881,14 @@ async function zeigeUpdate(teil) {
         ${konf(tx('Behalten'), esc(tx('{0} Tage', b.tage)), 'BACKUP_RETENTION_DAYS')}
         ${konf(tx('Aufnahmen'), b.audio ? tx('mit') : tx('ohne'), 'BACKUP_AUDIO')}
         ${konf(tx('Ordner'), esc(b.ordner || ''), '')}</div>
-      <p class="leise">${b.plan === 'aus' ? tx('Aus – Backups nur von Hand und vor Updates.') : tx('Backups vor Updates bleiben 30 Tage.')} ${tx('Den Ordner legt der Startwert BACKUP_DIR in /etc/pebble-webhook/env fest; danach install.sh erneut ausführen.')}</p>
+      <p class="leise">${b.plan === 'aus' ? tx('Aus – Backups nur von Hand und vor Updates.') : tx('Backups vor Updates bleiben 30 Tage.')} ${u.docker ? tx('Den Ordner legt die Umgebungsvariable BACKUP_DIR des Containers fest.') : tx('Den Ordner legt der Startwert BACKUP_DIR in /etc/pebble-webhook/env fest; danach install.sh erneut ausführen.')}</p>
       ${letzt ? (letzt[2] === 'ok' ? T`<p class="leise">${esc(tx('Letzter Lauf: {0}', letzt[1]))}</p>` : T`<div class="hinweis schlecht">${esc(tx('Letztes geplantes Backup fehlgeschlagen ({0}): {1}', letzt[1], letzt[3]))}</div>`) : ''}
       <div class="leiste"><button class="btn haupt" data-sichern="1">Jetzt sichern</button>${u.installierbar ? T('<a class="btn" href="/status/backups/hochladen">Backup hochladen</a>') : ''}</div>
       <h2>Backups</h2>
       ${(u.backups || []).length ? T`<p class="backupsumme"><strong>${u.backups.length}</strong> Backups · <strong>${groesse(u.backups.reduce((n, st) => n + (st.groesse || 0), 0))}</strong> belegt</p>` : ''}
       ${(u.backups || []).length > 10 ? T`<div class="leiste"><button class="btn gefahr" data-prune="${u.backups.length - 10}" data-groesse="${u.backups.slice(10).reduce((n, st) => n + (st.groesse || 0), 0)}"${laeuft ? ' disabled' : ''}>${tx('{0} Backups löschen, die 10 neuesten bleiben', u.backups.length - 10)}</button></div>` : ''}
       <p class="leise">Jedes Backup enthält Datenbank mit allen Einstellungen, Version und Kanal. Wiederherstellen spielt die Daten ein und installiert die Version aus dem Backup; was seitdem dazukam, fehlt danach. Der jetzige Stand wird vorher gesichert.</p>
+      ${u.docker ? T('<div class="hinweis">Docker: Wiederherstellen geht nicht aus der App – Anleitung in der Installationsdoku, Abschnitt Docker.</div>') : ''}
       ${(u.backups || []).length ? u.backups.map((st) => T`<div class="karte backupzeile"><div class="backupinfo">
           <span class="versionzeile1">${st.kanal ? T`<span class="badge neutral">${esc(tx(st.kanal))}</span>` : ''}<strong>${esc(versionNr(st.version))}</strong></span>
           <span class="leise backupzeit">${esc(new Date(st.zeit).toLocaleString(LOCALE, { day: '2-digit', month: '2-digit', year: new Date(st.zeit).getFullYear() === new Date().getFullYear() ? undefined : '2-digit', hour: '2-digit', minute: '2-digit' }))} · ${esc(ART[st.art] || st.art)}${st.audio ? T` · mit Aufnahmen` : ''}</span></div>
@@ -3869,6 +3919,10 @@ async function zeigeUpdate(teil) {
       return r ? zeigeLog(T`${versionNr(r.version)} · ${tx(r.kanal)}`, r.aenderungen) : zeigeLog(T`${versionNr(u.aktuell)} · ${tx(u.aktuell_kanal || '')}`, u.aktuell_aenderungen);
     }
     if (b.dataset.mehrVersionen) { alle = true; return laden(false); }
+    if (b.dataset.pull) {
+      try { await navigator.clipboard.writeText(`docker pull ${u.docker?.image || '<image>'}:${b.dataset.pull}`); melde(tx('Befehl kopiert')); } catch { melde(tx('Kopieren nicht möglich – Befehl markieren und kopieren')); }
+      return;
+    }
     b.disabled = true;
     try {
       if (b.dataset.pruefen) { await laden(true); return ladeZaehler(); }

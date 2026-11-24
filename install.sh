@@ -254,6 +254,12 @@ if ! grep -q '^MEDIA_DIR=' /etc/pebble-webhook/env; then
         printf '\n# Media: recordings and images per user (MEDIA_DIR/<id>/audio|bilder).\nMEDIA_DIR=%s\n' "$MEDIA_DIR" >> /etc/pebble-webhook/env
     fi
 fi
+# From 4.1 an API key set in the environment always wins over the database and is locked in the app. Old env files
+# (before the settings moved into the database) still carry the imported key: comment it out once, the database has it.
+if ! grep -q '^# api-keys-from-env' /etc/pebble-webhook/env; then
+    sed -i -E 's/^(OPENAI_API_KEY|YOUTUBE_API_KEY)=/# moved to the database (uncomment to fix it from the environment): \1=/' /etc/pebble-webhook/env
+    printf '\n# api-keys-from-env: OPENAI_API_KEY / YOUTUBE_API_KEY set here win over the web app and are locked there.\n' >> /etc/pebble-webhook/env
+fi
 
 # --- 3. back up the running state before replacing it: an archive in BACKUP_DIR with database (incl. all settings),
 #        start values, version and channel (update backups older than 30 days go). The program itself is not

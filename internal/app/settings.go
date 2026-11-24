@@ -34,6 +34,9 @@ func LoadSettings(db *store.System, boot config.Bootstrap) (*config.Config, erro
 	if values["PUBLIC_URL"] == "" {
 		imported := map[string]string{}
 		for _, f := range config.Fields {
+			if _, locked := config.EnvLocked(f.Key); locked {
+				continue // gilt ohnehin aus der Umgebung, nicht in die Datenbank kopieren
+			}
 			if v := strings.TrimSpace(os.Getenv(f.Key)); v != "" {
 				imported[f.Key] = v
 			}
@@ -82,6 +85,10 @@ func settingsView(values map[string]string, generate bool, scope int) []map[stri
 			"vorgabe": f.Default, "pflicht": f.Required, "auswahl": f.Choices, "persoenlich": f.Personal}
 		switch {
 		case f.Kind == "secret":
+			if _, locked := config.EnvLocked(f.Key); locked {
+				m["gesetzt"], m["gesperrt"], m["wert"] = true, true, ""
+				break
+			}
 			m["gesetzt"] = set && v != ""
 			m["wert"] = ""
 			if generate && f.Generate && !(set && v != "") {
@@ -108,7 +115,7 @@ func mergeSettings(old, in map[string]string, scope int) map[string]string {
 			continue
 		}
 		v, ok := in[f.Key]
-		if !ok {
+		if _, locked := config.EnvLocked(f.Key); !ok || locked {
 			continue
 		}
 		v = strings.TrimSpace(v)
@@ -325,6 +332,9 @@ func (s *SetupServer) handleCheckOpenAI(w http.ResponseWriter, r *http.Request) 
 	if readJSON(r, &in) != nil || r.Header.Get("X-App") != "1" || !s.codeOK(in.Code) {
 		writeErr(w, http.StatusForbidden, "code", "Nicht erlaubt")
 		return
+	}
+	if v, locked := config.EnvLocked("OPENAI_API_KEY"); locked && in.Key == "" {
+		in.Key = v
 	}
 	err := checkOpenAI(r.Context(), in.BaseURL, in.Key)
 	writeJSON(w, 200, map[string]any{"ok": err == nil, "fehler": errText(err)})

@@ -4,6 +4,15 @@ Summarised notes for **beta** and **stable** releases. Each section lists only w
 
 A tag `vX.Y.Z-stable` (stable; before 1.33.5 `vX.Y.Z`) or `vX.Y.Z-beta` (beta) needs a section `## [X.Y.Z]` or `## [X.Y.Z-beta]` here; the release workflow uses it as the release notes.
 
+## [4.1.0] - 2026-11-24
+
+### Docker
+- Image on Docker Hub (`dirdante/pebble-index-webapp`, amd64/arm64) with channel tags; update page shows the pull command.
+- API keys from the environment win over the app and are locked there.
+
+### Notifications
+- Channels on/off per user; push for failed notes and Joplin transfers, saved notes and new updates.
+
 ## [4.0.1] - 2026-11-24
 
 ### Storage overview

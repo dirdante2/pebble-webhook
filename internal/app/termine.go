@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"pebble-webhook/internal/config"
 	"pebble-webhook/internal/i18n"
 	"pebble-webhook/internal/openai"
 	"pebble-webhook/internal/store"
@@ -186,7 +187,7 @@ func (a *App) remindDue() {
 			if d := parseDictation(j.Result); d != nil && d.Termin != nil && d.Termin.Ort != "" {
 				body += " · " + d.Termin.Ort
 			}
-			a.notify(a.T("Termin: ")+shortTitle(j.Title), body, "/eintrag/"+j.ID)
+			a.notify(config.NotifyAppointments, a.T("Termin: ")+shortTitle(j.Title), body, "/eintrag/"+j.ID)
 		}
 		if err := a.DB.MarkReminded(j.ID); err != nil {
 			logf("Erinnerung %s: %v", j.ID, err)

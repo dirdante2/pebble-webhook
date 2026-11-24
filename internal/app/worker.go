@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"pebble-webhook/internal/config"
 	"pebble-webhook/internal/joplin"
 	"pebble-webhook/internal/schluessel"
 	"pebble-webhook/internal/store"
@@ -109,9 +110,13 @@ func (a *App) process(ctx context.Context, j *store.Job) {
 				logf("worker: speichern: %v", serr)
 			}
 			a.changed(j.ID)
-			// Benachrichtigt wird nur zu Planungen; Diktate und leere Aufnahmen stehen im Verlauf und auf der Statusseite.
-			if j.Failed && !j.Empty && j.Mode == "planung" {
-				a.notify(a.T("Planung fehlgeschlagen"), store.Preview(j.Error, 120), "/eintrag/"+j.ID)
+			// Endgültige Fehler (Kanal „Fehler“); leere Aufnahmen und Testläufe bleiben still.
+			if j.Failed && !j.Empty && !j.IsTest {
+				title := a.T("Notiz fehlgeschlagen")
+				if j.Mode == "planung" {
+					title = a.T("Planung fehlgeschlagen")
+				}
+				a.notify(config.NotifyErrors, title, store.Preview(j.Error, 120), "/eintrag/"+j.ID)
 			}
 			return
 		}
@@ -393,10 +398,15 @@ func (a *App) pushPending() {
 func (a *App) joplinState(err error) {
 	a.joplinMu.Lock()
 	defer a.joplinMu.Unlock()
+	wasOK := a.joplinErr == ""
 	a.joplinAt = store.Now()
 	a.joplinErr = ""
 	if err != nil {
 		a.joplinErr = err.Error()
+		// Nur beim Wechsel auf Fehler melden; Wiederholungen bleiben still.
+		if wasOK {
+			a.notify(config.NotifyErrors, a.T("Joplin-Übertragung fehlgeschlagen"), store.Preview(a.joplinErr, 120), "/status/joplin")
+		}
 	}
 }
 
@@ -404,8 +414,9 @@ func (a *App) notifyDone(j *store.Job) {
 	if j.IsTest {
 		return
 	}
-	// Benachrichtigt wird nur zu Planungen (Nutzervorgabe); Diktate erscheinen still im Verlauf.
+	// Notizen: Kanal „Gespeicherte Einträge“ (Vorgabe aus); Planungen: Kanal „Rückfragen“.
 	if j.Mode != "planung" {
+		a.notify(config.NotifySaved, a.T("Notiz gespeichert"), j.Title, "/eintrag/"+j.ID)
 		return
 	}
 	title, body := a.T("Planung fertig"), j.Title
@@ -417,7 +428,7 @@ func (a *App) notifyDone(j *store.Job) {
 	if j.LimitHit {
 		body += a.T(" (Kostenlimit erreicht)")
 	}
-	a.notify(title, body, "/planung/"+j.PlanningID)
+	a.notify(config.NotifyQuestions, title, body, "/planung/"+j.PlanningID)
 }
 
 // AutoClose schließt offene Planungen, deren jüngste Runde länger als die Frist zurückliegt.

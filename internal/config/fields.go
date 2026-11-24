@@ -3,6 +3,8 @@ package config
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"os"
+	"strings"
 )
 
 // Field beschreibt eine Einstellung, die in der Datenbank liegt und über die Web-Oberfläche gepflegt wird
@@ -24,7 +26,21 @@ type Field struct {
 var personal = map[string]bool{"LANGUAGE": true, "TRIGGER_SINGLE": true, "TRIGGER_DOUBLE": true, "RING_CAPACITY_HOURS": true,
 	"JOPLIN_ENABLED": true, "JOPLIN_URL": true, "JOPLIN_EMAIL": true, "JOPLIN_PASSWORD": true, "JOPLIN_NOTEBOOK": true,
 	"LIST_DONE_ACTIVE_MINUTES": true, "VISIT_GAP_MINUTES": true, "NOTE_CONTEXT_MINUTES": true, "HISTORY_MIN_ENTRIES": true,
-	"MEMORY_TRAIN_ENTRIES": true, "MEMORY_REJECTED": true}
+	"MEMORY_TRAIN_ENTRIES": true, "MEMORY_REJECTED": true,
+	NotifyUpdates: true, NotifyQuestions: true, NotifyErrors: true, NotifySaved: true, NotifyAppointments: true, NotifyRing: true}
+
+// Kanäle der Benachrichtigungen (Web-Push); je Nutzer einzeln an oder aus.
+const (
+	NotifyUpdates      = "NOTIFY_UPDATES"
+	NotifyQuestions    = "NOTIFY_QUESTIONS"
+	NotifyErrors       = "NOTIFY_ERRORS"
+	NotifySaved        = "NOTIFY_SAVED"
+	NotifyAppointments = "NOTIFY_APPOINTMENTS"
+	NotifyRing         = "NOTIFY_RING"
+)
+
+// NotifyChannels: alle Kanäle in der Reihenfolge der Oberfläche.
+var NotifyChannels = []string{NotifyQuestions, NotifyErrors, NotifySaved, NotifyAppointments, NotifyRing, NotifyUpdates}
 
 func init() {
 	for i := range Fields {
@@ -89,6 +105,13 @@ var Fields = []Field{
 	{Key: "MEMORY_TRAIN_ENTRIES", Group: "Anzeige und Gedächtnis", Label: "Lernlauf: jüngste Einträge", Help: "So viele der jüngsten Einträge wertet der Lernlauf des Gedächtnisses aus.", Kind: "int", Default: "30"},
 	{Key: "MEMORY_REJECTED", Group: "Anzeige und Gedächtnis", Label: "Gedächtnis: gelöschte als „nicht erwünscht“", Help: "So viele gelöschte Gedächtnis-Einträge bekommt die KI als „nicht erwünscht“ mit.", Kind: "int", Default: "30"},
 
+	{Key: NotifyQuestions, Group: "Benachrichtigungen", Label: "Planungen und Rückfragen der KI", Help: "Push, wenn eine Planung fertig ist oder die KI etwas wissen will.", Kind: "choice", Default: "aktiv", Choices: []string{"aktiv", "inaktiv"}},
+	{Key: NotifyErrors, Group: "Benachrichtigungen", Label: "Fehler", Help: "Push, wenn eine Notiz oder Planung endgültig fehlschlägt.", Kind: "choice", Default: "aktiv", Choices: []string{"aktiv", "inaktiv"}},
+	{Key: NotifySaved, Group: "Benachrichtigungen", Label: "Gespeicherte Einträge", Help: "Push für jede fertig ausgewertete Notiz.", Kind: "choice", Default: "inaktiv", Choices: []string{"aktiv", "inaktiv"}},
+	{Key: NotifyAppointments, Group: "Benachrichtigungen", Label: "Termin-Erinnerungen", Help: "Push zu Terminen aus deinen Notizen.", Kind: "choice", Default: "aktiv", Choices: []string{"aktiv", "inaktiv"}},
+	{Key: NotifyRing, Group: "Benachrichtigungen", Label: "Ring-Nutzung", Help: "Push bei 60, 80 und 95 % der Aufnahmezeit des Rings.", Kind: "choice", Default: "aktiv", Choices: []string{"aktiv", "inaktiv"}},
+	{Key: NotifyUpdates, Group: "Benachrichtigungen", Label: "Updates", Help: "Push, wenn eine neue Version bereitsteht (nur für Admins).", Kind: "choice", Default: "aktiv", Choices: []string{"aktiv", "inaktiv"}},
+
 	{Key: "VAPID_SUBJECT", Group: "Zugang und Updates", Label: "Kontakt für Web-Push", Help: "mailto:… oder https-Adresse; leer = öffentliche Adresse.", Kind: "text"},
 	{Key: "UPDATE_CHANNEL", Group: "Zugang und Updates", Label: "Update-Kanal", Help: "stable = Langzeit-Versionen; beta = neue, noch nicht ausgereifte Funktionen; nightly = jede Änderung, auch ungetestet.", Kind: "choice", Default: "stable", Choices: []string{"stable", "beta", "nightly"}},
 	{Key: "AUTO_UPDATE", Group: "Zugang und Updates", Label: "Automatisches Update", Help: "aktiv = jeden Tag zur gewählten Uhrzeit die neueste Version des Update-Kanals installieren, wenn es eine neuere gibt (vorher Backup).", Kind: "choice", Default: "aktiv", Choices: []string{"aktiv", "inaktiv"}},
@@ -109,6 +132,17 @@ func FieldByKey(key string) (Field, bool) {
 		}
 	}
 	return Field{}, false
+}
+
+// EnvLocked: Geheimnisse des Systems (API-Schlüssel), die in der Umgebung gesetzt sind (Docker, env-Datei), gelten
+// immer – sie gehen der Datenbank vor und sind in der App gesperrt. Persönliche Geheimnisse (Joplin) nie.
+func EnvLocked(key string) (string, bool) {
+	f, ok := FieldByKey(key)
+	if !ok || f.Kind != "secret" || f.Personal {
+		return "", false
+	}
+	v := strings.TrimSpace(os.Getenv(key))
+	return v, v != ""
 }
 
 // WithDefaults ergänzt eine Wertequelle um die Vorgaben der Felder.

@@ -18,6 +18,7 @@ import (
 
 	pebblewebhook "pebble-webhook"
 
+	"pebble-webhook/internal/config"
 	"pebble-webhook/internal/i18n"
 )
 
@@ -26,6 +27,18 @@ import (
 // nach DATA_DIR/update-request, die Path-Unit pebble-webhook-update startet install.sh --apply-request als root.
 
 const updaterPath = "/usr/local/lib/pebble-webhook/install.sh"
+
+// Docker-Image: setzt PEBBLE_DOCKER=1 und PEBBLE_IMAGE (Name ohne Tag). Im Container gibt es keinen Updater –
+// Updates werden nur angezeigt (samt Pull-Befehl), Installieren, Wiederherstellen und Auto-Update sind aus.
+func inDocker() bool { return os.Getenv("PEBBLE_DOCKER") == "1" }
+
+// noUpdater: Meldung, wenn aus der App nicht installiert werden kann.
+func noUpdater() string {
+	if inDocker() {
+		return "Im Docker-Container nicht möglich – neues Image ziehen und Container neu erstellen"
+	}
+	return "Kein Updater installiert – Installation mit install.sh nötig"
+}
 
 // githubAPI ist in Tests ersetzbar.
 var githubAPI = "https://api.github.com"
@@ -296,9 +309,28 @@ func (a *System) CheckUpdates(ctx context.Context) {
 		if _, err := a.fetchReleases(ctx, true); err == "" {
 			if v := a.AvailableUpdate(); v != "" {
 				logf("Update verfügbar: %s (Kanal %s)", v, a.updateChannel())
+				a.notifyUpdate(v)
 			}
 		}
 		t.Reset(updateInterval)
+	}
+}
+
+// updateNotifiedKey: zuletzt per Push gemeldete Version (je Version nur einmal).
+const updateNotifiedKey = "update:gemeldet"
+
+// notifyUpdate meldet eine neue Version einmal an alle Admins mit eingeschaltetem Kanal „Updates“.
+func (a *System) notifyUpdate(version string) {
+	if last, _ := a.DB.Get(updateNotifiedKey); last == version {
+		return
+	}
+	for _, app := range a.Apps() {
+		if u, err := a.DB.User(app.UserID); err == nil && u.Admin() {
+			app.notify(config.NotifyUpdates, app.T("Update verfügbar"), app.Tf("Version %s kann installiert werden.", shortVersion(version)), "/status/update")
+		}
+	}
+	if err := a.DB.Set(updateNotifiedKey, version); err != nil {
+		logf("Update-Meldung merken: %v", err)
 	}
 }
 
@@ -407,8 +439,11 @@ func (a *System) fetchReleases(ctx context.Context, force bool) ([]release, stri
 	return c.releases, ""
 }
 
-// updateInstallable: der Updater des Installers liegt bereit (Installation über install.sh).
+// updateInstallable: der Updater des Installers liegt bereit (Installation über install.sh; nie im Docker-Container).
 func updateInstallable() bool {
+	if inDocker() {
+		return false
+	}
 	_, err := os.Stat(updaterPath)
 	return err == nil
 }
@@ -556,6 +591,9 @@ func (a *System) handleUpdate(w http.ResponseWriter, r *http.Request) {
 	out := map[string]any{"aktuell": current, "quelle": a.Cfg.UpdateRepo, "kanal": a.updateChannel(), "kanaele": []string{"stable", "beta", "nightly"},
 		"installierbar": updateInstallable(), "status": a.updateStatus(), "versionen": []channelRelease{},
 		"mindestens": "2.0.0", "backups": a.backups(), "backup": a.backupPlan(), "auto": a.autoUpdateOn(), "auto_zeit": a.Cfg.AutoUpdateTime, "auto_letzt": func() string { v, _ := a.DB.Get(autoUpdateKey); return v }(), "aktuell_aenderungen": now, "alle_aenderungen": allNotes}
+	if inDocker() {
+		out["docker"] = map[string]string{"image": os.Getenv("PEBBLE_IMAGE")}
+	}
 	if seit := r.URL.Query().Get("seit"); seit != "" {
 		out["seit_aenderungen"] = notesSince(seit, current, a.updateChannel())
 	}
@@ -597,6 +635,10 @@ func (a *System) handleUpdateAuto(w http.ResponseWriter, r *http.Request) {
 	}
 	if readJSON(r, &in) != nil {
 		writeErr(w, 400, "ungueltig", "Angabe nicht lesbar")
+		return
+	}
+	if in.Aktiv && inDocker() {
+		writeErr(w, http.StatusConflict, "nicht_moeglich", noUpdater())
 		return
 	}
 	v, mode := "inaktiv", int8(2)
@@ -645,7 +687,7 @@ func (a *System) handleUpdateInstall(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if a.Cfg.UpdateRepo == "" || !updateInstallable() {
-		writeErr(w, http.StatusConflict, "nicht_moeglich", "Kein Updater installiert – Installation mit install.sh nötig")
+		writeErr(w, http.StatusConflict, "nicht_moeglich", noUpdater())
 		return
 	}
 	releases, _ := a.fetchReleases(r.Context(), false)
@@ -673,6 +715,9 @@ func (a *System) requestInstall(version string) error {
 
 // autoUpdateOn: automatisches Update an (Einstellung AUTO_UPDATE, in der App umschaltbar ohne Neustart).
 func (a *System) autoUpdateOn() bool {
+	if inDocker() {
+		return false
+	}
 	a.updates.mu.Lock()
 	defer a.updates.mu.Unlock()
 	switch a.updates.auto {
@@ -689,6 +734,9 @@ const autoUpdateKey = "auto-update-letzt" // „2026-11-22 1.27.12 …“: letzt
 // AutoUpdate läuft im Hintergrund: einmal am Tag zur Uhrzeit AUTO_UPDATE_TIME die neueste Version des
 // gewählten Kanals installieren, wenn sie neuer ist als die laufende (der Installer sichert vorher).
 func (a *System) AutoUpdate(ctx context.Context) {
+	if inDocker() {
+		return // kein Updater im Container
+	}
 	t := time.NewTicker(time.Minute)
 	defer t.Stop()
 	for {

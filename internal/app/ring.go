@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"pebble-webhook/internal/config"
 	"pebble-webhook/internal/store"
 )
 
@@ -251,7 +252,7 @@ func (a *App) recordRecording(j *store.Job, hw string) bool {
 		return valid
 	}
 	if l := ringLevel(after.Seconds, g.CapacitySeconds); l > ringLevel(before.Seconds, g.CapacitySeconds) && l > g.WarnedLevel {
-		a.notify(a.T("Ring-Nutzung"), a.Tf("Der Ring hat %d %% seiner Aufnahmezeit erreicht.", l), "/status/ring")
+		a.notify(config.NotifyRing, a.T("Ring-Nutzung"), a.Tf("Der Ring hat %d %% seiner Aufnahmezeit erreicht.", l), "/status/ring")
 	}
 	if hw != "" && g.HardwareID != "" && hw != g.HardwareID {
 		a.hub.send("ring")

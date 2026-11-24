@@ -112,3 +112,72 @@ jobs:
         run: |
           gh release list --limit 200 --json tagName,createdAt --jq '.[] | select(.tagName | contains("-nightly")) | .tagName' \
             | tail -n +11 | xargs -r -n1 gh release delete --yes --cleanup-tag
+
+      # --- Docker-Image (Docker Hub): dieselben Binaries aus out/, ein Build je Release (amd64 + arm64). ---
+      # Feste Tags: X.Y.Z-<kanal> (stable zusätzlich X.Y.Z). Gleitende Tags werden nur umgehängt, nie neu gebaut:
+      #   nightly → :nightly · beta → :beta, :nightly · stable → :stable, :latest, :X.Y, :X, :beta, :nightly
+      # jeweils nur, wenn die neue Version mindestens so hoch ist wie die dort hängende (gleiche Nummer: stable > beta > nightly).
+      # Ohne Variable DOCKERHUB_IMAGE (z. B. in Forks) entfällt alles.
+      - name: Docker – Anmelden
+        if: ${{ vars.DOCKERHUB_IMAGE != '' }}
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - if: ${{ vars.DOCKERHUB_IMAGE != '' }}
+        uses: docker/setup-buildx-action@v3
+
+      - name: Docker – Bauen und feste Tags
+        if: ${{ vars.DOCKERHUB_IMAGE != '' }}
+        id: docker
+        shell: bash
+        env:
+          IMG: ${{ vars.DOCKERHUB_IMAGE }}
+        run: |
+          set -euo pipefail
+          V="${{ steps.meta.outputs.version }}"
+          case "$V" in *-nightly) CH=nightly ;; *-beta) CH=beta ;; *) CH=stable ;; esac
+          N="${V%%-*}"
+          TAGS=(-t "$IMG:$N-$CH")
+          [ "$CH" = stable ] && TAGS+=(-t "$IMG:$N")
+          docker buildx build --platform linux/amd64,linux/arm64 --push "${TAGS[@]}" \
+            --build-arg IMAGE="$IMG" \
+            --label org.opencontainers.image.version="$N-$CH" \
+            --label org.opencontainers.image.revision="$GITHUB_SHA" \
+            --label org.opencontainers.image.source="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
+            .
+          echo "ch=$CH" >> "$GITHUB_OUTPUT"
+          echo "n=$N" >> "$GITHUB_OUTPUT"
+
+      - name: Docker – Gleitende Tags umhängen
+        if: ${{ vars.DOCKERHUB_IMAGE != '' }}
+        shell: bash
+        env:
+          IMG: ${{ vars.DOCKERHUB_IMAGE }}
+        run: |
+          set -euo pipefail
+          CH="${{ steps.docker.outputs.ch }}" N="${{ steps.docker.outputs.n }}"
+          rank() { case "$1" in stable) echo 3 ;; beta) echo 2 ;; nightly) echo 1 ;; *) echo 0 ;; esac; }
+          # Vergleichsschlüssel X.Y.Z.<rang>; ohne Tag oder Label 0
+          key_of() {
+            local l
+            l="$(docker buildx imagetools inspect "$IMG:$1" --format '{{json .Image}}' 2>/dev/null \
+              | jq -r 'if has("config") then .config.Labels["org.opencontainers.image.version"] else (to_entries[0].value.config.Labels["org.opencontainers.image.version"]) end // empty' || true)"
+            [[ "$l" =~ ^([0-9]+\.[0-9]+\.[0-9]+)-(stable|beta|nightly)$ ]] && echo "${BASH_REMATCH[1]}.$(rank "${BASH_REMATCH[2]}")" || echo 0
+          }
+          NEW="$N.$(rank "$CH")"
+          case "$CH" in
+            nightly) MOVE=(nightly) ;;
+            beta)    MOVE=(beta nightly) ;;
+            stable)  MOVE=(stable latest "${N%.*}" "${N%%.*}" beta nightly) ;;
+          esac
+          for t in "${MOVE[@]}"; do
+            CUR="$(key_of "$t")"
+            if [ "$(printf '%s\n%s\n' "$CUR" "$NEW" | sort -V | tail -1)" = "$NEW" ]; then
+              docker buildx imagetools create -t "$IMG:$t" "$IMG:$N-$CH"
+              echo ":$t → $N-$CH (vorher ${CUR})"
+            else
+              echo ":$t bleibt (${CUR} > ${NEW})"
+            fi
+          done
