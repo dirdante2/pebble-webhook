@@ -106,6 +106,8 @@ func (s *System) Handler() http.Handler {
 	mux.HandleFunc("GET /api/audio-unbekannt", u((*App).handleAudioOrphans))
 	mux.HandleFunc("POST /api/audio-unbekannt/import", u((*App).handleAudioImport))
 	mux.HandleFunc("GET /api/backups/{name}", ad(s.handleBackupDownload))
+	mux.HandleFunc("DELETE /api/backups/{name}", ad(s.handleBackupDelete))
+	mux.HandleFunc("POST /api/backups/aufraeumen", ad(s.handleBackupPrune))
 	mux.HandleFunc("GET /api/pebble", u((*App).handlePebbleSetup))
 	mux.HandleFunc("GET /api/kosten", u((*App).handleCosts))
 	mux.HandleFunc("GET /api/gedaechtnis", u((*App).handleMemory))

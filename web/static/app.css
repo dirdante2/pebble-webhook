@@ -691,7 +691,7 @@ dialog.logblatt h2 { margin-top: 0; }
 .balken::-moz-meter-bar { background: var(--akzent); border-radius: .3rem; }
 .balken.knapp::-webkit-meter-optimum-value, .balken.knapp::-webkit-meter-suboptimum-value { background: var(--schlecht); }
 .balken.knapp::-moz-meter-bar { background: var(--schlecht); }
-.backupzeit { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.backupzeit { overflow-wrap: anywhere; }
 .backupinfo strong { overflow-wrap: anywhere; }
 .backupknoepfe { display: flex; align-items: center; gap: .4rem; }
 .backupgroesse { text-align: right; white-space: nowrap; margin-right: .2rem; }

@@ -357,13 +357,11 @@ func (a *System) cleanBackups() {
 	keep := time.Duration(a.Cfg.BackupRetentionDays) * 24 * time.Hour
 	newest := true
 	for _, b := range a.backups() {
-		limit, path := keep, filepath.Join(a.Cfg.BackupDir, b.Name)
+		limit, path := keep, a.backupPath(b)
 		if b.Kind == "update" {
 			limit = updateBackupRetention
 		}
-		if b.Legacy {
-			path = filepath.Join(a.Cfg.DataDir, "backup", b.Name)
-		} else if newest {
+		if !b.Legacy && newest {
 			newest = false
 			continue
 		}
@@ -378,26 +376,26 @@ func (a *System) cleanBackups() {
 	}
 }
 
-// cleanupKeep: Backups dieses Alters bleiben beim Aufräumen immer stehen (Nutzervorgabe 23.11.2026).
-const cleanupKeep = 7 * 24 * time.Hour
+// backupPath: Ort eines Backups (Archiv in BACKUP_DIR, altes Format als Ordner in DATA_DIR/backup).
+func (a *System) backupPath(b backupEntry) string {
+	if b.Legacy {
+		return filepath.Join(a.Cfg.DataDir, "backup", b.Name)
+	}
+	return filepath.Join(a.Cfg.BackupDir, b.Name)
+}
 
-// cleanupPlan: was „Aufräumen“ löschen würde – Backups älter als 7 Tage (das jüngste bleibt immer) und alle
-// zwischengespeicherten App-Versionen außer der laufenden.
+// cleanupKeepCount: so viele der neuesten Backups (alle Arten zusammen) bleiben beim Aufräumen stehen
+// (Nutzervorgabe 24.11.2026).
+const cleanupKeepCount = 10
+
+// cleanupPlan: was „Aufräumen“ löschen würde – alle Backups außer den 10 neuesten und alle zwischengespeicherten
+// App-Versionen außer der laufenden.
 func (a *System) cleanupPlan() (backups, releases []string, backupBytes, releaseBytes int64) {
-	newest := true
-	for _, b := range a.backups() {
-		if !b.Legacy && newest {
-			newest = false
+	for i, b := range a.backups() {
+		if i < cleanupKeepCount {
 			continue
 		}
-		if time.Since(time.UnixMilli(b.At)) < cleanupKeep {
-			continue
-		}
-		path := filepath.Join(a.Cfg.BackupDir, b.Name)
-		if b.Legacy {
-			path = filepath.Join(a.Cfg.DataDir, "backup", b.Name)
-		}
-		backups = append(backups, path)
+		backups = append(backups, a.backupPath(b))
 		backupBytes += b.Size
 	}
 	running := strings.Fields(a.Version + " ")[0]
@@ -429,23 +427,56 @@ func (a *System) handleCleanup(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "ungueltig", "was=backups oder was=versionen")
 		return
 	}
-	nb, nr := 0, 0
-	for _, p := range backups {
-		if err := os.RemoveAll(p); err != nil {
-			logf("Aufräumen: %s: %v", p, err)
-			continue
-		}
-		nb++
-	}
-	for _, p := range releases {
-		if err := os.RemoveAll(p); err != nil {
-			logf("Aufräumen: %s: %v", p, err)
-			continue
-		}
-		nr++
-	}
+	nb, nr := removeAll(backups), removeAll(releases)
 	logf("Aufräumen: %d Backups (%d KB), %d App-Versionen (%d KB) gelöscht", nb, bb/1024, nr, rb/1024)
 	writeJSON(w, 200, map[string]any{"backups": nb, "versionen": nr, "frei": bb + rb})
+}
+
+// removeAll löscht die Pfade und zählt die gelöschten; Fehler landen im Log.
+func removeAll(paths []string) int {
+	n := 0
+	for _, p := range paths {
+		if err := os.RemoveAll(p); err != nil {
+			logf("Aufräumen: %s: %v", p, err)
+			continue
+		}
+		n++
+	}
+	return n
+}
+
+// handleBackupPrune: POST /api/backups/aufraeumen – alle Backups außer den 10 neuesten löschen (Backup-Seite).
+func (a *System) handleBackupPrune(w http.ResponseWriter, r *http.Request) {
+	backupMu.Lock()
+	backups, _, bb, _ := a.cleanupPlan()
+	n := removeAll(backups)
+	backupMu.Unlock()
+	logf("Backups: %d gelöscht (%d KB), die %d neuesten bleiben", n, bb/1024, cleanupKeepCount)
+	writeJSON(w, 200, map[string]any{"backups": n, "frei": bb})
+}
+
+// handleBackupDelete: DELETE /api/backups/{name} – ein einzelnes Backup löschen (Backup-Seite, Mülleimer je Zeile).
+func (a *System) handleBackupDelete(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	if !archiveNameRe.MatchString(name) && !legacyNameRe.MatchString(name) {
+		writeErr(w, 400, "ungueltig", "Backup unbekannt")
+		return
+	}
+	backupMu.Lock()
+	defer backupMu.Unlock()
+	for _, b := range a.backups() {
+		if b.Name != name {
+			continue
+		}
+		if err := os.RemoveAll(a.backupPath(b)); err != nil {
+			writeErr(w, 500, "speicher", err.Error())
+			return
+		}
+		logf("Backup: %s gelöscht (von Hand)", name)
+		writeJSON(w, 200, map[string]any{"ok": true})
+		return
+	}
+	writeErr(w, 404, "fehlt", "Backup nicht gefunden")
 }
 
 const backupLastKey = "backup-letzt" // „2026-11-22 03:00 ok <name>“ oder „… fehler <meldung>“

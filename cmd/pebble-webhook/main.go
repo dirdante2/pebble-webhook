@@ -41,6 +41,8 @@ const usage = `pebble-webhook <Befehl>
             alle Gedächtnis-Einträge samt Entscheidungen löschen (Beobachtungen bleiben); danach in der Web-App „Jetzt lernen“
   ersteinrichtung
             Pfad des Einrichtungsassistenten mit Einmal-Code ausgeben (nur solange nicht eingerichtet)
+  aufnahmen-verschluesseln
+            Aufnahmen bis 2.x sofort verschlüsselt in den Ordner des Nutzers legen (sonst 24 h nach dem Umzug)
   nutzer-anlegen <Name> [admin]
             Nutzer anlegen (Schlüssel, verschlüsselte Daten); danach mit PEBBLE_NUTZER=<Id> enroll den Passkey-Link
   schluessel-wiederherstellen <Nutzer-Id> <Code>
@@ -83,6 +85,8 @@ func main() {
 		fail(resetMemory())
 	case "ersteinrichtung":
 		fail(setupLink())
+	case "aufnahmen-verschluesseln":
+		fail(sealAudio())
 	case "nutzer-anlegen":
 		fail(addUser())
 	case "schluessel-wiederherstellen":
@@ -281,6 +285,17 @@ func prepare() error {
 		return err
 	}
 	return db.Close()
+}
+
+func sealAudio() error {
+	sys, a, err := userApp()
+	if err != nil {
+		return err
+	}
+	defer closeAll(sys)
+	n, err := a.SealLegacyAudio()
+	fmt.Printf("Verschlüsselt und verschoben: %d Aufnahmen\n", n)
+	return err
 }
 
 func addUser() error {

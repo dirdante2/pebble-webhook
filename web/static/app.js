@@ -2618,10 +2618,10 @@ async function zeigeStatus() {
     };
     // Speicher: zugeklappt je Ablage Name, belegt und Balken; aufgeklappt Pfad und frei/gesamt.
     const balken = (p) => T`<meter class="balken${p.knapp ? ' knapp' : ''}" min="0" max="${p.gesamt}" value="${p.gesamt - p.frei}" aria-label="${esc(tx('{0} von {1} belegt', groesse(p.gesamt - p.frei), groesse(p.gesamt)))}"></meter>`;
-    // Aufräumen am Ende, je ein Knopf: Backups älter als 7 Tage (das jüngste bleibt) und App-Versionen außer der laufenden.
+    // Aufräumen am Ende, je ein Knopf: Backups außer den 10 neuesten und App-Versionen außer der laufenden.
     // Beide Knöpfe stehen immer da; ohne Löschbares ausgegraut mit Grund (sonst sucht man den fehlenden Knopf).
     const aufraeumen = (x) => (x ? T`<div class="leiste aufraeumen">
-      ${x.backups ? T`<button class="btn gefahr" data-aufraeumen="backups" data-n="${x.backups}" data-groesse="${x.backups_groesse}">${tx('{0} alte Backups löschen', x.backups)} · ${groesse(x.backups_groesse)}</button>` : T`<button class="btn" disabled>${tx('Keine Backups älter als 7 Tage')}</button>`}
+      ${x.backups ? T`<button class="btn gefahr" data-aufraeumen="backups" data-n="${x.backups}" data-groesse="${x.backups_groesse}">${tx('{0} alte Backups löschen', x.backups)} · ${groesse(x.backups_groesse)}</button>` : T`<button class="btn" disabled>${tx('Nicht mehr als 10 Backups')}</button>`}
       ${x.versionen ? T`<button class="btn gefahr" data-aufraeumen="versionen" data-n="${x.versionen}" data-groesse="${x.versionen_groesse}">${tx('{0} alte App-Versionen löschen', x.versionen)} · ${groesse(x.versionen_groesse)}</button>` : T`<button class="btn" disabled>${tx('Keine alten App-Versionen')}</button>`}</div>` : '');
     const speicher = (liste, x) => T`<details${aufAttr('speicher')} class="karte speicherkarte"><summary><span class="zeile kartentitel"><strong>Speicher</strong><span class="eingangszahl">${groesse(liste.reduce((n, p) => n + (p.belegt || 0), 0))}</span></span>${liste.map((p) => T`<span class="speicherzeile"><span class="zeile"><span>${esc(tx(p.name))}</span>${p.fehler ? T`<span class="schlecht">nicht lesbar</span>` : T`<span>${groesse(p.belegt)}</span>`}</span>
         ${p.fehler ? '' : balken(p)}${p.knapp ? T('<span class="hinweis schlecht">Knapp – neue Aufnahmen werden abgewiesen.</span>') : ''}</span>`).join('')}</summary>
@@ -2711,7 +2711,7 @@ async function zeigeStatus() {
       }
       if (b.dataset.aufraeumen) {
         const backups = b.dataset.aufraeumen === 'backups', n = b.dataset.n, gr = groesse(Number(b.dataset.groesse));
-        if (!confirm(backups ? tx('{0} Backups älter als 7 Tage löschen ({1})? Die Backups der letzten 7 Tage und das jüngste bleiben.', n, gr)
+        if (!confirm(backups ? tx('{0} Backups löschen ({1})? Die 10 neuesten bleiben.', n, gr)
           : tx('{0} zwischengespeicherte App-Versionen löschen ({1})? Die laufende Version bleibt; ältere lassen sich bei Bedarf neu laden.', n, gr))) return;
         b.disabled = true;
         const d = await api(T`/api/speicher/aufraeumen?was=${b.dataset.aufraeumen}`, { method: 'POST' });
@@ -3618,6 +3618,7 @@ async function zeigeUpdate(teil) {
       <div class="leiste"><button class="btn haupt" data-sichern="1">Jetzt sichern</button>${u.installierbar ? T('<a class="btn" href="/status/backups/hochladen">Backup hochladen</a>') : ''}</div>
       <h2>Backups</h2>
       ${(u.backups || []).length ? T`<p class="backupsumme"><strong>${u.backups.length}</strong> Backups · <strong>${groesse(u.backups.reduce((n, st) => n + (st.groesse || 0), 0))}</strong> belegt</p>` : ''}
+      ${(u.backups || []).length > 10 ? T`<div class="leiste"><button class="btn gefahr" data-prune="${u.backups.length - 10}" data-groesse="${u.backups.slice(10).reduce((n, st) => n + (st.groesse || 0), 0)}"${laeuft ? ' disabled' : ''}>${tx('{0} Backups löschen, die 10 neuesten bleiben', u.backups.length - 10)}</button></div>` : ''}
       <p class="leise">Jedes Backup enthält Datenbank mit allen Einstellungen, Version und Kanal. Wiederherstellen spielt die Daten ein und installiert die Version aus dem Backup; was seitdem dazukam, fehlt danach. Der jetzige Stand wird vorher gesichert.</p>
       ${(u.backups || []).length ? u.backups.map((st) => T`<div class="karte backupzeile"><div class="backupinfo">
           <span class="versionzeile1">${st.kanal ? T`<span class="badge neutral">${esc(tx(st.kanal))}</span>` : ''}<strong>${esc(versionNr(st.version))}</strong></span>
@@ -3625,7 +3626,8 @@ async function zeigeUpdate(teil) {
         <div class="backupknoepfe">${st.groesse ? T`<span class="leise backupgroesse">${groesse(st.groesse)}</span>` : ''}
           ${st.alt ? '<span class="symbolplatz"></span>' : T`<a class="btn klein rund symbol" href="/api/backups/${encodeURIComponent(st.name)}" download aria-label="${esc(tx('Herunterladen'))}" title="${esc(tx('Herunterladen'))}">${SYM_LADEN}</a>`}
           ${st.wiederherstellbar ? (u.installierbar ? T`<button class="btn klein rund symbol" data-restore="${esc(st.name)}" data-version="${esc(versionNr(st.version))}" aria-label="${esc(tx('Wiederherstellen'))}" title="${esc(tx('Wiederherstellen'))}"${laeuft ? ' disabled' : ''}>${SYM_ZURUECK}</button>` : '')
-    : T('<span class="leise">unvollständig</span>')}</div></div>`).join('') : T('<p class="leise">Noch keine Backups.</p>')}`;
+    : T('<span class="leise">unvollständig</span>')}
+          <button class="btn klein rund symbol gefahr" data-loeschen="${esc(st.name)}" data-version="${esc(versionNr(st.version))}" aria-label="${esc(tx('Löschen'))}" title="${esc(tx('Löschen'))}"${laeuft ? ' disabled' : ''}>${ICON_MUELL}</button></div></div>`).join('') : T('<p class="leise">Noch keine Backups.</p>')}`;
     seite.innerHTML = kopf + (reiter === 'backups' ? backups : updates);
   };
   // Nach einem angestoßenen Wechsel warten, bis der Updater fertig ist (sichert, lädt, ersetzt, startet neu).
@@ -3665,6 +3667,18 @@ async function zeigeUpdate(teil) {
       if (b.dataset.sichern) {
         u = await api('/api/backups', { method: 'POST', body: {} });
         melde(tx('Backup angelegt'));
+        return laden(false);
+      }
+      if (b.dataset.loeschen) {
+        if (!confirm(tx('Backup von Version {0} löschen? Das lässt sich nicht rückgängig machen.', b.dataset.version))) { b.disabled = false; return; }
+        await api(T`/api/backups/${encodeURIComponent(b.dataset.loeschen)}`, { method: 'DELETE' });
+        melde(tx('Backup gelöscht'));
+        return laden(false);
+      }
+      if (b.dataset.prune) {
+        if (!confirm(tx('{0} Backups löschen ({1})? Die 10 neuesten bleiben.', b.dataset.prune, groesse(Number(b.dataset.groesse))))) { b.disabled = false; return; }
+        const d = await api('/api/backups/aufraeumen', { method: 'POST' });
+        melde(tx('{0} Backups gelöscht', d.backups));
         return laden(false);
       }
       if (b.dataset.restore) {

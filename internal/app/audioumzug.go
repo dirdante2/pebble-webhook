@@ -118,3 +118,6 @@ func (a *App) sealLegacyAudio(j *store.Job) error {
 	}
 	return os.Remove(j.AudioPath)
 }
+
+// SealLegacyAudio verschlüsselt die Aufnahmen bis 2.x sofort (Kommandozeile), ohne die Wartezeit nach dem Umzug.
+func (a *App) SealLegacyAudio() (int, error) { return a.migrateLegacyAudio(true) }

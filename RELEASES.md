@@ -4,6 +4,11 @@ Summarised notes for **beta** and **stable** releases. Each section lists only w
 
 A tag `vX.Y.Z-stable` (stable; before 1.33.5 `vX.Y.Z`) or `vX.Y.Z-beta` (beta) needs a section `## [X.Y.Z]` or `## [X.Y.Z-beta]` here; the release workflow uses it as the release notes.
 
+## [3.1.0] - 2026-11-24
+
+### Backups
+- Delete single backups; one button deletes all but the 10 newest (also under Status → Storage).
+
 ## [3.0.0] - 2026-11-24
 
 ### Multiple users (prepared)

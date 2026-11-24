@@ -9,6 +9,16 @@ Version numbers X.Y.Z:
 
 Own builds show X.Y.Z.A: **A** is a local build counter (one per deployed change, starting at 1 for every new X.Y.Z); it never appears in Git or releases, so one version can collect several changes.
 
+## [3.1.0] - 2026-11-24
+
+### New
+- Backups page: delete a single backup (trash button).
+- Backups page: "delete all but the 10 newest".
+- CLI `aufnahmen-verschluesseln`: encrypt and move recordings until 2.x at once.
+
+### Changed
+- Status → Storage: clean-up keeps the 10 newest backups instead of the last 7 days.
+
 ## [3.0.0] - 2026-11-24
 
 ### New
