@@ -139,9 +139,8 @@ jobs:
           V="${{ steps.meta.outputs.version }}"
           case "$V" in *-nightly) CH=nightly ;; *-beta) CH=beta ;; *) CH=stable ;; esac
           N="${V%%-*}"
-          TAGS=(-t "$IMG:$N-$CH")
-          [ "$CH" = stable ] && TAGS+=(-t "$IMG:$N")
-          docker buildx build --platform linux/amd64,linux/arm64 --push "${TAGS[@]}" \
+          # Fester Tag nur X.Y.Z: eine Version ist dieselbe, egal in welchem Kanal (gleicher Code); der Kanal steht im Label.
+          docker buildx build --platform linux/amd64,linux/arm64 --push -t "$IMG:$N" \
             --build-arg IMAGE="$IMG" \
             --label org.opencontainers.image.version="$N-$CH" \
             --label org.opencontainers.image.revision="$GITHUB_SHA" \
@@ -175,7 +174,7 @@ jobs:
           for t in "${MOVE[@]}"; do
             CUR="$(key_of "$t")"
             if [ "$(printf '%s\n%s\n' "$CUR" "$NEW" | sort -V | tail -1)" = "$NEW" ]; then
-              docker buildx imagetools create -t "$IMG:$t" "$IMG:$N-$CH"
+              docker buildx imagetools create -t "$IMG:$t" "$IMG:$N"
               echo ":$t → $N-$CH (vorher ${CUR})"
             else
               echo ":$t bleibt (${CUR} > ${NEW})"

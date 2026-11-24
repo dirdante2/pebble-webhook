@@ -34,17 +34,17 @@ sudo bash /usr/local/lib/pebble-webhook/install.sh --channel nightly       # new
 
 ## Docker
 
-In the container there is no updater: the update page shows new versions with the `docker pull` command; install, roll back, restore and automatic update are off. The channel chosen there only selects which versions are shown.
+In the container there is no updater: the update page shows new versions with the `docker pull` command; install, roll back and automatic update are off. The channel chosen there only selects which versions are shown. Restoring a backup works in the app (the container restarts and brings back the data, the version stays that of the image). A new version backs up the data on its first start before migrating them.
 
 | Tag | Points to |
 |---|---|
-| `X.Y.Z-nightly`, `X.Y.Z-beta`, `X.Y.Z-stable`, `X.Y.Z` | exactly that build (fixed) |
+| `X.Y.Z` | exactly that version (fixed; the same code in every channel) |
 | `stable`, `latest` | newest stable |
 | `X.Y`, `X` | newest stable of that minor / major line (stay on one `X` = no breaking changes) |
 | `beta` | newest beta or stable, whichever is higher |
 | `nightly` | newest of all channels |
 
-Each release builds one image; the moving tags are only re-pointed (same version: stable > beta > nightly).
+Each release builds one image; the moving tags are only re-pointed (same version: stable > beta > nightly). The channel of a build is in the label `org.opencontainers.image.version`.
 
 ## Backups
 
@@ -72,7 +72,7 @@ A push to `main` builds nothing. After the push, `deploy/release.sh [nightly|bet
 - **beta**: push a tag `vX.Y.Z-beta` → pre-release, notes from `## [X.Y.Z-beta]` in RELEASES.md (required).
 - **stable**: push a tag `vX.Y.Z-stable` → release, notes from `## [X.Y.Z]` in RELEASES.md (required).
 
-The same run builds the Docker image from these binaries and pushes it to Docker Hub with the tags [above](#docker). Needs the repository variable `DOCKERHUB_IMAGE` (e.g. `owner/pebble-webhook`) and the secrets `DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN`; without the variable the Docker steps are skipped.
+The same run builds the Docker image from these binaries and pushes it to Docker Hub with the tags [above](#docker). Needs the repository variable `DOCKERHUB_IMAGE` (e.g. `owner/pebble-webhook`) and the secrets `DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN`; without the variable the Docker steps are skipped. The Docker Hub page text comes from `docker/README.md` (workflow `dockerhub-readme.yml`, on every change on `main` or by hand; the token needs Read, Write, Delete).
 
 Version numbers: **X** = breaking for database or app (new database needed or hard to roll back, e.g. migrations that change columns), **Y** = new feature, **Z** = other UI changes and small fixes that can be installed or rolled back freely. Roll back only within the same X.
 

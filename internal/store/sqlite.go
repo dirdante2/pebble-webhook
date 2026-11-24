@@ -85,6 +85,18 @@ func (s *Store) SnapshotTo(path string, key []byte) error {
 	return err
 }
 
+// SnapshotFile schreibt eine in sich stimmige Kopie der unverschlüsselten Datenbank src nach dst, ohne sie zu
+// migrieren (Backup vor dem Start einer neuen Version im Docker-Container, Dienst läuft noch nicht).
+func SnapshotFile(src, dst string) error {
+	db, err := openSQLite(src, nil, false)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	_, err = db.Exec(`VACUUM INTO ?`, snapshotURI(dst, nil))
+	return err
+}
+
 // Tombstone legt an path eine leere Datenbank mit Schema-Stand 1000 an: Programme bis 2.x weigern sich damit zu
 // starten (statt still mit leerer Datenbank), der Installer lehnt den Wechsel zu ihnen ab.
 func Tombstone(path, note string) error {

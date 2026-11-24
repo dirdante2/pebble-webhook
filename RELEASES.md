@@ -4,6 +4,31 @@ Summarised notes for **beta** and **stable** releases. Each section lists only w
 
 A tag `vX.Y.Z-stable` (stable; before 1.33.5 `vX.Y.Z`) or `vX.Y.Z-beta` (beta) needs a section `## [X.Y.Z]` or `## [X.Y.Z-beta]` here; the release workflow uses it as the release notes.
 
+## [4.2.0] - 2026-11-24
+
+First stable release since 2.3.0 – everything below lasts since then.
+
+### Docker
+- Image `dirdante/pebble-index-webapp` (amd64/arm64), tags `X.Y.Z`, `stable`, `latest`, `X.Y`, `X`, `beta`, `nightly`.
+- `PUID`/`PGID` (default 1000:1000), all paths and API keys via environment; ready-made `docker/compose.yaml`.
+- Backup before every new version, then automatic migration; restore and upload in the app.
+- Command `wiederherstellen` to go back to an older image.
+
+### Multiple users and encryption
+- Admin/user roles, invite links, lock and delete users; everyone sees only own data.
+- Own encrypted database, recordings and images per user; recovery code after a restore.
+
+### Media in notes and plannings
+- Charts, tables, images and YouTube trailers in the text.
+
+### Notifications
+- Channels on/off per user; push for errors, saved notes and new updates.
+
+### Storage and backups
+- Own mounts for databases, media and backups; owner and modes fixed before every start.
+- Storage overview with warning at 90 %; delete single or old backups.
+- API keys from the environment win over the app and are locked there.
+
 ## [4.1.0] - 2026-11-24
 
 ### Docker

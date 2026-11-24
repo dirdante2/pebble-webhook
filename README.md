@@ -40,7 +40,25 @@ On a Debian/Ubuntu server with systemd:
 curl -fsSL https://raw.githubusercontent.com/dirdante2/pebble-webhook/main/install.sh | sudo bash -s -- --channel stable
 ```
 
-Or with Docker: `docker run -d --restart unless-stopped -p 8080:8080 -v pebble-config:/config dirdante/pebble-index-webapp:stable` (details in [installation](docs/installation.md#docker)).
+### Docker
+
+Image [`dirdante/pebble-index-webapp`](https://hub.docker.com/r/dirdante/pebble-index-webapp) for amd64 and arm64:
+
+```bash
+docker run -d --name pebble --restart unless-stopped -p 8080:8080 \
+  -e TZ=Europe/Berlin -e PUID=1000 -e PGID=1000 \
+  -v pebble-config:/config dirdante/pebble-index-webapp:stable
+docker logs pebble    # link to the setup wizard
+```
+
+Or with Docker Compose ([compose.yaml](docker/compose.yaml)):
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/dirdante2/pebble-webhook/main/docker/compose.yaml
+docker compose up -d && docker compose logs pebble
+```
+
+Tags, paths, `PUID`/`PGID` and updates: [installation](docs/installation.md#docker).
 
 The installer (or the container log) prints a link to the setup wizard. Put the service behind an HTTPS reverse proxy (passkeys need HTTPS), enter your OpenAI key and the public address, then create your first passkey.
 

@@ -832,7 +832,6 @@
 "Nur die letzte Runde einer Planung lässt sich umhängen": "Only the last round of a planning can be moved",
 "Nur diese Gruppe (z. B. \"servicemanager\"); leer = alle": "Only this group (e.g. \"servicemanager\"); empty = all",
 "Nur diese Liste, als Nummer (\"L23\") oder Name": "Only this list, as number (\"L23\") or name",
-"Nur eine unveränderte Datei aus „Herunterladen“ (pebble-….tar.gz). Sie wird geprüft, abgelegt und sofort eingespielt: Daten und Einstellungen werden ersetzt, die Version aus dem Backup wird installiert. Der jetzige Stand wird vorher gesichert.": "Only an unchanged file from “Download” (pebble-….tar.gz). It is checked, stored and restored right away: data and settings are replaced, the version from the backup is installed. The current state is backed up first.",
 "Nur für Administratoren": "Administrators only",
 "Nur offene – Erledigte einblenden": "Open only – show done",
 "Nutzer": "Users",
@@ -1570,7 +1569,6 @@
 "Schlüssel": "Keys",
 "Im Docker-Container nicht möglich – neues Image ziehen und Container neu erstellen": "Not possible in the Docker container – pull the new image and recreate the container",
 "Docker: aktualisiert wird mit einem neuen Image (docker compose pull, dann docker compose up -d). Der Kanal hier wählt nur, welche Versionen angezeigt werden; das Image-Tag bestimmt, was läuft.": "Docker: updates come with a new image (docker compose pull, then docker compose up -d). The channel here only selects which versions are shown; the image tag decides what runs.",
-"Docker: Wiederherstellen geht nicht aus der App – Anleitung in der Installationsdoku, Abschnitt Docker.": "Docker: restoring is not possible from the app – see the installation docs, section Docker.",
 "Den Ordner legt die Umgebungsvariable BACKUP_DIR des Containers fest.": "The folder is set by the container's environment variable BACKUP_DIR.",
 "Befehl kopiert": "Command copied",
 "Kopieren nicht möglich – Befehl markieren und kopieren": "Copying not possible – select and copy the command",
@@ -1594,5 +1592,12 @@
 "Joplin-Übertragung fehlgeschlagen": "Joplin transfer failed",
 "Update verfügbar": "Update available",
 "Version %s kann installiert werden.": "Version %s can be installed.",
-"Push": "Push"
+"Push": "Push",
+"Nur eine unveränderte Datei aus „Herunterladen“ (pebble-….tar.gz). Sie wird geprüft, abgelegt und sofort eingespielt: Daten und Einstellungen werden ersetzt, die Version aus dem Backup wird installiert (im Docker-Container bleibt die des Images, er startet neu). Der jetzige Stand wird vorher gesichert.": "Only an unchanged file from “Download” (pebble-….tar.gz). It is checked, stored and restored right away: data and settings are replaced, the version from the backup is installed (in the Docker container the image's version stays and it restarts). The current state is backed up first.",
+"Docker: Wiederherstellen spielt die Daten ein und startet den Container neu; die Version bleibt die des Images. Ein Backup einer neueren Version braucht erst das Image dieser Version.": "Docker: restoring brings back the data and restarts the container; the version stays that of the image. A backup of a newer version needs that version's image first.",
+"Backup von Version {0} wiederherstellen? Daten und Einstellungen werden ersetzt, der Container startet neu; was seitdem dazukam, fehlt danach. Der jetzige Stand wird vorher gesichert.": "Restore the backup of version {0}? Data and settings are replaced and the container restarts; anything added since will be missing. The current state is backed up first.",
+"Kein Backup-Name: %s": "Not a backup name: %s",
+"Backup nicht gefunden: %s": "Backup not found: %s",
+"Backup ohne Datenbank": "Backup without database",
+"Das Backup stammt von Version %s mit neuerer Datenbank – erst das Image dieser Version starten, dann wiederherstellen": "The backup comes from version %s with a newer database – start the image of that version first, then restore"
 }

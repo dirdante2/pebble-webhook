@@ -1,0 +1,23 @@
+# Beschreibung der Docker-Hub-Seite aus docker/README.md – bei jeder Änderung auf main und auf Knopfdruck.
+# Braucht dieselben Secrets wie der Release-Build; der Token braucht die Berechtigung Read, Write, Delete.
+name: Docker Hub README
+
+on:
+  push:
+    branches: [main]
+    paths: [docker/README.md, .github/workflows/dockerhub-readme.yml]
+  workflow_dispatch:
+
+jobs:
+  readme:
+    if: ${{ vars.DOCKERHUB_IMAGE != '' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: peter-evans/dockerhub-description@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          repository: ${{ vars.DOCKERHUB_IMAGE }}
+          readme-filepath: docker/README.md
+          short-description: "Self-hosted backend and web app for the Pebble Index 01 voice ring: transcribes, sorts, reminds."

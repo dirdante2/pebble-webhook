@@ -28,9 +28,12 @@ import (
 
 const updaterPath = "/usr/local/lib/pebble-webhook/install.sh"
 
-// Docker-Image: setzt PEBBLE_DOCKER=1 und PEBBLE_IMAGE (Name ohne Tag). Im Container gibt es keinen Updater –
-// Updates werden nur angezeigt (samt Pull-Befehl), Installieren, Wiederherstellen und Auto-Update sind aus.
-func inDocker() bool { return os.Getenv("PEBBLE_DOCKER") == "1" }
+// Docker-Image (Markierungsdatei config.DockerMarker): im Container gibt es keinen Updater – Updates werden nur
+// angezeigt (samt Pull-Befehl), Installieren, Wiederherstellen und Auto-Update sind aus. Variablen für Tests.
+var (
+	inDocker    = config.InDocker
+	dockerImage = config.DockerImage
+)
 
 // noUpdater: Meldung, wenn aus der App nicht installiert werden kann.
 func noUpdater() string {
@@ -592,7 +595,7 @@ func (a *System) handleUpdate(w http.ResponseWriter, r *http.Request) {
 		"installierbar": updateInstallable(), "status": a.updateStatus(), "versionen": []channelRelease{},
 		"mindestens": "2.0.0", "backups": a.backups(), "backup": a.backupPlan(), "auto": a.autoUpdateOn(), "auto_zeit": a.Cfg.AutoUpdateTime, "auto_letzt": func() string { v, _ := a.DB.Get(autoUpdateKey); return v }(), "aktuell_aenderungen": now, "alle_aenderungen": allNotes}
 	if inDocker() {
-		out["docker"] = map[string]string{"image": os.Getenv("PEBBLE_IMAGE")}
+		out["docker"] = map[string]string{"image": dockerImage()}
 	}
 	if seit := r.URL.Query().Get("seit"); seit != "" {
 		out["seit_aenderungen"] = notesSince(seit, current, a.updateChannel())

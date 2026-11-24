@@ -1,0 +1,29 @@
+# Pebble Index Webapp – start with `docker compose up -d`, then open the setup wizard link
+# from `docker compose logs pebble`. Update: `docker compose pull && docker compose up -d`
+# All variables are optional; remove the # to use one. Values shown are the defaults or examples.
+services:
+  pebble:
+    image: dirdante/pebble-index-webapp:stable   # stable, beta, nightly or a fixed version like 4.1.0
+    container_name: pebble
+    restart: unless-stopped                      # required: saving settings restarts the service
+    ports:
+      - "8080:8080"                              # host:container – container side must match LISTEN
+    environment:
+      # TZ: Europe/Berlin                        # time zone for appointments, reminders, backups (default UTC)
+      PUID: "1000"                               # owner of all data on the host (id -u) – default, keeps environment valid
+      PGID: "1000"                               # group of all data on the host (id -g)
+      # LISTEN: 0.0.0.0:8080                     # listen address inside the container
+      # DATA_DIR: /config/data                   # databases (system.db, users/<id>/daten.db)
+      # KEY_DIR: /config/keys                    # encryption key per user – not in backups, keep a copy
+      # MEDIA_DIR: /config/medien                # recordings and images per user
+      # BACKUP_DIR: /config/backup               # backup archives
+      # PEBBLE_ENV_FILE: /config/env             # optional file with further KEY=value lines
+      # OPENAI_API_KEY: sk-...                   # fixed from here and locked in the app; else set in the app
+      # YOUTUBE_API_KEY: AIza...                 # fixed from here and locked in the app; else set in the app
+    volumes:
+      - ./config:/config                         # everything in one folder (or a Docker volume: pebble-config:/config)
+      # Own folders, e.g. on a NAS or separate disks – set the matching variable above as well:
+      # - /srv/pebble/data:/data                 # DATA_DIR: /data
+      # - /srv/pebble/keys:/keys                 # KEY_DIR: /keys
+      # - /mnt/nas/pebble-media:/media           # MEDIA_DIR: /media
+      # - /mnt/nas/pebble-backup:/backup         # BACKUP_DIR: /backup

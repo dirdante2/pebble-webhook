@@ -9,6 +9,21 @@ Version numbers X.Y.Z:
 
 Own builds show X.Y.Z.A: **A** is a local build counter (one per deployed change, starting at 1 for every new X.Y.Z); it never appears in Git or releases, so one version can collect several changes.
 
+## [4.2.0] - 2026-11-24
+
+### New
+- Docker: `PUID`/`PGID` (default 1000:1000); folders, also bind-mounted ones, get that owner, then the app drops root.
+- Docker: own paths directly under `/` allowed (e.g. `/media`).
+- `docker/compose.yaml` and Docker Hub page from `docker/README.md`.
+- Docker: restore and upload backups in the app (restart, data swapped before start, current state backed up first).
+- Docker: backup before update on the first start of a new version, then migration.
+- Command `wiederherstellen` (Docker): list backups or mark one for the next start, also when the app no longer starts.
+
+### Changed
+- Docker: fixed image tag is only `X.Y.Z`, no channel suffix.
+- Docker mode is fixed in the image (no environment variable).
+- Docker: setup wizard and settings without automatic update.
+
 ## [4.1.0] - 2026-11-24
 
 ### New

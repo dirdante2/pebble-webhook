@@ -43,6 +43,14 @@ func safeDir(p string) error {
 		return fmt.Errorf("%s ist kein absoluter Pfad", p)
 	}
 	clean := filepath.Clean(p)
+	if InDocker() && strings.Count(clean, "/") == 1 {
+		// Im Container sind Ordner direkt unter / üblich (eigene Volumes wie /medien) – nur keine Systemordner.
+		switch clean {
+		case "/", "/bin", "/config", "/dev", "/etc", "/home", "/lib", "/proc", "/root", "/run", "/sbin", "/sys", "/tmp", "/usr", "/var":
+			return fmt.Errorf("%s ist ein Systemordner", clean)
+		}
+		return nil
+	}
 	if strings.Count(clean, "/") < 2 {
 		return fmt.Errorf("%s liegt zu weit oben im Dateisystem", clean)
 	}
@@ -64,6 +72,11 @@ func EnsureDirs(b Bootstrap) ([]string, error) {
 	}
 	uid, _ := strconv.Atoi(u.Uid)
 	gid, _ := strconv.Atoi(u.Gid)
+	return EnsureDirsFor(b, uid, gid)
+}
+
+// EnsureDirsFor wie EnsureDirs, aber für eine feste uid:gid (Docker: PUID/PGID, ohne Nutzer in /etc/passwd).
+func EnsureDirsFor(b Bootstrap, uid, gid int) ([]string, error) {
 	var report []string
 	var errs []error
 	for _, d := range b.Dirs() {

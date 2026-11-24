@@ -30,30 +30,72 @@ Running the installer again updates the program; database, settings and env file
 
 Every release is also published as a Docker image for amd64 and arm64: `dirdante/pebble-index-webapp` on Docker Hub.
 
+Ready-made [compose.yaml](../docker/compose.yaml) – every variable and own folder is in it, commented out; remove the `#` to use one:
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/dirdante2/pebble-webhook/main/docker/compose.yaml
+docker compose up -d && docker compose logs pebble
+```
+
 ```yaml
 services:
   pebble:
-    image: dirdante/pebble-index-webapp:stable
-    restart: unless-stopped        # required: saving settings restarts the service
+    image: dirdante/pebble-index-webapp:stable   # stable, beta, nightly or a fixed version like 4.1.0
+    container_name: pebble
+    restart: unless-stopped                      # required: saving settings restarts the service
     ports:
-      - "8080:8080"
+      - "8080:8080"                              # host:container – container side must match LISTEN
     environment:
-      TZ: Europe/Berlin
-      OPENAI_API_KEY: sk-…           # optional, see below
-      # MEDIA_DIR: /medien           # optional own paths, e.g. a NAS share
-      # BACKUP_DIR: /backup
+      # TZ: Europe/Berlin                        # time zone for appointments, reminders, backups (default UTC)
+      PUID: "1000"                               # owner of all data on the host (id -u) – default, keeps environment valid
+      PGID: "1000"                               # group of all data on the host (id -g)
+      # LISTEN: 0.0.0.0:8080                     # listen address inside the container
+      # DATA_DIR: /config/data                   # databases (system.db, users/<id>/daten.db)
+      # KEY_DIR: /config/keys                    # encryption key per user – not in backups, keep a copy
+      # MEDIA_DIR: /config/medien                # recordings and images per user
+      # BACKUP_DIR: /config/backup               # backup archives
+      # PEBBLE_ENV_FILE: /config/env             # optional file with further KEY=value lines
+      # OPENAI_API_KEY: sk-...                   # fixed from here and locked in the app; else set in the app
+      # YOUTUBE_API_KEY: AIza...                 # fixed from here and locked in the app; else set in the app
     volumes:
-      - pebble-config:/config
-volumes:
-  pebble-config:
+      - ./config:/config                         # everything in one folder (or a Docker volume: pebble-config:/config)
+      # Own folders, e.g. on a NAS or separate disks – set the matching variable above as well:
+      # - /srv/pebble/data:/data                 # DATA_DIR: /data
+      # - /srv/pebble/keys:/keys                 # KEY_DIR: /keys
+      # - /mnt/nas/pebble-media:/media           # MEDIA_DIR: /media
+      # - /mnt/nas/pebble-backup:/backup         # BACKUP_DIR: /backup
 ```
 
-- **`/config`** holds everything else: databases (`/config/data`), keys (`/config/keys`), media (`/config/medien`), backups (`/config/backup`) and an optional env file `/config/env`.
-- **Paths** come from the environment: `DATA_DIR`, `KEY_DIR`, `MEDIA_DIR`, `BACKUP_DIR`, `LISTEN`. The container runs as uid 65532; bind-mounted folders must be writable for it (`chown -R 65532:65532 <dir>`).
+All variables at a glance (all optional):
+
+| Variable | Default | Holds / does |
+|---|---|---|
+| `DATA_DIR` | `/config/data` | databases: `system.db` and `users/<id>/daten.db` |
+| `KEY_DIR` | `/config/keys` | encryption key per user (never in backups – keep it safe) |
+| `MEDIA_DIR` | `/config/medien` | recordings and images per user (`<id>/audio`, `<id>/bilder`) |
+| `BACKUP_DIR` | `/config/backup` | backup archives |
+| `PEBBLE_ENV_FILE` | `/config/env` | optional file with further `KEY=value` lines |
+| `LISTEN` | `0.0.0.0:8080` | listen address in the container (port must match `ports`) |
+| `PUID` / `PGID` | `1000` / `1000` | owner and group of all data on the host |
+| `TZ` | `UTC` | time zone for appointments, reminders and backups |
+| `OPENAI_API_KEY` | – | wins over the web app and is locked there |
+| `YOUTUBE_API_KEY` | – | wins over the web app and is locked there |
+
+- **One folder:** without own paths everything lives in `/config` (data, keys, media, backups, env file). Own folders: mount them and set the matching variable, e.g. `/mnt/nas/pebble-media:/media` with `MEDIA_DIR: /media`.
+- **User and group:** the container starts as root, sets owner and modes of `/config` and all data folders (also bind-mounted host folders) to `PUID:PGID` and then runs as that user. `1000:1000` is the first user on most Linux systems; check yours with `id`. With `docker run --user` it never runs as root; then the folders must already be writable for that user.
 - **API keys** (`OPENAI_API_KEY`, `YOUTUBE_API_KEY`) set in the environment always win over the web app and are locked there. Without them, enter the keys in the setup wizard as usual. The same applies to the systemd installation (`/etc/pebble-webhook/env`).
 - **Setup wizard:** the link is in the log (`docker compose logs pebble`).
-- **Updates:** the app shows new versions and the `docker pull` command, but installs nothing itself. Update with `docker compose pull && docker compose up -d`. The tag decides the channel – see [updates](updates.md#docker).
-- **Restore a backup:** stop the container, unpack the archive (`tar -xzf <backup> -C <dir>`), copy `system.db` and `users/` into `DATA_DIR` (remove the old ones first) and `medien/` into `MEDIA_DIR`, then start the image of the version named in the backup (`meta.json`).
+- **Updates:** the app shows new versions and the `docker pull` command, but installs nothing itself. Update with `docker compose pull && docker compose up -d`. The tag decides the channel – see [updates](updates.md#docker). When a different version starts than last time, it first makes a backup *before update* of the data (without recordings, kept 30 days), then brings databases and user data up to date by itself.
+- **Restore a backup:** in the web app under Backups, as usual (also *Upload backup*). The container restarts and brings the data back before it opens them; the current state is backed up first. The version stays that of the image – a backup from a newer version needs that version's image first.
+- **Back to an older version:** set the image to the old version, then mark the backup made before the update and start:
+
+  ```bash
+  docker compose run --rm pebble wiederherstellen            # list backups
+  docker compose run --rm pebble wiederherstellen pebble-4.1.0-stable-20261124-120000-update.tar.gz
+  docker compose up -d
+  ```
+
+  This also works when the app no longer starts.
 
 ## Storage: own mounts (recommended)
 

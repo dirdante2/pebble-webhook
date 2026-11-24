@@ -53,11 +53,14 @@ func LoadSettings(db *store.System, boot config.Bootstrap) (*config.Config, erro
 	return config.FromValues(boot, func(k string) string { return values[k] })
 }
 
-// restartSoon beendet den Dienst kurz nach der Antwort; systemd (Restart=always) startet ihn neu.
-func restartSoon() {
+// restartSoon beendet den Dienst kurz nach der Antwort; systemd (Restart=always) bzw. Docker (restart: unless-stopped)
+// startet ihn neu.
+func restartSoon() { restartSoonFor("Einstellungen gespeichert") }
+
+func restartSoonFor(reason string) {
 	go func() {
 		time.Sleep(800 * time.Millisecond)
-		log.Printf("Einstellungen gespeichert: Neustart")
+		log.Printf("%s: Neustart", reason)
 		syscall.Kill(os.Getpid(), syscall.SIGTERM)
 	}()
 }
@@ -77,7 +80,7 @@ func inScope(f config.Field, scope int) bool {
 func settingsView(values map[string]string, generate bool, scope int) []map[string]any {
 	out := make([]map[string]any, 0, len(config.Fields))
 	for _, f := range config.Fields {
-		if !inScope(f, scope) {
+		if !inScope(f, scope) || dockerHidden(f.Key) {
 			continue
 		}
 		v, set := values[f.Key]
@@ -102,6 +105,11 @@ func settingsView(values map[string]string, generate bool, scope int) []map[stri
 		out = append(out, m)
 	}
 	return out
+}
+
+// dockerHidden: Felder ohne Wirkung im Container (kein Updater) – im Assistenten und in den Einstellungen nicht zeigen.
+func dockerHidden(key string) bool {
+	return inDocker() && (key == "AUTO_UPDATE" || key == "AUTO_UPDATE_TIME")
 }
 
 // mergeSettings übernimmt die eingegebenen Werte: nur bekannte Schlüssel; ein leeres Geheimnis behält den alten Wert.

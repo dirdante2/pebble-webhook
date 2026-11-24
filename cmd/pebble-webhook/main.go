@@ -53,6 +53,9 @@ const usage = `pebble-webhook <Befehl>
   verzeichnisse
             Ordner (DATA_DIR, DATA_DIR/users, MEDIA_DIR, BACKUP_DIR, KEY_DIR) anlegen und Besitzer/Rechte richten
             (als root; vor jedem Start durch systemd und beim Installieren); ohne root nur prüfen
+  wiederherstellen [Backup]
+            nur im Docker-Container: ohne Argument die Backups auflisten, sonst das Backup aus BACKUP_DIR zum Einspielen
+            beim nächsten Start vormerken (danach Container neu starten; geht auch, wenn die App nicht mehr startet)
   healthcheck
             /healthz des laufenden Dienstes abfragen (Exit 0 = antwortet; HEALTHCHECK im Docker-Image)
   version   Version ausgeben
@@ -73,6 +76,7 @@ func main() {
 	if len(os.Args) > 1 {
 		cmd = os.Args[1]
 	}
+	fail(dockerUser(cmd == "serve" || cmd == "verzeichnisse"))
 	switch cmd {
 	case "serve":
 		fail(serve())
@@ -110,6 +114,8 @@ func main() {
 		fail(dirs())
 	case "healthcheck":
 		fail(healthcheck())
+	case "wiederherstellen":
+		fail(restore())
 	case "version":
 		fmt.Println(version)
 	case "schema":
@@ -159,6 +165,96 @@ func healthcheck() error {
 	if resp.StatusCode != 200 {
 		return fmt.Errorf("/healthz antwortet %d", resp.StatusCode)
 	}
+	return nil
+}
+
+// dockerUser: das Docker-Image startet als root. Dann bekommen die Ordner Besitzer PUID:PGID (Vorgabe 1000:1000, wie der
+// erste Nutzer der meisten Linux-Systeme – so passen eingebundene Host-Ordner), danach gibt der Prozess root ab.
+// Gilt für jeden Befehl, auch per docker exec, damit nie Dateien root gehören. Ordner richten nur serve/verzeichnisse.
+// Mit docker run --user läuft der Prozess gar nicht als root; dann prüft der Start nur, ob alles schreibbar ist.
+func dockerUser(fixDirs bool) error {
+	if !config.InDocker() || os.Geteuid() != 0 {
+		return nil
+	}
+	id := func(k string) (int, error) {
+		v := strings.TrimSpace(os.Getenv(k))
+		if v == "" {
+			return 1000, nil
+		}
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 0 {
+			return 0, fmt.Errorf("%s=%q ist keine Nutzer- bzw. Gruppen-Id", k, v)
+		}
+		return n, nil
+	}
+	uid, err := id("PUID")
+	if err != nil {
+		return err
+	}
+	gid, err := id("PGID")
+	if err != nil {
+		return err
+	}
+	if fixDirs {
+		boot, err := loadBoot()
+		if err != nil {
+			return err
+		}
+		// Der Ordner der env-Datei (/config) selbst: muss durchsuchbar sein, auch wenn er vom Host eingebunden ist.
+		if dir := filepath.Dir(os.Getenv("PEBBLE_ENV_FILE")); dir != "/" && dir != "." {
+			if err := os.MkdirAll(dir, 0o750); err == nil {
+				os.Lchown(dir, uid, gid)
+				os.Lchown(os.Getenv("PEBBLE_ENV_FILE"), uid, gid)
+			}
+		}
+		report, err := config.EnsureDirsFor(boot, uid, gid)
+		for _, r := range report {
+			log.Printf("Ordner: %s", r)
+		}
+		if err != nil {
+			return err
+		}
+	}
+	if uid == 0 {
+		return nil // ausdrücklich PUID=0: bleibt root
+	}
+	if err := syscall.Setgroups(nil); err != nil {
+		return fmt.Errorf("Gruppen abgeben: %w", err)
+	}
+	if err := syscall.Setgid(gid); err != nil {
+		return fmt.Errorf("Gruppe %d: %w", gid, err)
+	}
+	if err := syscall.Setuid(uid); err != nil {
+		return fmt.Errorf("Nutzer %d: %w", uid, err)
+	}
+	return nil
+}
+
+// restore: Docker-Notfallweg zum Wiederherstellen ohne Web-App (z. B. zurück auf ein älteres Image).
+func restore() error {
+	if !config.InDocker() {
+		return fmt.Errorf("nur im Docker-Container – sonst in der Web-App oder mit install.sh wiederherstellen")
+	}
+	boot, err := loadBoot()
+	if err != nil {
+		return err
+	}
+	if len(os.Args) < 3 {
+		list := app.BackupList(boot)
+		if len(list) == 0 {
+			fmt.Println("Keine Backups in", boot.BackupDir)
+			return nil
+		}
+		fmt.Println("Backups in", boot.BackupDir, "(neueste zuerst):")
+		for _, l := range list {
+			fmt.Println("  " + l)
+		}
+		return nil
+	}
+	if err := app.RequestRestore(boot, os.Args[2]); err != nil {
+		return err
+	}
+	fmt.Println("Vorgemerkt – Container neu starten (docker compose up -d bzw. docker restart <name>); der Start spielt das Backup ein und sichert vorher den jetzigen Stand.")
 	return nil
 }
 
@@ -260,6 +356,19 @@ func closeAll(sys *app.System) {
 }
 
 func serve() error {
+	if config.InDocker() {
+		boot, err := loadBoot()
+		if err != nil {
+			return err
+		}
+		if err := config.CheckDirs(boot); err != nil {
+			return err
+		}
+		// Vorgemerktes Wiederherstellen, Backup vor einer neuen Version – vor dem Öffnen und Migrieren der Daten.
+		if err := app.DockerStart(boot, version); err != nil {
+			return err
+		}
+	}
 	boot, db, err := openDB()
 	if err != nil {
 		return err

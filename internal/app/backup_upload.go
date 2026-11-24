@@ -36,7 +36,7 @@ func (a *System) handleBackupUpload(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "ungueltig", "Dateiname passt nicht zu einem Backup (pebble-<version>-<kanal>-<zeit>-<art>.tar.gz)")
 		return
 	}
-	if !updateInstallable() {
+	if !updateInstallable() && !inDocker() {
 		writeErr(w, http.StatusConflict, "nicht_moeglich", noUpdater())
 		return
 	}

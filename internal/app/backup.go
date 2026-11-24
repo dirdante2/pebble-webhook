@@ -19,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	"pebble-webhook/internal/config"
 	"pebble-webhook/internal/i18n"
 	"pebble-webhook/internal/schluessel"
 )
@@ -130,14 +131,23 @@ func (a *System) backups() []backupEntry {
 
 // createBackup schreibt ein Archiv nach BACKUP_DIR (erst unter .tmp-Namen, dann umbenannt).
 func (a *System) createBackup(kind string, audio bool) (backupEntry, error) {
+	return makeBackup(a.bootstrap(), a.Version, a.installedChannel(), kind, audio, a.snapshot)
+}
+
+func (a *System) bootstrap() config.Bootstrap {
+	return config.Bootstrap{Listen: a.Cfg.Listen, DataDir: a.Cfg.DataDir, MediaDir: a.Cfg.MediaDir, BackupDir: a.Cfg.BackupDir, KeyDir: a.Cfg.KeyDir}
+}
+
+// makeBackup: gemeinsamer Teil für laufende App und Start im Container – snap legt die Datenbank-Kopien in ein
+// Arbeitsverzeichnis, daraus wird das Archiv pebble-<version>-<kanal>-<zeit>-<art>[-audio].tar.gz.
+func makeBackup(b config.Bootstrap, build, channel, kind string, audio bool, snap func(dir string) ([]backupUser, error)) (backupEntry, error) {
 	backupMu.Lock()
 	defer backupMu.Unlock()
 	now := time.Now()
-	ver := strings.Fields(a.Version + " ")[0]
+	ver := strings.Fields(build + " ")[0]
 	if ver == "" {
 		ver = "unbekannt"
 	}
-	channel := a.installedChannel()
 	name := fmt.Sprintf("pebble-%s-%s-%s-%s", ver, channel, now.Format("20060102-150405"), kind)
 	if audio {
 		name += "-audio"
@@ -146,23 +156,23 @@ func (a *System) createBackup(kind string, audio bool) (backupEntry, error) {
 	if !archiveNameRe.MatchString(name) {
 		return backupEntry{}, i18n.Errorf("Backup-Name ungültig: %s", name)
 	}
-	if err := os.MkdirAll(a.Cfg.BackupDir, 0o750); err != nil {
-		return backupEntry{}, i18n.Errorf("Backup-Ordner %s nicht anlegbar: %v", a.Cfg.BackupDir, err)
+	if err := os.MkdirAll(b.BackupDir, 0o750); err != nil {
+		return backupEntry{}, i18n.Errorf("Backup-Ordner %s nicht anlegbar: %v", b.BackupDir, err)
 	}
-	snap := filepath.Join(a.Cfg.BackupDir, ".snapshot-"+now.Format("20060102-150405"))
-	os.RemoveAll(snap)
-	defer os.RemoveAll(snap)
-	users, err := a.snapshot(snap)
+	snapDir := filepath.Join(b.BackupDir, ".snapshot-"+now.Format("20060102-150405"))
+	os.RemoveAll(snapDir)
+	defer os.RemoveAll(snapDir)
+	users, err := snap(snapDir)
 	if err != nil {
 		return backupEntry{}, i18n.Errorf("Datenbank-Kopie fehlgeschlagen: %v", err)
 	}
-	tmp := filepath.Join(a.Cfg.BackupDir, "."+name+".tmp")
-	if err := a.writeArchive(tmp, snap, backupMeta{Format: 3, Users: users, Version: ver, Build: a.Version, Channel: channel,
-		Created: now.Format(time.RFC3339), Kind: kind, Audio: audio, DataDir: a.Cfg.DataDir, MediaDir: a.Cfg.MediaDir}); err != nil {
+	tmp := filepath.Join(b.BackupDir, "."+name+".tmp")
+	if err := writeArchive(b, tmp, snapDir, backupMeta{Format: 3, Users: users, Version: ver, Build: build, Channel: channel,
+		Created: now.Format(time.RFC3339), Kind: kind, Audio: audio, DataDir: b.DataDir, MediaDir: b.MediaDir}); err != nil {
 		os.Remove(tmp)
 		return backupEntry{}, i18n.Errorf("Backup nicht schreibbar: %v", err)
 	}
-	final := filepath.Join(a.Cfg.BackupDir, name)
+	final := filepath.Join(b.BackupDir, name)
 	if err := os.Rename(tmp, final); err != nil {
 		os.Remove(tmp)
 		return backupEntry{}, err
@@ -233,7 +243,7 @@ func copyIfExists(src, dst string) error {
 }
 
 // writeArchive packt meta.json, env, die Kopien aus snapDir und (mit Audio) die verschlüsselten Aufnahmen.
-func (a *System) writeArchive(path, snapDir string, meta backupMeta) (err error) {
+func writeArchive(b config.Bootstrap, path, snapDir string, meta backupMeta) (err error) {
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o640)
 	if err != nil {
 		return err
@@ -273,7 +283,7 @@ func (a *System) writeArchive(path, snapDir string, meta backupMeta) (err error)
 		return err
 	}
 	env := fmt.Sprintf("# Startwerte zum Zeitpunkt des Backups (/etc/pebble-webhook/env)\nLISTEN=%s\nDATA_DIR=%s\nMEDIA_DIR=%s\nBACKUP_DIR=%s\n",
-		a.Cfg.Listen, a.Cfg.DataDir, a.Cfg.MediaDir, a.Cfg.BackupDir)
+		b.Listen, b.DataDir, b.MediaDir, b.BackupDir)
 	if err := addBytes("env", []byte(env)); err != nil {
 		return err
 	}
@@ -295,7 +305,7 @@ func (a *System) writeArchive(path, snapDir string, meta backupMeta) (err error)
 		// alten Ort) bleiben draußen, bis der Umzug sie verschlüsselt hat.
 		skipped := 0
 		for _, u := range meta.Users {
-			root := filepath.Join(a.Cfg.MediaDir, strconv.FormatInt(u.ID, 10))
+			root := filepath.Join(b.MediaDir, strconv.FormatInt(u.ID, 10))
 			err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 				if errors.Is(err, fs.ErrNotExist) {
 					return nil
@@ -307,7 +317,7 @@ func (a *System) writeArchive(path, snapDir string, meta backupMeta) (err error)
 					skipped++
 					return nil
 				}
-				rel, err := filepath.Rel(a.Cfg.MediaDir, p)
+				rel, err := filepath.Rel(b.MediaDir, p)
 				if err != nil {
 					return err
 				}
@@ -582,7 +592,7 @@ func (a *System) handleUpdateRestore(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "ungueltig", "Backup fehlt")
 		return
 	}
-	if !updateInstallable() {
+	if !updateInstallable() && !inDocker() {
 		writeErr(w, http.StatusConflict, "nicht_moeglich", noUpdater())
 		return
 	}
@@ -602,8 +612,15 @@ func (a *System) handleUpdateRestore(w http.ResponseWriter, r *http.Request) {
 }
 
 // requestRestore stößt das Einspielen eines Backups über den Updater an (install.sh: Daten ersetzen, Version aus dem
-// Backup installieren).
+// Backup installieren). Im Docker-Container: vormerken und neu starten; der Start spielt es ein (DockerStart).
 func (a *System) requestRestore(name string) error {
+	if inDocker() {
+		if err := RequestRestore(a.bootstrap(), name); err != nil {
+			return err
+		}
+		restartSoonFor("Wiederherstellen vorgemerkt")
+		return nil
+	}
 	repo := a.Cfg.UpdateRepo
 	if repo == "" {
 		repo = "-"

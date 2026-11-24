@@ -3847,8 +3847,10 @@ async function zeigeUpdate(teil) {
     // Neueste Version des gewählten Kanals, die später als die installierte erschienen ist: eigene Karte über „Installiert“.
     const neu = liste.find((r) => r.neu);
     // Docker: kein Installieren aus der App – der Pull-Befehl der neuen Version zum Kopieren.
-    const pull = (v) => `docker pull ${u.docker.image || '<image>'}:${v}`;
-    const pullBlock = u.docker && neu ? T`<code class="kopierbar">${esc(pull(neu.version))}</code><div class="leiste"><button class="btn klein" data-pull="${esc(neu.version)}">Kopieren</button></div>` : '';
+    // Image-Tag = Version ohne Kanal (eine Version ist in jedem Kanal derselbe Code)
+    const tag = (v) => String(v).replace(/-.*$/, '');
+    const pull = (v) => `docker pull ${u.docker.image || '<image>'}:${tag(v)}`;
+    const pullBlock = u.docker && neu ? T`<code class="kopierbar">${esc(pull(neu.version))}</code><div class="leiste"><button class="btn klein" data-pull="${esc(tag(neu.version))}">Kopieren</button></div>` : '';
     const neuKarte = neu ? T`<div class="karte versionzeile neuekarte"><div class="versionkopf"><span class="leise">${updateSymbol} ${tx('Neue Version verfügbar')}</span><span class="versionzeile1"><span class="badge neutral">${esc(tx(neu.kanal))}</span><strong class="versiongross">${esc(versionNr(neu.version))}</strong></span><span class="leise">${esc(zeitText(neu.veroeffentlicht) || neu.datum || '')}</span></div>
         <div class="versionknoepfe"><button class="btn klein" data-log="${esc(neu.version)}">Änderungen</button>${u.installierbar ? T`<button class="btn klein haupt" data-installieren="${esc(neu.version)}"${laeuft ? ' disabled' : ''}>Installieren</button>` : ''}</div>${pullBlock}</div>` : '';
     const updates = T`${neuKarte}<div class="karte versionzeile aktuell"><div class="versionkopf"><span class="leise">Installiert</span><span class="versionzeile1"><span class="badge neutral">${esc(tx(u.aktuell_kanal || ''))}</span><strong class="versiongross">${esc(versionNr(u.aktuell))}</strong></span>${versionZeit(u.aktuell) ? T`<span class="leise">${esc(versionZeit(u.aktuell))}</span>` : ''}</div>
@@ -3883,18 +3885,18 @@ async function zeigeUpdate(teil) {
         ${konf(tx('Ordner'), esc(b.ordner || ''), '')}</div>
       <p class="leise">${b.plan === 'aus' ? tx('Aus – Backups nur von Hand und vor Updates.') : tx('Backups vor Updates bleiben 30 Tage.')} ${u.docker ? tx('Den Ordner legt die Umgebungsvariable BACKUP_DIR des Containers fest.') : tx('Den Ordner legt der Startwert BACKUP_DIR in /etc/pebble-webhook/env fest; danach install.sh erneut ausführen.')}</p>
       ${letzt ? (letzt[2] === 'ok' ? T`<p class="leise">${esc(tx('Letzter Lauf: {0}', letzt[1]))}</p>` : T`<div class="hinweis schlecht">${esc(tx('Letztes geplantes Backup fehlgeschlagen ({0}): {1}', letzt[1], letzt[3]))}</div>`) : ''}
-      <div class="leiste"><button class="btn haupt" data-sichern="1">Jetzt sichern</button>${u.installierbar ? T('<a class="btn" href="/status/backups/hochladen">Backup hochladen</a>') : ''}</div>
+      <div class="leiste"><button class="btn haupt" data-sichern="1">Jetzt sichern</button>${u.installierbar || u.docker ? T('<a class="btn" href="/status/backups/hochladen">Backup hochladen</a>') : ''}</div>
       <h2>Backups</h2>
       ${(u.backups || []).length ? T`<p class="backupsumme"><strong>${u.backups.length}</strong> Backups · <strong>${groesse(u.backups.reduce((n, st) => n + (st.groesse || 0), 0))}</strong> belegt</p>` : ''}
       ${(u.backups || []).length > 10 ? T`<div class="leiste"><button class="btn gefahr" data-prune="${u.backups.length - 10}" data-groesse="${u.backups.slice(10).reduce((n, st) => n + (st.groesse || 0), 0)}"${laeuft ? ' disabled' : ''}>${tx('{0} Backups löschen, die 10 neuesten bleiben', u.backups.length - 10)}</button></div>` : ''}
       <p class="leise">Jedes Backup enthält Datenbank mit allen Einstellungen, Version und Kanal. Wiederherstellen spielt die Daten ein und installiert die Version aus dem Backup; was seitdem dazukam, fehlt danach. Der jetzige Stand wird vorher gesichert.</p>
-      ${u.docker ? T('<div class="hinweis">Docker: Wiederherstellen geht nicht aus der App – Anleitung in der Installationsdoku, Abschnitt Docker.</div>') : ''}
+      ${u.docker ? T('<div class="hinweis">Docker: Wiederherstellen spielt die Daten ein und startet den Container neu; die Version bleibt die des Images. Ein Backup einer neueren Version braucht erst das Image dieser Version.</div>') : ''}
       ${(u.backups || []).length ? u.backups.map((st) => T`<div class="karte backupzeile"><div class="backupinfo">
           <span class="versionzeile1">${st.kanal ? T`<span class="badge neutral">${esc(tx(st.kanal))}</span>` : ''}<strong>${esc(versionNr(st.version))}</strong></span>
           <span class="leise backupzeit">${esc(new Date(st.zeit).toLocaleString(LOCALE, { day: '2-digit', month: '2-digit', year: new Date(st.zeit).getFullYear() === new Date().getFullYear() ? undefined : '2-digit', hour: '2-digit', minute: '2-digit' }))} · ${esc(ART[st.art] || st.art)}${st.audio ? T` · mit Aufnahmen` : ''}</span></div>
         <div class="backupknoepfe">${st.groesse ? T`<span class="leise backupgroesse">${groesse(st.groesse)}</span>` : ''}
           ${st.alt ? '<span class="symbolplatz"></span>' : T`<a class="btn klein rund symbol" href="/api/backups/${encodeURIComponent(st.name)}" download aria-label="${esc(tx('Herunterladen'))}" title="${esc(tx('Herunterladen'))}">${SYM_LADEN}</a>`}
-          ${st.wiederherstellbar ? (u.installierbar ? T`<button class="btn klein rund symbol" data-restore="${esc(st.name)}" data-version="${esc(versionNr(st.version))}" aria-label="${esc(tx('Wiederherstellen'))}" title="${esc(tx('Wiederherstellen'))}"${laeuft ? ' disabled' : ''}>${SYM_ZURUECK}</button>` : '')
+          ${st.wiederherstellbar ? (u.installierbar || (u.docker && !st.alt) ? T`<button class="btn klein rund symbol" data-restore="${esc(st.name)}" data-version="${esc(versionNr(st.version))}" aria-label="${esc(tx('Wiederherstellen'))}" title="${esc(tx('Wiederherstellen'))}"${laeuft ? ' disabled' : ''}>${SYM_ZURUECK}</button>` : '')
     : T('<span class="leise">unvollständig</span>')}
           <button class="btn klein rund symbol gefahr" data-loeschen="${esc(st.name)}" data-version="${esc(versionNr(st.version))}" aria-label="${esc(tx('Löschen'))}" title="${esc(tx('Löschen'))}"${laeuft ? ' disabled' : ''}>${ICON_MUELL}</button></div></div>`).join('') : T('<p class="leise">Noch keine Backups.</p>')}`;
     seite.innerHTML = kopf + (reiter === 'backups' ? backups : updates);
@@ -3955,7 +3957,10 @@ async function zeigeUpdate(teil) {
         return laden(false);
       }
       if (b.dataset.restore) {
-        if (!confirm(tx('Backup von Version {0} wiederherstellen? Daten und Einstellungen werden ersetzt, die Version aus dem Backup wird installiert; was seitdem dazukam, fehlt danach. Der jetzige Stand wird vorher gesichert.', b.dataset.version))) { b.disabled = false; return; }
+        const frage = u.docker
+          ? tx('Backup von Version {0} wiederherstellen? Daten und Einstellungen werden ersetzt, der Container startet neu; was seitdem dazukam, fehlt danach. Der jetzige Stand wird vorher gesichert.', b.dataset.version)
+          : tx('Backup von Version {0} wiederherstellen? Daten und Einstellungen werden ersetzt, die Version aus dem Backup wird installiert; was seitdem dazukam, fehlt danach. Der jetzige Stand wird vorher gesichert.', b.dataset.version);
+        if (!confirm(frage)) { b.disabled = false; return; }
         await api('/api/update/zurueck', { method: 'POST', body: { name: b.dataset.restore } });
         melde(tx('Wiederherstellen angestoßen'));
         return warte((s) => (s.status || '').startsWith('done'));
@@ -3978,7 +3983,7 @@ async function zeigeUpdate(teil) {
 // und spielt sie danach sofort ein, samt der Version aus dem Backup.
 async function zeigeBackupHochladen() {
   seite.innerHTML = T`${krumen([[tx('Backups'), '/status/backups'], [tx('Hochladen')]])}<h1>Backup hochladen</h1>
-    <p class="leise">Nur eine unveränderte Datei aus „Herunterladen“ (pebble-….tar.gz). Sie wird geprüft, abgelegt und sofort eingespielt: Daten und Einstellungen werden ersetzt, die Version aus dem Backup wird installiert. Der jetzige Stand wird vorher gesichert.</p>
+    <p class="leise">Nur eine unveränderte Datei aus „Herunterladen“ (pebble-….tar.gz). Sie wird geprüft, abgelegt und sofort eingespielt: Daten und Einstellungen werden ersetzt, die Version aus dem Backup wird installiert (im Docker-Container bleibt die des Images, er startet neu). Der jetzige Stand wird vorher gesichert.</p>
     <form id="hochladen" class="karte"><label for="backupdatei">Backup-Datei</label>
       <input type="file" id="backupdatei" accept=".tar.gz,.gz,application/gzip" required>
       <p class="leise" id="hochladenstand" aria-live="polite"></p>
