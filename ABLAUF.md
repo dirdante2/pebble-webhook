@@ -388,11 +388,11 @@ Token-Routen (alles andere bleibt bei der Passkey-Sitzung, kein Löschen): `GET 
 
 ## Docker-Image (seit 24.11.2026)
 
-1. `deploy/release.sh <kanal>` → Tag `vX.Y.Z-<kanal>` → Workflow baut Binaries → `Dockerfile` packt `out/pebble-webhook-linux-<arch>` (ein Build, amd64+arm64) → Push fester Tag `X.Y.Z` (ohne Kanal; Kanal im Label `org.opencontainers.image.version`).
+1. `deploy/release.sh <kanal>` → Tag `vX.Y.Z-<kanal>` → Workflow baut Binaries → `docker/Dockerfile` (Ignore-Datei `docker/Dockerfile.dockerignore`) packt `out/pebble-webhook-linux-<arch>` (ein Build, amd64+arm64) → Push fester Tag `X.Y.Z` (ohne Kanal; Kanal im Label `org.opencontainers.image.version`).
 2. Gleitende Tags umhängen ohne Neubau, wenn neue Version ≥ dort hängende: nightly → `nightly`; beta → `beta`, `nightly`; stable → `stable`, `latest`, `X.Y`, `X`, `beta`, `nightly`.
 3. Container (Markierungsdatei `/etc/pebble-webhook-docker` mit Image-Namen, keine env): Assistent/Einstellungen ohne `AUTO_UPDATE*`; `/api/update` liefert `docker.image`, `installierbar=false` → Seite zeigt `docker pull`; Install/Restore/Upload/Auto-Update → 409.
 4. Start als root: `/config`, Datei `/config/env` und Datenordner → Besitzer `PUID:PGID` (Vorgabe 1000:1000), dann Rechte abgeben (jeder Befehl, auch `docker exec`); mit `--user` nur Prüfen. Einrichtungslink im Log; Speichern beendet den Prozess → `restart: unless-stopped` startet neu.
 5. Einstellungen: `OPENAI_API_KEY`/`YOUTUBE_API_KEY` aus env gehen der DB vor (`config.EnvLocked`), in der App gesperrt, nie gespeichert.
 6. Start (`serve`, vor dem Öffnen der Daten, `app.DockerStart`): `DATA_DIR/restore-request` da → Backup prüfen (Name, Form, Schema ≤ Programm) → entpacken → jetzigen Stand offline sichern (`update`) → `system.db`/`users/` ersetzen, Medien dazu → Status `done restore …` (Fehler: `error: restore …`, Start läuft weiter). Sonst: `DATA_DIR/docker-version` ≠ Version und Daten da → Offline-Backup `update` (benannt nach alter Version; Fehler bricht Start ab) → Marker schreiben → Prepare migriert.
 7. Wiederherstellen in der App (auch Upload) → `RequestRestore` (prüft, Schema neuer → Fehler „erst Image X starten“) → Vormerkung → Neustart → Schritt 6. Befehl `wiederherstellen [Backup]` (auch per `docker compose run --rm`) listet bzw. merkt vor.
-8. Docker-Hub-Seite: Push auf main mit Änderung an `docker/README.md` (oder von Hand) → Workflow `dockerhub-readme.yml` lädt Text und Kurzbeschreibung hoch.
+8. Alle Docker-Dateien liegen in `docker/`. Docker-Hub-Seite (nur Kurzbeschreibung, Installieren, Compose, GitHub-Link): Push auf main mit Änderung an `docker/README.md` (oder von Hand) → Workflow `dockerhub-readme.yml` lädt Text und Kurzbeschreibung hoch.

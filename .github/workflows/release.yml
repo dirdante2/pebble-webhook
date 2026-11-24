@@ -140,7 +140,7 @@ jobs:
           case "$V" in *-nightly) CH=nightly ;; *-beta) CH=beta ;; *) CH=stable ;; esac
           N="${V%%-*}"
           # Fester Tag nur X.Y.Z: eine Version ist dieselbe, egal in welchem Kanal (gleicher Code); der Kanal steht im Label.
-          docker buildx build --platform linux/amd64,linux/arm64 --push -t "$IMG:$N" \
+          docker buildx build -f docker/Dockerfile --platform linux/amd64,linux/arm64 --push -t "$IMG:$N" \
             --build-arg IMAGE="$IMG" \
             --label org.opencontainers.image.version="$N-$CH" \
             --label org.opencontainers.image.revision="$GITHUB_SHA" \

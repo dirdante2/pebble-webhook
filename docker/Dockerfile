@@ -1,5 +1,6 @@
 # Docker-Image der Web-App: dieselben Binaries wie die Release-Dateien (vom Workflow in out/ gebaut).
-# Lokal: Binary nach out/pebble-webhook-linux-<arch> bauen, dann docker buildx build --platform linux/<arch> .
+# Lokal (aus dem Repo-Wurzelordner): Binary nach out/pebble-webhook-linux-<arch> bauen, dann
+#   docker buildx build -f docker/Dockerfile --platform linux/<arch> .
 # Kein Updater im Container: die App zeigt neue Versionen nur an, aktualisiert wird per neuem Image.
 
 FROM busybox:1.37 AS ordner
