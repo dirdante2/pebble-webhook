@@ -40,7 +40,6 @@ In the container there is no updater: the update page shows new versions with th
 |---|---|
 | `X.Y.Z` | exactly that version (fixed; the same code in every channel) |
 | `stable`, `latest` | newest stable |
-| `X.Y`, `X` | newest stable of that minor / major line (stay on one `X` = no breaking changes) |
 | `beta` | newest beta or stable, whichever is higher |
 | `nightly` | newest of all channels |
 

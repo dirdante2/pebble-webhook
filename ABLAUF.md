@@ -389,7 +389,7 @@ Token-Routen (alles andere bleibt bei der Passkey-Sitzung, kein Löschen): `GET 
 ## Docker-Image (seit 24.11.2026)
 
 1. `deploy/release.sh <kanal>` → Tag `vX.Y.Z-<kanal>` → Workflow baut Binaries → `docker/Dockerfile` (Ignore-Datei `docker/Dockerfile.dockerignore`) packt `out/pebble-webhook-linux-<arch>` (ein Build, amd64+arm64) → Push fester Tag `X.Y.Z` (ohne Kanal; Kanal im Label `org.opencontainers.image.version`).
-2. Gleitende Tags umhängen ohne Neubau, wenn neue Version ≥ dort hängende: nightly → `nightly`; beta → `beta`, `nightly`; stable → `stable`, `latest`, `X.Y`, `X`, `beta`, `nightly`.
+2. Gleitende Tags umhängen ohne Neubau, wenn neue Version ≥ dort hängende: nightly → `nightly`; beta → `beta`, `nightly`; stable → `stable`, `latest`, `beta`, `nightly` (keine `X.Y`/`X`-Tags, Nutzer 24.11.2026).
 3. Container (Markierungsdatei `/etc/pebble-webhook-docker` mit Image-Namen, keine env): Assistent/Einstellungen ohne `AUTO_UPDATE*`; `/api/update` liefert `docker.image`, `installierbar=false` → Seite zeigt `docker pull`; Install/Restore/Upload/Auto-Update → 409.
 4. Start als root: `/config`, Datei `/config/env` und Datenordner → Besitzer `PUID:PGID` (Vorgabe 1000:1000), dann Rechte abgeben (jeder Befehl, auch `docker exec`); mit `--user` nur Prüfen. Einrichtungslink im Log; Speichern beendet den Prozess → `restart: unless-stopped` startet neu.
 5. Einstellungen: `OPENAI_API_KEY`/`YOUTUBE_API_KEY` aus env gehen der DB vor (`config.EnvLocked`), in der App gesperrt, nie gespeichert.

@@ -169,7 +169,7 @@ jobs:
           case "$CH" in
             nightly) MOVE=(nightly) ;;
             beta)    MOVE=(beta nightly) ;;
-            stable)  MOVE=(stable latest "${N%.*}" "${N%%.*}" beta nightly) ;;
+            stable)  MOVE=(stable latest beta nightly) ;;
           esac
           for t in "${MOVE[@]}"; do
             CUR="$(key_of "$t")"
