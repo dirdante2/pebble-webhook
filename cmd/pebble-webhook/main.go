@@ -41,6 +41,9 @@ const usage = `pebble-webhook <Befehl>
             alle Gedächtnis-Einträge samt Entscheidungen löschen (Beobachtungen bleiben); danach in der Web-App „Jetzt lernen“
   ersteinrichtung
             Pfad des Einrichtungsassistenten mit Einmal-Code ausgeben (nur solange nicht eingerichtet)
+  vorbereiten
+            Datenbestand bei gestopptem Dienst auf den Stand dieses Programms bringen (vom Installer vor dem Start
+            aufgerufen, ohne Zeitgrenze der Gesundheitsprüfung); --kann: nur prüfen, ob es den Befehl gibt
   version   Version ausgeben
   schema [DATEI]
             Schema-Stand ausgeben, den dieses Programm kennt – mit DATEI den einer Datenbank (für den Installer)
@@ -72,6 +75,12 @@ func main() {
 		fail(resetMemory())
 	case "ersteinrichtung":
 		fail(setupLink())
+	case "vorbereiten":
+		if len(os.Args) > 2 && os.Args[2] == "--kann" {
+			fmt.Println("ja")
+			return
+		}
+		fail(prepare())
 	case "version":
 		fmt.Println(version)
 	case "schema":
@@ -214,6 +223,15 @@ func port(listen string) string {
 		return listen[i+1:]
 	}
 	return listen
+}
+
+// prepare: Datenbank öffnen (prüft sie und führt alle Migrationsschritte aus) und wieder schließen.
+func prepare() error {
+	_, db, err := openDB()
+	if err != nil {
+		return err
+	}
+	return db.Close()
 }
 
 func setupLink() error {

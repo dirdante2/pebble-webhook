@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"compress/gzip"
 	"crypto/rand"
-	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -19,6 +18,7 @@ import (
 	"time"
 
 	"pebble-webhook/internal/i18n"
+	"pebble-webhook/internal/store"
 )
 
 // backupUploadMax: größtes hochladbares Backup (mit Aufnahmen kann es groß sein).
@@ -189,7 +189,7 @@ func checkBackupDB(r io.Reader, dir string) error {
 	if string(head) != "SQLite format 3\x00" {
 		return errors.New("pebble.db ist keine SQLite-Datenbank")
 	}
-	db, err := sql.Open("sqlite", "file:"+p+"?mode=ro&_pragma=query_only(1)")
+	db, err := store.OpenReadOnly(p, nil)
 	if err != nil {
 		return err
 	}

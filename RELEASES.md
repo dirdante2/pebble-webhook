@@ -4,6 +4,12 @@ Summarised notes for **beta** and **stable** releases. Each section lists only w
 
 A tag `vX.Y.Z-stable` (stable; before 1.33.5 `vX.Y.Z`) or `vX.Y.Z-beta` (beta) needs a section `## [X.Y.Z]` or `## [X.Y.Z-beta]` here; the release workflow uses it as the release notes.
 
+## [2.3.0] - 2026-11-24
+
+### Preparing 3.0
+- New database driver (no cgo), same database format; going back to 2.2 stays possible.
+- Installer prepares the move to multiple users with encrypted data in 3.0 – update to 2.3 first.
+
 ## [2.2.0] - 2026-11-23
 
 ### Recording and AI

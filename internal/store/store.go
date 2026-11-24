@@ -15,7 +15,6 @@ import (
 	"strings"
 	"time"
 
-	_ "modernc.org/sqlite"
 )
 
 const schema = `
@@ -235,11 +234,10 @@ func Hash(token string) string {
 }
 
 func Open(path string) (*Store, error) {
-	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(10000)&_pragma=synchronous(FULL)")
+	db, err := openSQLite(path, nil, false)
 	if err != nil {
 		return nil, err
 	}
-	db.SetMaxOpenConns(1)
 	// Beschädigte Datenbank: nicht starten (der Installer wechselt nach einem Update dann zurück).
 	var check string
 	if err := db.QueryRow("PRAGMA quick_check").Scan(&check); err != nil || check != "ok" {
@@ -314,7 +312,7 @@ func DBSchema(path string) (int, error) {
 	if _, err := os.Stat(path); err != nil {
 		return 0, err
 	}
-	db, err := sql.Open("sqlite", "file:"+path+"?mode=ro")
+	db, err := OpenReadOnly(path, nil)
 	if err != nil {
 		return 0, err
 	}
@@ -2213,7 +2211,7 @@ func (s *Store) DeleteGroup(name string) (conflict string, err error) {
 
 // Snapshot schreibt eine in sich stimmige Kopie der Datenbank nach path (VACUUM INTO; path darf nicht existieren).
 func (s *Store) Snapshot(path string) error {
-	_, err := s.DB.Exec(`VACUUM INTO ?`, path)
+	_, err := s.DB.Exec(`VACUUM INTO ?`, snapshotURI(path, nil))
 	return err
 }
 
