@@ -251,7 +251,7 @@ function diagrammHtml(m) {
       winkel = a2;
       return pfad.replace(/^<(\w+)/, `<$1 class="k${i % 8}"`);
     }).join('');
-    return T`<svg class="diagramm kreis" viewBox="0 0 120 120" role="img" aria-label="${aria}">${stuecke}</svg>
+    return T`<svg class="diagramm torte" viewBox="0 0 120 120" role="img" aria-label="${aria}">${stuecke}</svg>
       ${legende(namen.map((n, i) => [`k${i % 8}`, `${n}: ${zahl(w[i])} (${Math.round((w[i] / summe) * 100)} %)`]))}`;
   }
   if (d.typ === 'balken_quer') {
@@ -2776,16 +2776,54 @@ async function zeigeStatus() {
     };
     // Speicher: zugeklappt je Ablage Name, belegt und Balken; aufgeklappt Pfad und frei/gesamt.
     const balken = (p) => T`<meter class="balken${p.knapp ? ' knapp' : ''}" min="0" max="${p.gesamt}" value="${p.gesamt - p.frei}" aria-label="${esc(tx('{0} von {1} belegt', groesse(p.gesamt - p.frei), groesse(p.gesamt)))}"></meter>`;
+    // Eigene Ablage: ein Balken über den ganzen Mount – Akzent = eigener Anteil, grau = übrige Nutzer und Sonstiges,
+    // zusammen = belegt. SVG-Breiten statt style-Attribute (CSP).
+    const balkenEigen = (p) => {
+      const belegt = Math.max(0, p.gesamt - p.frei), anteil = (v) => (p.gesamt > 0 ? Math.min(100, (v / p.gesamt) * 100) : 0);
+      const eigen = anteil(Math.min(p.belegt || 0, belegt)), alle = anteil(belegt);
+      return T`<svg class="balken zweiteilig${p.knapp ? ' knapp' : ''}" viewBox="0 0 100 4" preserveAspectRatio="none" role="img" aria-label="${esc(tx('{0} eigene, {1} von {2} belegt', groesse(p.belegt || 0), groesse(belegt), groesse(p.gesamt)))}"><rect class="rest" width="${alle.toFixed(2)}" height="4"/><rect class="eigen" width="${eigen.toFixed(2)}" height="4"/></svg>`;
+    };
     // Aufräumen am Ende, je ein Knopf: Backups außer den 10 neuesten und App-Versionen außer der laufenden.
     // Beide Knöpfe stehen immer da; ohne Löschbares ausgegraut mit Grund (sonst sucht man den fehlenden Knopf).
     const aufraeumen = (x) => (x ? T`<div class="leiste aufraeumen">
       ${x.backups ? T`<button class="btn gefahr" data-aufraeumen="backups" data-n="${x.backups}" data-groesse="${x.backups_groesse}">${tx('{0} alte Backups löschen', x.backups)} · ${groesse(x.backups_groesse)}</button>` : T`<button class="btn" disabled>${tx('Nicht mehr als 10 Backups')}</button>`}
       ${x.versionen ? T`<button class="btn gefahr" data-aufraeumen="versionen" data-n="${x.versionen}" data-groesse="${x.versionen_groesse}">${tx('{0} alte App-Versionen löschen', x.versionen)} · ${groesse(x.versionen_groesse)}</button>` : T`<button class="btn" disabled>${tx('Keine alten App-Versionen')}</button>`}</div>` : '');
-    const speicher = (liste, x) => T`<details${aufAttr('speicher')} class="karte speicherkarte"><summary><span class="zeile kartentitel"><strong>Speicher</strong><span class="eingangszahl">${groesse(liste.reduce((n, p) => n + (p.belegt || 0), 0))}</span></span>${liste.map((p) => T`<span class="speicherzeile"><span class="zeile"><span>${esc(tx(p.name))}</span>${p.fehler ? T`<span class="schlecht">nicht lesbar</span>` : T`<span>${groesse(p.belegt)}</span>`}</span>
-        ${p.fehler ? '' : balken(p)}${p.knapp ? T('<span class="hinweis schlecht">Knapp – neue Aufnahmen werden abgewiesen.</span>') : ''}</span>`).join('')}</summary>
-      <div class="speicherdetails">${liste.map((p) => T`<div><strong>${esc(tx(p.name))}</strong>
-        <div class="pfadzeile leise"><span class="pfad">${esc(p.pfad)}</span>${p.fehler ? '' : T`<span class="frei">frei ${groesse(p.frei)} von ${groesse(p.gesamt)}</span>`}</div>
-        ${p.fehler ? T`<div class="hinweis schlecht">nicht lesbar: ${esc(p.fehler)}</div>` : ''}</div>`).join('')}${aufraeumen(x)}</div></details>`;
+    // Zugeklappt eigene Ablagen, App-Versionen, Backups und knappe/unlesbare; aufgeklappt alle mit Pfad, frei/gesamt (nicht bei eigenen: gleich wie beim Mount).
+    // Admin: Kreis je Ablage (Daten, Medien) nach Nutzer, darunter die Liste – wer belegt am meisten.
+    const nutzerName = (n) => n.name || tx('Id {0}', n.id);
+    const kreis = (titel, werte) => {
+      const summe = werte.reduce((a, b) => a + b, 0);
+      if (!summe) return T`<div class="nutzerkreis"><strong>${esc(titel)}</strong><p class="leise">leer</p></div>`;
+      let w = -Math.PI / 2;
+      const teile = werte.map((v, i) => {
+        if (!v) return '';
+        const anteil = v / summe, w2 = w + anteil * 2 * Math.PI;
+        const p = (a) => `${(60 + 55 * Math.cos(a)).toFixed(2)} ${(60 + 55 * Math.sin(a)).toFixed(2)}`;
+        const form = anteil >= 0.9999 ? `<circle class="k${i % 8}" cx="60" cy="60" r="55"/>` : `<path class="k${i % 8}" d="M60 60 L${p(w)} A55 55 0 ${anteil > 0.5 ? 1 : 0} 1 ${p(w2)} Z"/>`;
+        w = w2;
+        return form;
+      }).join('');
+      return T`<div class="nutzerkreis"><strong>${esc(titel)}</strong><svg class="diagramm torte" viewBox="0 0 120 120" role="img" aria-label="${esc(titel)}">${teile}</svg><span class="leise">${groesse(summe)}</span></div>`;
+    };
+    const nachNutzer = (liste) => {
+      if (!liste?.length) return '';
+      const prozent = (v, ges) => (ges ? `${Math.round((v / ges) * 100)} %` : '–');
+      const gd = liste.reduce((a, n) => a + n.daten, 0), gm = liste.reduce((a, n) => a + n.medien, 0);
+      return T`<div class="nachnutzer"><strong>Nach Nutzer</strong>
+        <div class="nutzerkreise">${kreis(tx('Daten'), liste.map((n) => n.daten))}${kreis(tx('Medien'), liste.map((n) => n.medien))}</div>
+        <div class="tabelle"><table class="werte"><thead><tr><th>Nutzer</th><th>Daten</th><th>Medien</th></tr></thead><tbody>
+        ${liste.map((n, i) => T`<tr><td><i class="punkt k${i % 8}"></i>${esc(nutzerName(n))}</td><td>${groesse(n.daten)} <span class="leise">${prozent(n.daten, gd)}</span></td><td>${groesse(n.medien)} <span class="leise">${prozent(n.medien, gm)}</span></td></tr>`).join('')}
+        </tbody></table></div></div>`;
+    };
+    const speicher = (liste, x, nutzer) => { const eigen = liste.filter((p) => !p.art || p.art === 'eigen'), oben = liste.filter((p) => !p.art || p.art === 'eigen' || p.art === 'system' || p.knapp || p.fehler);
+      // Kopfzahl: alles, was die App belegt – Summen aller Nutzer (Admin) bzw. die eigenen, dazu App-Versionen und Backups.
+      const alleN = liste.filter((p) => p.art === 'alle'), summe = (l) => l.reduce((n, p) => n + (p.belegt || 0), 0);
+      const gesamt = summe(alleN.length ? alleN : eigen) + summe(liste.filter((p) => p.art === 'system'));
+      return T`<details${aufAttr('speicher')} class="karte speicherkarte"><summary><span class="zeile kartentitel"><strong>Speicher</strong><span class="eingangszahl">${groesse(gesamt)}</span></span><span class="speicherraster">${oben.map((p) => T`<span class="speicherzeile"><span class="zeile"><span>${esc(tx(p.name))}</span>${p.fehler ? T`<span class="schlecht">nicht lesbar</span>` : T`<span>${groesse(p.belegt)}</span>`}</span>
+        ${p.fehler ? '' : (p.art === 'eigen' ? balkenEigen(p) : balken(p))}${p.knapp ? (p.aufnahmen ? T('<span class="hinweis schlecht">Knapp – neue Aufnahmen werden abgewiesen.</span>') : T('<span class="hinweis schlecht">Fast voll.</span>')) : ''}</span>`).join('')}</span></summary>
+      <div class="speicherdetails speicherraster">${liste.map((p) => T`<div><strong>${esc(tx(p.name))}</strong>
+        <div class="pfadzeile leise"><span class="pfad">${esc(p.pfad)}</span>${p.fehler || p.art === 'eigen' ? '' : T`<span class="frei">frei ${groesse(p.frei)} von ${groesse(p.gesamt)}</span>`}</div>
+        ${p.fehler ? T`<div class="hinweis schlecht">nicht lesbar: ${esc(p.fehler)}</div>` : ''}</div>`).join('')}${nachNutzer(nutzer)}${aufraeumen(x)}</div></details>`; };
     // System: zugeklappt Betriebssystem, CPU- und RAM-Balken; aufgeklappt Maschine, dieser Dienst und die Prozesse mit der höchsten CPU-Last.
     const system = (x) => {
       if (!x) return T('<div class="karte"><strong>System</strong> <span class="schlecht">nicht lesbar</span></div>');
@@ -2820,7 +2858,7 @@ async function zeigeStatus() {
       ${s.joplin.aktiv ? T`<dl><dt>Joplin</dt><dd>${joplin}</dd></dl>` : ''}
       ${s.joplin.aktiv ? T('<div class="leiste"><button class="btn klein" data-a="pruefen">Joplin jetzt prüfen</button></div>') : ''}
       ${eingaenge(s)}
-      ${(s.speicher || []).length ? speicher(s.speicher, s.aufraeumen) : ''}
+      ${(s.speicher || []).length ? speicher(s.speicher, s.aufraeumen, s.speicher_nutzer) : ''}
       ${system(sy)}
       ${s.probleme.length ? T`<h2>Aufträge mit Fehlern</h2>${s.fehlgeschlagen ? T('<div class="leiste"><button class="btn gefahr" data-a="fehler-weg">Alle fehlerhaften löschen</button></div>') : ''}${s.probleme.map(karte).join('')}` : ''}
       <h2>Benachrichtigungen</h2>
@@ -3081,6 +3119,20 @@ const stufeKlasse = (p) => (p >= 95 ? 'stufe95' : p >= 80 ? 'stufe80' : p >= 60 
 
 // Hinweis auf allen Seiten: erreichte Schwelle (bis bestätigt) oder geänderte Ring-ID aus dem Header.
 let ringInfo = null; // aus /api/zaehler; beim Start aus dem lokalen Speicher (siehe versionBestaetigt)
+// Speicher ab 90 % belegt: eine Karte auf jeder Seite für jeden Nutzer (nur die vollste Ablage).
+let speicherVoll = null;
+function zeigeSpeicherkarte() {
+  const karte = document.getElementById('speicherkarte');
+  const v = speicherVoll;
+  karte.hidden = !v;
+  if (!v) return;
+  const voll = v.prozent >= 99;
+  karte.classList.toggle('kritisch', voll);
+  karte.innerHTML = T`<div><strong>${esc(tx('Speicher fast voll: {0} ({1} %)', tx(v.name), v.prozent))}</strong>
+    <p class="leise">${esc(tx('Noch {0} frei von {1}. Ist er voll, können Aufnahmen, Bilder oder Backups nicht mehr gespeichert werden.', groesse(v.frei), groesse(v.gesamt)))}</p></div>
+    <a class="btn" href="/status">${esc(tx('Speicher ansehen'))}</a>`;
+}
+
 function zeigeRingkarte() {
   const karte = document.getElementById('ringkarte');
   const r = ringInfo;
@@ -4502,6 +4554,8 @@ async function ladeZaehler() {
     try { localStorage.setItem('joplin-aktiv', joplinAktiv ? '1' : '0'); } catch { /* nur Anzeige */ }
     if (z.version) { appVersion = z.version; appKanal = z.kanal || ''; try { localStorage.setItem('app-version', appVersion); localStorage.setItem('app-kanal', appKanal); } catch { /* nur Anzeige */ } }
     if (z.version_bestaetigt) { versionBestaetigt = z.version_bestaetigt; try { localStorage.setItem('version-bestaetigt', versionBestaetigt); } catch { /* nur Anzeige */ } }
+    speicherVoll = z.speicher_voll || null;
+    zeigeSpeicherkarte();
     ringInfo = z.ring || null;
     try { localStorage.setItem('ring-info', JSON.stringify(ringInfo)); } catch { /* nur Anzeige */ }
     spendenLink = /^https:\/\/ko-fi\.com\/[A-Za-z0-9_]+$/.test(z.spenden || '') ? z.spenden : '';

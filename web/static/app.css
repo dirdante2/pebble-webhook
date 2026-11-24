@@ -775,8 +775,8 @@ iframe.trailer { display: block; width: 100%; aspect-ratio: 16 / 9; border: 0; b
 .diagramm .s4, .legende .s4 { fill: var(--s4); background: var(--s4); }
 .diagramm .linie { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
 .diagramm .l1 { stroke: var(--s1); } .diagramm .l2 { stroke: var(--s2); } .diagramm .l3 { stroke: var(--s3); } .diagramm .l4 { stroke: var(--s4); }
-.diagramm.kreis { max-width: 14rem; margin: .4rem auto; }
-.diagramm.kreis path, .diagramm.kreis circle { stroke: var(--flaeche); stroke-width: 1; }
+.diagramm.torte { max-width: 14rem; margin: .4rem auto; }
+.diagramm.torte path, .diagramm.torte circle { stroke: var(--flaeche); stroke-width: 1; }
 .k0 { fill: var(--s1); background: var(--s1); } .k1 { fill: var(--s2); background: var(--s2); }
 .k2 { fill: var(--s3); background: var(--s3); } .k3 { fill: var(--s4); background: var(--s4); }
 .k4 { fill: #c99a12; background: #c99a12; } .k5 { fill: #d6457a; background: #d6457a; }
@@ -793,3 +793,28 @@ figure.medium details.werte { margin-top: .2rem; }
 .diagramm.ablauf .nummerzahl { fill: var(--akzent-text); font-size: 11px; font-weight: 700; }
 .diagramm.ablauf .pfeil { fill: none; stroke: var(--leise); stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
 figure.medium .legende li { margin: 0; }
+/* Speicher: zwei Spalten (zugeklappt die Zeilen, aufgeklappt die Ablagen); Aufräumen über die volle Breite */
+.speicherraster { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .5rem 1rem; }
+.speicherdetails.speicherraster { display: grid; }
+.speicherraster > .aufraeumen { grid-column: 1 / -1; }
+.speicherraster .pfadzeile { flex-direction: column; align-items: flex-start; gap: .1rem; }
+.speicherraster .pfadzeile .frei { text-align: left; white-space: normal; }
+.speicherraster .speicherzeile > .zeile { display: flex; flex-direction: column; align-items: flex-start; gap: 0; }
+.speicherraster .speicherzeile > .zeile > span:first-child { font-size: .85rem; color: var(--leise); }
+.speicherraster .speicherzeile > .zeile > span:last-child { font-weight: 600; }
+svg.balken.zweiteilig { height: .45rem; }
+svg.balken.zweiteilig .rest { fill: var(--leise); fill-opacity: .55; }
+svg.balken.zweiteilig .eigen { fill: var(--akzent); }
+svg.balken.zweiteilig.knapp .rest, svg.balken.zweiteilig.knapp .eigen { fill: var(--schlecht); fill-opacity: 1; }
+.speicherzeile .hinweis { display: block; margin: .3rem 0 0; padding: .3rem .5rem; font-size: .82rem; }
+.speicherraster > .nachnutzer { grid-column: 1 / -1; }
+.nutzerkreise { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; margin: .4rem 0; }
+.nutzerkreis { display: flex; flex-direction: column; align-items: center; gap: .2rem; font-size: .88rem; }
+.nutzerkreis .diagramm.torte { max-width: 8rem; margin: .2rem auto; }
+.nachnutzer i.punkt { display: inline-block; width: .65rem; height: .65rem; border-radius: 50%; margin-right: .4rem; vertical-align: -1px; }
+.nachnutzer table.werte td, .nachnutzer table.werte th { white-space: nowrap; }
+.nachnutzer table.werte td:first-child { white-space: normal; }
+.speicherwarnung { border-left: 4px solid var(--warn); display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .5rem 1rem; }
+.speicherwarnung.kritisch { border-left-color: var(--schlecht); }
+.speicherwarnung p { margin: .2rem 0 0; }
+.nutzerkreis svg.diagramm.torte { width: 100%; max-width: 8rem; }

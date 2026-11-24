@@ -958,22 +958,30 @@ func (a *App) handleStatus(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	own := UserDB(a.Cfg.DataDir, a.UserID)
-	audioRoot, imageRoot := a.audioRoot(), a.imageRoot()
-	speicher := []map[string]any{disk("Deine Daten", own, files(own, own+"-wal", own+"-shm")),
-		disk("Deine Aufnahmen", audioRoot, func() int64 { return dirSize(audioRoot) }),
-		disk("Deine Bilder", imageRoot, func() int64 { return dirSize(imageRoot) })}
+	mediaRoot := a.mediaRoot()
+	// art: eigen (zugeklappt sichtbar), alle (Summe aller Nutzer), system.
+	mit := func(art string, m map[string]any) map[string]any { m["art"] = art; return m }
+	speicher := []map[string]any{mit("eigen", disk("Deine Daten", own, files(own, own+"-wal", own+"-shm"))),
+		mit("eigen", disk("Deine Medien", mediaRoot, func() int64 { return dirSize(mediaRoot) }))}
+	speicher[1]["aufnahmen"] = true // knapp hier = neue Aufnahmen werden abgewiesen
+	// App-Versionen und Backups sieht jeder Nutzer (nur Größe); Summen aller Nutzer und Aufräumen nur Admins.
+	releases := filepath.Join(a.Cfg.DataDir, "releases")
+	speicher = append(speicher, mit("system", disk("App-Versionen", releases, func() int64 { return dirSize(releases) })),
+		mit("system", disk("Backups", a.Cfg.BackupDir, nil)))
 	if a.isAdmin() {
 		sysDB := filepath.Join(a.Cfg.DataDir, "system.db")
 		users := filepath.Join(a.Cfg.DataDir, "users")
-		releases := filepath.Join(a.Cfg.DataDir, "releases")
 		speicher = append(speicher,
-			disk("Datenbanken (alle Nutzer)", users, func() int64 { return files(sysDB, sysDB+"-wal", sysDB+"-shm")() + dirSize(users) }),
-			disk("App-Versionen", releases, func() int64 { return dirSize(releases) }),
-			disk("Medien (alle Nutzer)", a.Cfg.MediaDir, nil), disk("Backups", a.Cfg.BackupDir, nil))
+			mit("alle", disk("Datenbanken (alle Nutzer)", users, func() int64 { return files(sysDB, sysDB+"-wal", sysDB+"-shm")() + dirSize(users) })),
+			mit("alle", disk("Medien (alle Nutzer)", a.Cfg.MediaDir, nil)))
+		speicher[len(speicher)-1]["aufnahmen"] = true
 		cb, cr, cbb, crb := a.cleanupPlan()
 		out["aufraeumen"] = map[string]any{"backups": len(cb), "backups_groesse": cbb, "versionen": len(cr), "versionen_groesse": crb}
 	}
 	out["speicher"] = speicher
+	if a.isAdmin() {
+		out["speicher_nutzer"] = a.System.storageByUser()
+	}
 	tj, _ := a.DB.TrashedJobs(0)
 	tp, _ := a.DB.TrashedPlannings(0)
 	out["papierkorb"] = len(tj) + len(tp)

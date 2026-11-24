@@ -4,6 +4,8 @@ import (
 	"errors"
 	"net/http"
 	"os"
+	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -46,6 +48,77 @@ func (s *System) userView(u *store.User) map[string]any {
 	m["daten_bytes"] = bytes
 	m["audio_bytes"] = dirSize(s.userMediaRoot(u.ID))
 	return m
+}
+
+// storageFullPercent: ab dieser Belegung zeigt jede Seite jedem Nutzer eine Karte (die vollste Ablage).
+const storageFullPercent = 90
+
+// fullestStorage: die am stärksten belegte Ablage (Daten, Datenbanken, Medien, Backups, Schlüssel) ab 90 %; nil = alles gut.
+// Je Dateisystem nur einmal (Ablagen ohne eigenen Mount teilen sich eins). Ohne Pfade: sehen auch Nutzer ohne Admin-Rolle.
+func (s *System) fullestStorage() map[string]any {
+	type place struct{ name, path string }
+	places := []place{{"Datenbanken", filepath.Join(s.Cfg.DataDir, "users")}, {"Medien", s.Cfg.MediaDir},
+		{"Backups", s.Cfg.BackupDir}, {"Programm und Daten", s.Cfg.DataDir}, {"Schlüssel", s.Cfg.KeyDir}}
+	var best map[string]any
+	bestPct := -1.0
+	seen := map[string]bool{}
+	for _, p := range places {
+		free, total, err := diskSpace(p.path)
+		if err != nil || total == 0 {
+			continue
+		}
+		key := strconv.FormatUint(total, 10) + "/" + strconv.FormatUint(free, 10)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		pct := float64(total-free) / float64(total) * 100
+		if pct >= storageFullPercent && pct > bestPct {
+			bestPct = pct
+			best = map[string]any{"name": p.name, "prozent": int(pct), "frei": free, "gesamt": total}
+		}
+	}
+	return best
+}
+
+// storageByUser: Speicher je Nutzer (Datenbank-Ordner users/<id>, Medien MEDIA_DIR/<id>) für die Statusseite des Admins,
+// größter zuerst. Ordner ohne Nutzer in system.db (Reste, Tests) erscheinen mit ihrer Id und ohne Namen.
+func (s *System) storageByUser() []map[string]any {
+	names := map[int64]string{}
+	if us, err := s.DB.Users(); err == nil {
+		for _, u := range us {
+			names[u.ID] = u.Name
+		}
+	}
+	ids := map[int64]bool{}
+	for id := range names {
+		ids[id] = true
+	}
+	for _, root := range []string{filepath.Join(s.Cfg.DataDir, "users"), s.Cfg.MediaDir} {
+		entries, _ := os.ReadDir(root)
+		for _, e := range entries {
+			if id, err := strconv.ParseInt(e.Name(), 10, 64); err == nil && id > 0 && e.IsDir() {
+				ids[id] = true
+			}
+		}
+	}
+	out := []map[string]any{}
+	for id := range ids {
+		m := map[string]any{"id": id, "daten": dirSize(UserDir(s.Cfg.DataDir, id)), "medien": dirSize(s.userMediaRoot(id))}
+		if n, ok := names[id]; ok {
+			m["name"] = n
+		}
+		out = append(out, m)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		ti := out[i]["daten"].(int64) + out[i]["medien"].(int64)
+		tj := out[j]["daten"].(int64) + out[j]["medien"].(int64)
+		if ti != tj {
+			return ti > tj
+		}
+		return out[i]["id"].(int64) < out[j]["id"].(int64)
+	})
+	return out
 }
 
 // userMediaRoot: Medien (Aufnahmen und Bilder) eines Nutzers.

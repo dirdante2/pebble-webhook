@@ -4,6 +4,12 @@ Summarised notes for **beta** and **stable** releases. Each section lists only w
 
 A tag `vX.Y.Z-stable` (stable; before 1.33.5 `vX.Y.Z`) or `vX.Y.Z-beta` (beta) needs a section `## [X.Y.Z]` or `## [X.Y.Z-beta]` here; the release workflow uses it as the release notes.
 
+## [4.0.1] - 2026-11-24
+
+### Storage overview
+- Warning card on every page when a storage location is 90 % full.
+- Status → Storage: own use vs. rest of the mount in one bar, two columns; admins see usage per user as pie charts.
+
 ## [4.0.0] - 2026-11-24
 
 ### Media in notes and plannings

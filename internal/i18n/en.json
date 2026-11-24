@@ -1555,5 +1555,17 @@
 "5 nachtragen": "Add 5",
 "{0} Notizen bekommen Trailer, {1} noch ohne": "{0} notes get trailers, {1} still without",
 "Keine Film- oder Serien-Notiz ohne Trailer": "No film or series note without a trailer",
-"Ablauf braucht 2 bis 8 Schritte": "A flow needs 2 to 8 steps"
+"Ablauf braucht 2 bis 8 Schritte": "A flow needs 2 to 8 steps",
+"Deine Medien": "Your media",
+"{0} eigene, {1} von {2} belegt": "{0} own, {1} of {2} used",
+"Fast voll.": "Almost full.",
+"Id {0}": "Id {0}",
+"Nach Nutzer": "By user",
+"Medien": "Media",
+"Speicher fast voll: {0} ({1} %)": "Storage almost full: {0} ({1} %)",
+"Noch {0} frei von {1}. Ist er voll, können Aufnahmen, Bilder oder Backups nicht mehr gespeichert werden.": "{0} free of {1}. Once full, recordings, images or backups can no longer be saved.",
+"Speicher ansehen": "View storage",
+"Datenbanken": "Databases",
+"Programm und Daten": "Program and data",
+"Schlüssel": "Keys"
 }

@@ -9,6 +9,20 @@ Version numbers X.Y.Z:
 
 Own builds show X.Y.Z.A: **A** is a local build counter (one per deployed change, starting at 1 for every new X.Y.Z); it never appears in Git or releases, so one version can collect several changes.
 
+## [4.0.1] - 2026-11-24
+
+### New
+- Every page: card for every user when a storage location is at least 90 % full (only the fullest).
+- Status → Storage (admin): pie charts for data and media by user with list, largest first.
+
+### Changed
+- Status → Storage: collapsed shows own storage, app versions and backups (for every user) plus full or unreadable ones; two columns; recordings and images as "Your media".
+- Status → Storage: own storage bar shows own use (accent) and the rest of the mount in use (grey); full: whole bar red.
+- Status → Storage: header shows everything the app uses; free space hidden for own storage when expanded.
+
+### Fixed
+- Charts: pie charts no longer squashed (CSS class clash).
+
 ## [4.0.0] - 2026-11-24
 
 ### New

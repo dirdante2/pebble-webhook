@@ -188,6 +188,9 @@ func (a *App) handleCounters(w http.ResponseWriter, r *http.Request) {
 	out := map[string]any{"vorschlaege": n, "update": a.AvailableUpdate(), "papierkorb": len(tj) + len(tp),
 		"version": strings.Fields(a.Version + " ")[0], "kanal": a.installedChannel(), "joplin": a.Cfg.JoplinEnabled, "audio_unbekannt": len(a.orphans()),
 		"version_bestaetigt": a.confirmedVersion(), "ring": a.ringSummary(), "spenden": a.donateURL()}
+	if v := a.System.fullestStorage(); v != nil {
+		out["speicher_voll"] = v
+	}
 	// menue=1: Zahlen des Seitenmenüs (Verlauf-Filter, Neu, Listen-Gruppen), damit es ohne Seitenwechsel stimmt.
 	if r.URL.Query().Get("menue") == "1" {
 		m, err := a.menuCounts(r)
