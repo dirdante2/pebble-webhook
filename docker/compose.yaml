@@ -21,9 +21,12 @@ services:
       # OPENAI_API_KEY: sk-...                   # fixed from here and locked in the app; else set in the app
       # YOUTUBE_API_KEY: AIza...                 # fixed from here and locked in the app; else set in the app
     volumes:
-      - ./config:/config                         # everything in one folder (or a Docker volume: pebble-config:/config)
+      - pebble-config:/config                    # everything in one Docker volume (default)
+      # - ./config:/config                       # or a folder on the host instead of the volume
       # Own folders, e.g. on a NAS or separate disks – set the matching variable above as well:
       # - /srv/pebble/data:/data                 # DATA_DIR: /data
       # - /srv/pebble/keys:/keys                 # KEY_DIR: /keys
       # - /mnt/nas/pebble-media:/media           # MEDIA_DIR: /media
       # - /mnt/nas/pebble-backup:/backup         # BACKUP_DIR: /backup
+volumes:
+  pebble-config:
