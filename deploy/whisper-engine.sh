@@ -32,9 +32,9 @@ mkdir -p "$BAU"
 JOBS="$(nproc)"
 
 hole() { # url datei sha256
-    [ -f "$BAU/$2" ] && echo "$3  $BAU/$2" | sha256sum -c --quiet 2>/dev/null && return
+    [ -f "$BAU/$2" ] && echo "$3  $BAU/$2" | sha256sum -c >/dev/null 2>&1 && return
     curl -fsSL -o "$BAU/$2" "$1"
-    echo "$3  $BAU/$2" | sha256sum -c --quiet || { echo "Prüfsumme von $2 falsch" >&2; exit 1; }
+    echo "$3  $BAU/$2" | sha256sum -c >/dev/null || { echo "Prüfsumme von $2 falsch" >&2; exit 1; }
 }
 hole "https://ffmpeg.org/releases/ffmpeg-$FFMPEG_VERSION.tar.xz" "ffmpeg-$FFMPEG_VERSION.tar.xz" "$FFMPEG_SHA256"
 hole "https://github.com/ggml-org/whisper.cpp/archive/refs/tags/v$WHISPER_VERSION.tar.gz" "whisper-$WHISPER_VERSION.tar.gz" "$WHISPER_SHA256"

@@ -9,6 +9,11 @@ Version numbers X.Y.Z:
 
 Own builds show X.Y.Z.A: **A** is a local build counter (one per deployed change, starting at 1 for every new X.Y.Z); it never appears in Git or releases, so one version can collect several changes.
 
+## [4.4.1] - 2026-11-25
+
+### Fixed
+- Release build: checksum check of the transcription engine works with BusyBox.
+
 ## [4.4.0] - 2026-11-25
 
 ### New
