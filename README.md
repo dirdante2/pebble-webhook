@@ -24,13 +24,11 @@ One Go binary: webhook, worker, SQLite and web app. No queue, no second database
 
 Demo data, English UI, mobile, dark mode.
 
-| History | Menu | Lists | Note |
+| History | Lists | Note | Planning |
 |---|---|---|---|
-| <img src="docs/screenshots/history.png" width="200" alt="History with filters and next appointment"> | <img src="docs/screenshots/menu.png" width="200" alt="Menu with counters"> | <img src="docs/screenshots/lists.png" width="200" alt="Lists by group"> | <img src="docs/screenshots/note.png" width="200" alt="Note detail"> |
-| **Planning** | **Reschedule** | **List** | **Theme** |
-| <img src="docs/screenshots/planning.png" width="200" alt="Planning with research"> | <img src="docs/screenshots/reschedule.png" width="200" alt="Reschedule an appointment"> | <img src="docs/screenshots/list.png" width="200" alt="A single list"> | <img src="docs/screenshots/theme.png" width="200" alt="Theme settings"> |
-| **Ring usage** | **Rings compared** | **Swap ring** | |
-| <img src="docs/screenshots/ring.png" width="200" alt="Ring usage with forecast"> | <img src="docs/screenshots/ring-compare.png" width="200" alt="Recording time per month and rings compared"> | <img src="docs/screenshots/ring-swap.png" width="200" alt="Swap ring with instructions"> | |
+| <img src="docs/screenshots/history.png" width="200" alt="History with filters and next appointment"> | <img src="docs/screenshots/lists.png" width="200" alt="Lists by group"> | <img src="docs/screenshots/note.png" width="200" alt="Note detail"> | <img src="docs/screenshots/planning.png" width="200" alt="Planning with research"> |
+
+More: [all screenshots](docs/screenshots/) (menu, single list, reschedule, theme, ring usage).
 
 ## Quick start
 

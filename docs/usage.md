@@ -20,10 +20,4 @@ Detailed flows (German): [ABLAUF.md](../ABLAUF.md).
 
 ## Screenshots
 
-Demo data, English UI, mobile, dark mode.
-
-<img src="screenshots/history.png" width="220" alt="History"> <img src="screenshots/menu.png" width="220" alt="Menu"> <img src="screenshots/lists.png" width="220" alt="Lists"> <img src="screenshots/list.png" width="220" alt="List">
-
-<img src="screenshots/note.png" width="220" alt="Note"> <img src="screenshots/planning.png" width="220" alt="Planning"> <img src="screenshots/reschedule.png" width="220" alt="Reschedule"> <img src="screenshots/theme.png" width="220" alt="Theme">
-
-<img src="screenshots/ring.png" width="220" alt="Ring usage"> <img src="screenshots/ring-compare.png" width="220" alt="Rings compared"> <img src="screenshots/ring-swap.png" width="220" alt="Swap ring">
+Demo data, English UI, mobile, dark mode: [all screenshots](screenshots/).
