@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"pebble-webhook/internal/config"
 	"pebble-webhook/internal/i18n"
 	"pebble-webhook/internal/store"
 )
@@ -583,7 +584,11 @@ func (a *App) handleAudio(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 404, "fehlt", "Aufnahme nicht lesbar")
 		return
 	}
-	w.Header().Set("Content-Type", j.AudioMime)
+	mt := j.AudioMime
+	if !strings.HasPrefix(mt, "audio/") && !strings.HasPrefix(mt, "video/") {
+		mt = "application/octet-stream" // Altbestand mit fremdem Typ: nie als Seite darstellen
+	}
+	w.Header().Set("Content-Type", mt)
 	// Eine Aufnahme ändert sich nie: einmal geladen, kommt sie 30 Tage aus dem Browser-Speicher.
 	w.Header().Set("Cache-Control", "private, max-age=2592000, immutable")
 	http.ServeContent(w, r, "", st.ModTime(), bytes.NewReader(data))
@@ -914,17 +919,19 @@ func (a *App) handleStatus(w http.ResponseWriter, r *http.Request) {
 	out := map[string]any{
 		"version": a.Version, "audio_unbekannt": a.scanAudio(), "warteschlange": counts.Open, "fehlgeschlagen": counts.Failed,
 		"einstellungen": map[string]any{
-			"halten": a.Cfg.TriggerSingle, "doppelklick_halten": a.Cfg.TriggerDouble, "transkription": a.Cfg.Transcription,
-			"transkriptions_modell": a.Cfg.TranscribeModel, "recherche_modell": a.Cfg.PlanModel,
-			"diktat_modell": a.Cfg.DictationModel, "leer_stunden": a.Cfg.EmptyRetentionHours,
+			"halten": a.Cfg.TriggerSingle, "doppelklick_halten": a.Cfg.TriggerDouble, "leer_stunden": a.Cfg.EmptyRetentionHours,
 			"limit_usd": a.Cfg.ResearchLimitUSD, "papierkorb_tage": a.Cfg.TrashRetentionDays, "schliessen_tage": a.Cfg.AutoCloseDays,
-			"listen_aktiv_minuten": a.Cfg.DoneActiveMinutes, "besuch_pause_minuten": a.Cfg.VisitGapMinutes, "preise_bekannt": a.Cfg.PricePlanIn != nil && a.Cfg.PricePlanOut != nil && a.Cfg.PriceSearchCall != nil,
+			"listen_aktiv_minuten": a.Cfg.DoneActiveMinutes, "besuch_pause_minuten": a.Cfg.VisitGapMinutes,
 		},
 	}
 	// Je Ablage: Pfad, von der App belegt, frei und gesamt auf dem Dateisystem.
 	// size: von der App belegt (nil = ganzer Ordner).
 	disk := func(name, path string, size func() int64) map[string]any {
-		m := map[string]any{"name": name, "pfad": path}
+		m := map[string]any{"name": name}
+		admin := a.isAdmin()
+		if admin {
+			m["pfad"] = path // Serverpfade nur für Admins
+		}
 		// Frei/gesamt vom Dateisystem; Datenbank und App-Versionen liegen in DATA_DIR (releases/ gibt es evtl. noch nicht).
 		fs := path
 		if _, err := os.Stat(path); err != nil && size != nil {
@@ -932,7 +939,10 @@ func (a *App) handleStatus(w http.ResponseWriter, r *http.Request) {
 		}
 		free, total, err := diskSpace(fs)
 		if err != nil {
-			m["fehler"] = err.Error()
+			m["fehler"] = i18n.T("nicht lesbar")
+			if admin {
+				m["fehler"] = err.Error()
+			}
 			return m
 		}
 		if size == nil {
@@ -963,7 +973,11 @@ func (a *App) handleStatus(w http.ResponseWriter, r *http.Request) {
 	releases := filepath.Join(a.Cfg.DataDir, "releases")
 	speicher = append(speicher, mit("system", disk("App-Versionen", releases, func() int64 { return dirSize(releases) })),
 		mit("system", disk("Backups", a.Cfg.BackupDir, nil)))
+	out["transkription"] = a.transcriptionStatus()
 	if a.isAdmin() {
+		if _, err := os.Stat(a.Whisper.Dir); err == nil {
+			speicher = append(speicher, mit("system", disk("Whisper-Modelle", a.Whisper.Dir, nil)))
+		}
 		sysDB := filepath.Join(a.Cfg.DataDir, "system.db")
 		users := filepath.Join(a.Cfg.DataDir, "users")
 		speicher = append(speicher,
@@ -1084,7 +1098,7 @@ func (a *App) handleCosts(w http.ResponseWriter, r *http.Request) {
 		t.USD += sum
 		t.Anzahl++
 		// Ein KI-Schritt lief, aber sein Betrag fehlt (Preis nicht konfiguriert oder Altbestand): sichtbar zählen.
-		if (j.TranscriptSource == "openai" && j.CostTranscribe == nil) ||
+		if ((j.TranscriptSource == sourceOpenAI || j.TranscriptSource == sourceFallback) && j.CostTranscribe == nil) ||
 			(j.Mode == "diktat" && j.Result != "" && j.CostUSD == nil) ||
 			(j.Mode == "planung" && j.AssignHow == "ki" && j.CostAux == nil) ||
 			(j.Mode == "planung" && j.Result != "" && j.CostUSD == nil) {
@@ -1103,11 +1117,6 @@ func (a *App) handleCosts(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, 200, map[string]any{
 		"tage": series, "summen": totals, "arten": kinds, "limit_usd": a.Cfg.ResearchLimitUSD,
-		"preise": map[string]bool{
-			"transkription": a.Cfg.PriceTranscribeMin != nil,
-			"titel":         a.Cfg.PriceTitleIn != nil && a.Cfg.PriceTitleOut != nil,
-			"recherche":     a.Cfg.PricePlanIn != nil && a.Cfg.PricePlanOut != nil && a.Cfg.PriceSearchCall != nil,
-		},
 	})
 }
 
@@ -1120,7 +1129,7 @@ func (a *App) handlePebbleSetup(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, 200, map[string]any{
 		"url": a.Cfg.PublicURL + "/hook", "header": a.Cfg.HookTokenHeader, "token": access.Token, "secret": access.Secret,
-		"halten": a.Cfg.TriggerSingle, "doppelklick_halten": a.Cfg.TriggerDouble, "transkription": a.Cfg.Transcription,
+		"halten": a.Cfg.TriggerSingle, "doppelklick_halten": a.Cfg.TriggerDouble, "transkription": pebbleMode(a.KI().AI),
 		"max_mb": a.Cfg.HookMaxBytes >> 20, "ring_header": a.Cfg.RingIDHeader, "ring_id": a.activeRingID(),
 	})
 }
@@ -1139,4 +1148,12 @@ func (a *System) handleHealth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	fmt.Fprintln(w, "ok")
+}
+
+// pebbleMode: Was die Pebble-App schicken soll – ihren Text (erster Eintrag der Transkription) oder nur Audio.
+func pebbleMode(ai config.AI) string {
+	if ai.PebbleText() {
+		return "pebble"
+	}
+	return "audio"
 }

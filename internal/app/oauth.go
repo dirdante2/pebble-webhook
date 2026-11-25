@@ -32,7 +32,9 @@ const (
 	oauthCodeTTL    = 5 * time.Minute
 	oauthAccessTTL  = time.Hour
 	oauthRefreshTTL = 90 * 24 * time.Hour
-	oauthMaxClients = 50
+	oauthMaxClients = 500 // Apps ohne Freigabe insgesamt (sie verfallen nach einer Stunde)
+	oauthMaxPerIP   = 5   // Apps ohne Freigabe je Adresse – einer allein füllt die Liste nicht
+	oauthUnusedTTL  = time.Hour
 )
 
 type oauthClient struct {
@@ -42,6 +44,7 @@ type oauthClient struct {
 	AuthMethod   string   `json:"auth_method"`
 	SecretHash   string   `json:"secret_hash,omitempty"`
 	Created      int64    `json:"created"`
+	IPHash       string   `json:"ip,omitempty"` // Herkunft der Registrierung (nur für die Grenze je Adresse)
 }
 
 type oauthGrant struct {
@@ -55,6 +58,7 @@ type oauthGrant struct {
 	AccessExp   int64  `json:"access_exp"`
 	RefreshHash string `json:"refresh_hash"`
 	RefreshExp  int64  `json:"refresh_exp"`
+	PrevRefresh string `json:"prev_refresh,omitempty"` // zuletzt ersetzter Erneuerungs-Token: taucht er wieder auf, wurde er gestohlen
 }
 
 type oauthData struct {
@@ -115,7 +119,7 @@ func (a *System) oauthSave(d *oauthData) error {
 	return a.DB.Set(oauthKey, string(b))
 }
 
-// prune entfernt abgelaufene Freigaben und Clients ohne Freigabe, die älter als ein Tag sind.
+// prune entfernt abgelaufene Freigaben und Clients ohne Freigabe, die älter als eine Stunde sind.
 func (d *oauthData) prune(now time.Time) {
 	used := map[string]bool{}
 	for id, g := range d.Grants {
@@ -126,7 +130,7 @@ func (d *oauthData) prune(now time.Time) {
 		used[g.ClientID] = true
 	}
 	for id, c := range d.Clients {
-		if !used[id] && now.UnixMilli()-c.Created > 24*time.Hour.Milliseconds() {
+		if !used[id] && now.UnixMilli()-c.Created > oauthUnusedTTL.Milliseconds() {
 			delete(d.Clients, id)
 		}
 	}
@@ -235,7 +239,8 @@ func (a *System) handleOAuthRegister(w http.ResponseWriter, r *http.Request) {
 	if name == "" {
 		name = i18n.T("Unbenannte App")
 	}
-	c := &oauthClient{ID: oauthRandom(18), Name: name, RedirectURIs: in.RedirectURIs, AuthMethod: in.AuthMethod, Created: time.Now().UnixMilli()}
+	c := &oauthClient{ID: oauthRandom(18), Name: name, RedirectURIs: in.RedirectURIs, AuthMethod: in.AuthMethod, Created: time.Now().UnixMilli(),
+		IPHash: oauthHash("ip:" + a.clientIP(r))[:16]}
 	secret := ""
 	if c.AuthMethod != "none" {
 		secret = oauthRandom(32)
@@ -249,8 +254,21 @@ func (a *System) handleOAuthRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	d.prune(time.Now())
-	if len(d.Clients) >= oauthMaxClients {
-		oauthError(w, 400, "invalid_client_metadata", "Zu viele registrierte Apps")
+	used := map[string]bool{}
+	for _, g := range d.Grants {
+		used[g.ClientID] = true
+	}
+	unused, fromIP := 0, 0
+	for id, o := range d.Clients {
+		if !used[id] {
+			unused++
+			if o.IPHash == c.IPHash {
+				fromIP++
+			}
+		}
+	}
+	if unused >= oauthMaxClients || fromIP >= oauthMaxPerIP {
+		oauthError(w, 400, "invalid_client_metadata", "Zu viele registrierte Apps – in einer Stunde erneut versuchen")
 		return
 	}
 	d.Clients[c.ID] = c
@@ -429,6 +447,9 @@ func (a *System) issueTokens(w http.ResponseWriter, d *oauthData, g *oauthGrant)
 	access, refresh := oauthRandom(32), oauthRandom(32)
 	now := time.Now()
 	g.AccessHash, g.AccessExp = oauthHash(access), now.Add(oauthAccessTTL).UnixMilli()
+	if g.RefreshHash != "" {
+		g.PrevRefresh = g.RefreshHash
+	}
 	g.RefreshHash, g.RefreshExp = oauthHash(refresh), now.Add(oauthRefreshTTL).UnixMilli()
 	g.LastUsed = now.UnixMilli()
 	if err := a.oauthSave(d); err != nil {
@@ -473,7 +494,7 @@ func (a *System) handleOAuthToken(w http.ResponseWriter, r *http.Request) {
 			oauthError(w, 400, "invalid_grant", "Code ungültig oder abgelaufen")
 			return
 		}
-		if ru := f.Get("redirect_uri"); ru != "" && ru != code.redirectURI {
+		if f.Get("redirect_uri") != code.redirectURI { // Pflicht (RFC 6749 4.1.3): wir verlangen sie beim Freigeben immer
 			oauthError(w, 400, "invalid_grant", "Rücksprung-Adresse passt nicht")
 			return
 		}
@@ -488,8 +509,19 @@ func (a *System) handleOAuthToken(w http.ResponseWriter, r *http.Request) {
 		a.issueTokens(w, d, g)
 	case "refresh_token":
 		h := oauthHash(f.Get("refresh_token"))
-		for _, g := range d.Grants {
+		for id, g := range d.Grants {
+			// Ein schon ersetzter Erneuerungs-Token kommt wieder: zwei Besitzer – Freigabe beenden (OAuth 2.1, 4.3.1).
+			if g.ClientID == c.ID && g.PrevRefresh != "" && hashEqual(g.PrevRefresh, h) {
+				delete(d.Grants, id)
+				a.oauthSave(d)
+				logf("OAuth: Erneuerungs-Token von „%s“ doppelt benutzt – Verbindung getrennt", g.ClientName)
+				oauthError(w, 400, "invalid_grant", "Erneuerungs-Token schon benutzt – Verbindung getrennt")
+				return
+			}
 			if g.ClientID == c.ID && hashEqual(g.RefreshHash, h) && g.RefreshExp > time.Now().UnixMilli() {
+				if !a.grantUserOK(g) {
+					break
+				}
 				a.issueTokens(w, d, g)
 				return
 			}
@@ -521,6 +553,37 @@ func (a *System) handleOAuthRevoke(w http.ResponseWriter, r *http.Request) {
 	}
 	oauthCORS(w)
 	w.WriteHeader(200)
+}
+
+// grantUserOK: Die Freigabe gehört zu einem bestehenden Nutzer, der vor ihr angelegt wurde.
+// Schützt davor, dass eine Freigabe eines gelöschten Nutzers je auf einen anderen zeigt.
+func (a *System) grantUserOK(g *oauthGrant) bool {
+	if g.UserID == 0 {
+		return false
+	}
+	u, err := a.DB.User(g.UserID)
+	return err == nil && u.CreatedAt <= g.Created
+}
+
+// oauthDropUser entfernt alle Freigaben und offenen Codes eines (gelöschten) Nutzers.
+func (a *System) oauthDropUser(uid int64) error {
+	a.oauth.mu.Lock()
+	defer a.oauth.mu.Unlock()
+	for k, c := range a.oauth.codes {
+		if c.uid == uid {
+			delete(a.oauth.codes, k)
+		}
+	}
+	d, err := a.oauthLoad()
+	if err != nil {
+		return err
+	}
+	for id, g := range d.Grants {
+		if g.UserID == uid {
+			delete(d.Grants, id)
+		}
+	}
+	return a.oauthSave(d)
 }
 
 // --- Zugang zu /mcp: API-Token oder OAuth-Zugangs-Token ---
@@ -569,7 +632,7 @@ func (a *System) mcpAuth(next userHandler) http.HandlerFunc {
 			}
 		}
 		a.oauth.mu.Unlock()
-		if hit == nil || hit.UserID == 0 {
+		if hit == nil || !a.grantUserOK(hit) {
 			deny("Token ungültig oder abgelaufen")
 			return
 		}

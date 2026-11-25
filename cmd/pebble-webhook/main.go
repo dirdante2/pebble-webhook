@@ -19,7 +19,6 @@ import (
 	"pebble-webhook/internal/app"
 	"pebble-webhook/internal/config"
 	"pebble-webhook/internal/joplin"
-	"pebble-webhook/internal/openai"
 	"pebble-webhook/internal/store"
 )
 
@@ -50,6 +49,12 @@ const usage = `pebble-webhook <Befehl>
   vorbereiten
             Datenbestand bei gestopptem Dienst auf den Stand dieses Programms bringen (vom Installer vor dem Start
             aufgerufen, ohne Zeitgrenze der Gesundheitsprüfung); --kann: nur prüfen, ob es den Befehl gibt
+  adresse <https://name.domain>
+            Öffentliche Adresse setzen (bei gestopptem Dienst, z. B. nach Umzug auf eine neue Domain); danach legen alle
+            Nutzer neue Passkeys an; --kann: nur prüfen, ob es den Befehl gibt
+  geheimnisse-versiegeln <system.db>
+            API-Schlüssel und Web-Push-Schlüssel in einer Kopie von system.db (Backup) mit dem Systemschlüssel
+            verschlüsseln (vom Installer für Update-Backups); --kann: nur prüfen, ob es den Befehl gibt
   verzeichnisse
             Ordner (DATA_DIR, DATA_DIR/users, MEDIA_DIR, BACKUP_DIR, KEY_DIR) anlegen und Besitzer/Rechte richten
             (als root; vor jedem Start durch systemd und beim Installieren); ohne root nur prüfen
@@ -112,6 +117,28 @@ func main() {
 			return
 		}
 		fail(dirs())
+	case "adresse":
+		if len(os.Args) > 2 && os.Args[2] == "--kann" {
+			fmt.Println("ja")
+			return
+		}
+		if len(os.Args) < 3 {
+			fail(errors.New("Aufruf: adresse https://name.domain"))
+		}
+		boot, err := loadBoot()
+		fail(err)
+		fail(app.SetPublicURL(boot.DataDir, os.Args[2]))
+	case "geheimnisse-versiegeln":
+		if len(os.Args) > 2 && os.Args[2] == "--kann" {
+			fmt.Println("ja")
+			return
+		}
+		if len(os.Args) < 3 {
+			fail(errors.New("Aufruf: geheimnisse-versiegeln <system.db>"))
+		}
+		boot, err := loadBoot()
+		fail(err)
+		fail(app.SealSystemSecrets(os.Args[2], boot.KeyDir))
 	case "healthcheck":
 		fail(healthcheck())
 	case "wiederherstellen":
@@ -316,7 +343,7 @@ func setup() (*app.System, error) {
 		}
 		return joplin.New(c.JoplinURL, c.JoplinEmail, c.JoplinPassword)
 	}
-	sys, err := app.NewSystem(cfg, db, openai.New(cfg.OpenAIKey, cfg.OpenAIBaseURL), version, notes)
+	sys, err := app.NewSystem(cfg, db, app.NewAI(cfg.AI, db), version, notes)
 	if err != nil {
 		db.Close()
 		return nil, err

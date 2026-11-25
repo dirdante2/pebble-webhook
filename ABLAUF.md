@@ -11,10 +11,21 @@ In der Web-App und in Joplin heißt die Art „Notiz“ (Nutzervorgabe 15.11.202
 3. Zustellungskennung schon bekannt → `200 bereits angenommen`, sonst nichts.
 4. Geste → Aktion: `single-click-hold` = `TRIGGER_SINGLE`, `double-click-hold` (in der App „Klick + Halten“) = `TRIGGER_DOUBLE`, `test-event` = nur anzeigen; unbekannte Geste → Eintrag mit sichtbarem Fehler, keine Verarbeitung.
 5. Freien Platz prüfen (`MIN_FREE_MB`) → Audio verschlüsselt nach `MEDIA_DIR/<nutzer>/audio/diktat/JJJJ/MM/<id>.m4a.enc` (fsync) → Auftrag in SQLite → **erst dann** `200 angenommen`. Speicherfehler → `507`, Pebble wiederholt (1×/min, bis 10×).
-6. Worker: Transkription `POST /v1/audio/transcriptions` (bei `TRANSCRIPTION=pebble` das Pebble-Transkript); der Pebble-Text wird immer mitgespeichert. Liefert OpenAI nichts oder fehlt die Aufnahme, gilt der Pebble-Text; gibt es keinen Text → leere Aufnahme (siehe Löschen).
-7. Auswertung `POST /v1/responses` (`OPENAI_DICTATION_MODEL`, höchstens eine Websuche, JSON-Schema): Kurztitel, Art (`notiz` | `listenpunkt`), `notiz` (kurze Fassung des Gesagten), `beschreibung` (Zusatzwissen, z. B. Inhalt eines Films), Eckdaten, höchstens 4 Hinweise, Quellen, Tags. Links stehen nur in den Quellen; Quellenverweise in Eckdaten werden entfernt. Kosten zählen wie Recherche (`PRICE_PLAN_*`, `RESEARCH_LIMIT_USD`). Scheitert sie auch beim letzten Versuch, bleibt das Diktat mit den ersten sechs Wörtern als Titel und ohne Auswertung.
+6. Worker: Transkription nach der Reihenfolge des Bereichs transkription (siehe „KI-Anbieter je Bereich“): Cloud `POST /audio/transcriptions`, Whisper lokal oder das Pebble-Transkript (`pebble`, nur als erster Eintrag); der Pebble-Text wird immer mitgespeichert. Liefert OpenAI nichts oder fehlt die Aufnahme, gilt der Pebble-Text; gibt es keinen Text → leere Aufnahme (siehe Löschen).
+7. Auswertung `POST /v1/responses` (`OPENAI_DICTATION_MODEL`, höchstens eine Websuche, JSON-Schema): Kurztitel, Art (`notiz` | `listenpunkt`), `notiz` (kurze Fassung des Gesagten), `beschreibung` (Zusatzwissen, z. B. Inhalt eines Films), Eckdaten, höchstens 4 Hinweise, Quellen, Tags. Links stehen nur in den Quellen; Quellenverweise in Eckdaten werden entfernt. Kosten nach `PRICE_DICTATION_*` (leer = Recherche-Preise), Bereich „Auswertung“ (siehe KI-Anbieter). Scheitert sie auch beim letzten Versuch, bleibt das Diktat mit den ersten sechs Wörtern als Titel und ohne Auswertung.
 8. Einsortieren in Gruppen und Listen siehe unten. `listenpunkt` → Punkte in die Liste (vorhandener Punkt kein zweites Mal). `notiz` → eigene Notiz und **immer** ein Punkt in einer Liste (Nutzervorgabe 21.11.2026): die Liste ihres Themas, bei zu wenig Information die generische Liste „Unsortiert“ (ohne Gruppe). Termine kommen in keine Liste. Einmaliger Nachtrag für Altbestand: `pebble notizen-einsortieren`.
 9. Joplin-Push (siehe unten): Notiz nach `Sprachnotizen/Notizen` (Eckdaten, Hinweise, Wortlaut), Liste als eine Notiz mit Kästchen nach `Sprachnotizen/Listen` → `fertig` → SSE an offene Web-Apps. Web-Push „Notiz gespeichert“ nur mit Kanal `NOTIFY_SAVED` (Vorgabe aus). Das Notizbuch hieß bis 15.11.2026 „Diktate“: seine Id leitet sich weiter von diesem Namen ab, der Titel wird beim ersten Push einmal umgeschrieben (Merker `joplin_ordner_notizen` in `kv`).
+
+## KI-Anbieter je Bereich
+
+1. Status → KI (Admins) → Zugänge: beliebig viele Einträge `{id, name, art: openai|dienst|lokal|searxng, adresse, schluessel}` (Einstellung `KI_ZUGAENGE`, JSON); Name eindeutig.
+2. Je Bereich (transkription, kurztitel, auswertung, recherche, bilder) eine Reihenfolge von Einträgen `{id, zugang, modell, preis_*, limit_monat, websuche}` (`KI_BEREICHE`). Transkription zusätzlich `whisper` und `pebble` (nur als erster). Cloud-Einträge (openai, dienst) brauchen Preise, lokale haben keine. Jeder Zugang höchstens einmal je Bereich; `inaktiv` = gespeichert, aber übersprungen (Fenster „Reihenfolge“).
+3. Fehlen beide Einstellungen, entstehen sie beim Laden aus den Einzelwerten bis 4.3 (`OPENAI_API_KEY`, `TRANSCRIPTION`, `*_PROVIDER`, `OPENAI_*_MODEL`, `PRICE_*`, `RESEARCH_WEB_SEARCH`, `IMAGES_GENERATE`); das erste Speichern schreibt sie fest.
+4. Speichern: `PUT /api/ki` (leerer Schlüssel = gespeicherter des Zugangs) → `config.FromValues` prüft → Neustart → `NewAI` baut je Bereich `openai.Step`s.
+5. Aufruf mit `Request.Area` → Router: erster Eintrag unter seinem Monatslimit; Fehler oder Limit → nächster. Modell aus dem Eintrag, Kosten = Tokens × Preis + Suchen × Preis → `Result.Cost`, gezählt in system.db kv `ki-kosten:<JJJJ-MM>:<eintrag>`.
+6. Transkription: App läuft die Reihenfolge ab (Whisper lokal, Cloud über `TranscribeStep`); Quelle `openai-ausweich`, wenn ein Eintrag davor scheiterte.
+7. Websuche je Eintrag (Auswertung, Recherche): Suche des Anbieters (OpenAI `web_search`, OpenRouter Web-Plugin, Modelle, die selbst suchen) und/oder ein SearXNG-Zugang als Werkzeug `websuche`. Ohne → Hinweis an die KI.
+8. Prüfen: `POST /api/ki/pruefen/{zugang-id}` (gespeicherter Zugang: `GET /models` bzw. Probesuche) → Modellliste im Browser (`localStorage ki-modelle-<id>`), Bereichsseiten fragen keinen Dienst ab.
 
 ## Zusammenhang zwischen Notizen
 
@@ -27,9 +38,9 @@ In der Web-App und in Joplin heißt die Art „Notiz“ (Nutzervorgabe 15.11.202
 ## Aufnahme vom Pebble (Planung)
 
 1. Schritte 1–6 wie bei der Notiz.
-2. Zuordnung: keine offene Planung → neue. Beginnt der Text mit „Weiter“/„Fortsetzung“ und es gibt genau eine offene Planung → diese. Sonst KI-Zuordnung (`OPENAI_TITLE_MODEL`, JSON `{planung, sicher}`): sicher → diese Planung; unsicher → neue Planung (mit Schlüsselwort: die zuletzt bearbeitete offene). Geschlossene Planungen stehen nie zur Wahl.
-3. Recherche `POST /v1/responses` (`OPENAI_PLAN_MODEL`, Tool `web_search`, JSON-Schema): Eingabe = bisheriger Stand + alle bisherigen Transkripte + neue Runde. Tiefe: 3 Suchen (`search_context_size: low`), bei „ausführlich/gründlich/…“ im Text bis 10 (`medium`), gedeckelt durch das Kostenlimit.
-4. Kosten = Tokens × Preis + Suchen × Preis, je Auftrag aufsummiert. ≥ `RESEARCH_LIMIT_USD` → am Eintrag markiert; vor einem weiteren Versuch erreicht → Dauerfehler. Fehlt ein Preis in der Konfiguration, läuft keine Recherche.
+2. Zuordnung: keine offene Planung → neue. Beginnt der Text mit „Weiter“/„Fortsetzung“ und es gibt genau eine offene Planung → diese. Sonst KI-Zuordnung (Bereich kurztitel, JSON `{planung, sicher}`): sicher → diese Planung; unsicher → neue Planung (mit Schlüsselwort: die zuletzt bearbeitete offene). Geschlossene Planungen stehen nie zur Wahl.
+3. Recherche über die Einträge des Bereichs recherche (Websuche je Eintrag, JSON-Schema): Eingabe = bisheriger Stand + alle bisherigen Transkripte + neue Runde. Tiefe: 3 Suchen (`search_context_size: low`), bei „ausführlich/gründlich/…“ im Text bis 10 (`medium`), gedeckelt durch das Kostenlimit.
+4. Kosten = Tokens × Preis + Suchen × Preis, je Auftrag aufsummiert. ≥ `RESEARCH_LIMIT_USD` → am Eintrag markiert; vor einem weiteren Versuch erreicht → Dauerfehler. Ohne nutzbaren Eintrag der Webrecherche läuft keine Recherche.
 5. Ergebnis (Kernfrage in einem Satz, Eckdaten als Kurzantwort, Hintergrund in kurzen Absätzen, 3–6 Tipps, Rückfragen nur wenn die Antwort sonst nicht stimmt – meist keine, je 3 Antwortvorschläge, „Annahme / unklar“, Quellen nur am Ende, in der Web-App eingeklappt; Zitate im Text werden entfernt) wird Stand der Planung; die Runde behält ihren Stand als Schnappschuss.
 6. Joplin-Push der ganzen Planung als To-do in `Sprachnotizen/Planungsaufgaben` (aktueller Stand + Verlauf aller Runden mit Transkripten) → `fertig` → SSE, Web-Push „Planung fertig · n Fragen“. Jeder Web-Push läuft über einen Kanal (`NOTIFY_*`, je Nutzer, Status → Benachrichtigungen): Rückfragen, Fehler, Gespeichert (aus), Termine, Ring, Updates (nur Admins, einmal je Version).
 
@@ -136,7 +147,7 @@ In der Web-App und in Joplin heißt die Art „Notiz“ (Nutzervorgabe 15.11.202
 4. Worker (`remindDue`, jede Runde; `NextWake` weckt zur Erinnerung): fällig und nicht gesendet → Web-Push „Termin: Titel“ mit Zeit und Ort → `/eintrag/{id}`. Ist der Termin schon vorbei, kein Push.
 5. Verlauf: Filter „Termine“ (`GET /api/verlauf?art=termin`), „Notizen“ ohne Termine. Reihenfolge nach Termin: Verpasst (rot, bis bestätigt) → Heute → Kommend; „Erledigte anzeigen“ (`alle=1`). Jede Verlaufsantwort trägt `naechster_termin`, `termine_verpasst`, `termine_offen`, `termine_24h`; die Web-App zeigt darüber eine Zeile mit dem nächsten Termin (rechts Badge = offene Termine in den nächsten 24 h, ohne solche kein Badge) und ggf. „N verpasste Termine“.
 6. Bestätigen/Erledigt bzw. „Wieder öffnen“: Wischen im Verlauf oder Knopf auf der Detailseite → `POST /api/eintraege/{id}/erledigt` mit `{erledigt: true|false}`. Nur mit Verbindung.
-7. Nachtrag Altbestand (einmalig): `pebble termine-nachtragen [Tage]` (Standard 30) prüft fertige Notizen und Listenpunkte mit `OPENAI_TITLE_MODEL` nur auf Termin; Treffer werden `termin` und verlassen ihre Liste; Tags/Gedächtnis bleiben unberührt. Schon vergangene gelten als bestätigt.
+7. Nachtrag Altbestand (einmalig): `pebble termine-nachtragen [Tage]` (Standard 30) prüft fertige Notizen und Listenpunkte über den Bereich kurztitel nur auf Termin; Treffer werden `termin` und verlassen ihre Liste; Tags/Gedächtnis bleiben unberührt. Schon vergangene gelten als bestätigt.
 
 ## Wischen im Verlauf (seit 21.11.2026)
 
@@ -161,11 +172,25 @@ In der Web-App und in Joplin heißt die Art „Notiz“ (Nutzervorgabe 15.11.202
 3. Lernen: alter und neuer Wortlaut wortweise verglichen; ersetzte Stellen (je Seite ≤ 4 Wörter, keine reinen Schreibweisen-/Satzzeichen-Änderungen, höchstens 10) werden Gedächtnis-Vorschläge „Spracherkennung: „X“ heißt richtig „Y“.“. Nach „Übernehmen“ gehen sie in jede Auswertung mit.
 4. Offene Vorschläge stehen als „(n)“ an „Status“ und am Reiter „Gedächtnis“ (`GET /api/zaehler`, nach jeder Seite und bei SSE `gedaechtnis`).
 
+## Neu transkribieren (seit 25.11.2026)
+1. Detailseite, Block „Aufnahme und Wortlaut“ → Knopf „Neu transkribieren“ (nur mit Aufnahme, wenn nichts läuft; Planung nur letzte Runde) → Rückfrage.
+2. `POST /api/eintraege/{id}/neu-transkribieren`: Wortlaut und Quelle leer, Stand `neu`, Fehler zurückgesetzt. Notiz: Punkte der alten Auswertung weg (Projekt-Themen bleiben). Planungsrunde: Recherche dieser Runde verworfen (Kosten → Nebenkosten), Planung auf den Stand davor.
+3. Worker: Transkription nach der aktuellen Reihenfolge → Notiz neu auswerten; Planungsrunde springt direkt auf `zugeordnet` (Zuordnung bleibt) → Recherche neu. Besteht die Transkription nur aus `pebble`, abgelehnt.
+
 ## KI-Anweisung je Notiz (seit 23.11.2026)
 
 1. Detailseite einer fertigen Notiz → „KI-Anweisung“ → eigene Seite mit Textfeld → `POST /api/eintraege/{id}/anweisung` mit `{text}` (≤ 500 Zeichen, ≤ 10 je Notiz).
 2. Server: Anweisung in die Auswertung (`anweisungen`), alle Punkte der Notiz weg (auch in Gruppen-Listen), Stand `transkribiert`; Beobachtung `anweisung` fürs Gedächtnis.
 3. Neue Auswertung bekommt alle Anweisungen (Vorrang) und die bisherige Liste; verlangt eine Anweisung das Aufteilen, wird je Teil ein Punkt in derselben Liste angelegt.
+
+## Lokale Transkription (seit 25.11.2026)
+1. Eintrag „Whisper (dieser Server)“ in der Transkription und `WHISPER_MODEL` (base/small/medium/turbo) – unter Status → KI → Transkription (Admin, gilt für alle). Die Auswahl zeigt je Modell Größe, RAM, Tempo und die Mittel des Servers.
+2. Speichern → Neustart → System lädt das Modell im Hintergrund von Hugging Face nach `DATA_DIR/modelle/whisper` (Datei `.laden`, Größe und SHA-256 geprüft, dann umbenannt). Geladene Modelle bleiben gespeichert (Wechsel ohne neuen Download); löschen nur auf der Bearbeitungsseite der Transkription (`DELETE /api/whisper/modelle/{id}`, Admin, nicht das gewählte bei lokaler Transkription). Gescheiterter Download: der nächste Auftrag stößt ihn neu an.
+3. Engine: whisper-cli und ffmpeg stecken gepackt im Binary (`deploy/whisper-engine.sh`, Release-Job `engine`), werden einmal je Engine-Stand nach `…/whisper/bin/<hash>/` entpackt; x86 wählt avx512 → avx2 → basis nach CPU.
+4. Modell im RAM: Beim Start (und nach dem Download) startet `whisper-server` mit dem Modell an einem Unix-Socket (`…/whisper/server.sock`, kein TCP-Port); er bleibt nach der letzten Aufnahme `WHISPER_KEEP_MINUTES` geladen (0 = dauerhaft), danach beendet; die nächste Aufnahme startet ihn wieder. Stirbt mit dem Dienst (Pdeathsig).
+5. Je Aufnahme (eine zur Zeit, alle Kerne): ffmpeg liest die entschlüsselte Aufnahme aus einer Speicherdatei (memfd, nie auf der Platte) → 16-kHz-WAV im Speicher → `POST /inference` an den Server (`language`, JSON) → Text; Markierungen wie `[BLANK_AUDIO]` fallen weg. Kosten 0, Quelle `lokal`.
+6. Scheitert lokal: `lokal` → normaler Fehler mit Wiederholung; `lokal-openai` → OpenAI, Quelle `openai-ausweich` („OpenAI (lokal gescheitert)“), Grund im Log und in Status → Transkription.
+7. Tempo: Rechenzeit je Sekunde Aufnahme, gleitender Mittelwert ab 5 s Aufnahme in `…/whisper/messung.json`; Status und Auswahl zeigen „1 Min. Aufnahme ≈ … s“.
 
 ## Fehler und „Erneut starten“
 

@@ -30,35 +30,49 @@ const backupUploadMax = 2 << 30
 // die Form, die der Download liefert (Name, Einträge, Reihenfolge, meta.json passend zum Namen, lesbare Datenbank).
 // Danach liegt es in BACKUP_DIR und wird sofort eingespielt – wie „Wiederherstellen“ samt Version aus dem Backup.
 func (a *System) handleBackupUpload(w http.ResponseWriter, r *http.Request) {
+	name, ok := receiveBackup(w, r, a.Cfg.BackupDir)
+	if !ok {
+		return
+	}
+	if err := a.requestRestore(name); err != nil {
+		writeErr(w, 500, "speicher", err.Error())
+		return
+	}
+	writeJSON(w, 200, map[string]any{"ok": true, "name": name})
+}
+
+// receiveBackup nimmt ein hochgeladenes Backup an (?name=, Archiv als Rumpf), prüft es und legt es in BACKUP_DIR ab.
+// Fehler beantwortet es selbst (ok = false). Gemeinsam für die Backup-Seite und die Ersteinrichtung.
+func receiveBackup(w http.ResponseWriter, r *http.Request, backupDir string) (string, bool) {
 	name := r.URL.Query().Get("name")
 	m := archiveNameRe.FindStringSubmatch(name)
 	if m == nil {
 		writeErr(w, 400, "ungueltig", "Dateiname passt nicht zu einem Backup (pebble-<version>-<kanal>-<zeit>-<art>.tar.gz)")
-		return
+		return "", false
 	}
 	if !updateInstallable() && !inDocker() {
 		writeErr(w, http.StatusConflict, "nicht_moeglich", noUpdater())
-		return
+		return "", false
 	}
-	final := filepath.Join(a.Cfg.BackupDir, name)
+	final := filepath.Join(backupDir, name)
 	if _, err := os.Stat(final); err == nil {
 		writeErr(w, http.StatusConflict, "vorhanden", "Dieses Backup liegt schon vor – in der Liste wiederherstellen")
-		return
+		return "", false
 	}
-	if err := os.MkdirAll(a.Cfg.BackupDir, 0o750); err != nil {
+	if err := os.MkdirAll(backupDir, 0o750); err != nil {
 		writeErr(w, 500, "speicher", "Backup-Ordner nicht anlegbar")
-		return
+		return "", false
 	}
 	// Große Backups (mit Aufnahmen) brauchen länger als die allgemeine Lesefrist des Servers.
 	http.NewResponseController(w).SetReadDeadline(time.Now().Add(30 * time.Minute))
 	b := make([]byte, 8)
 	rand.Read(b)
-	tmp := filepath.Join(a.Cfg.BackupDir, ".hochladen-"+hex.EncodeToString(b)+".tmp")
+	tmp := filepath.Join(backupDir, ".hochladen-"+hex.EncodeToString(b)+".tmp")
 	defer os.Remove(tmp)
 	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o640)
 	if err != nil {
 		writeErr(w, 500, "speicher", "Upload nicht speicherbar")
-		return
+		return "", false
 	}
 	_, err = io.Copy(f, http.MaxBytesReader(w, r.Body, backupUploadMax))
 	if cerr := f.Close(); err == nil {
@@ -66,23 +80,19 @@ func (a *System) handleBackupUpload(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		writeErr(w, 400, "ungueltig", "Upload abgebrochen oder zu groß")
-		return
+		return "", false
 	}
-	if err := checkBackupArchive(tmp, m, a.Cfg.BackupDir); err != nil {
+	if err := checkBackupArchive(tmp, m, backupDir); err != nil {
 		logf("Backup-Upload %s abgelehnt: %v", name, err)
 		writeErr(w, 400, "ungueltig", i18n.Tf("Kein gültiges Backup: %s", err.Error()))
-		return
+		return "", false
 	}
 	if err := os.Rename(tmp, final); err != nil {
 		writeErr(w, 500, "speicher", "Backup nicht ablegbar")
-		return
+		return "", false
 	}
 	logf("Backup hochgeladen: %s", name)
-	if err := a.requestRestore(name); err != nil {
-		writeErr(w, 500, "speicher", err.Error())
-		return
-	}
-	writeJSON(w, 200, map[string]any{"ok": true, "name": name})
+	return name, true
 }
 
 // checkBackupArchive prüft ein hochgeladenes Archiv gegen die Form von writeArchive: meta.json, env, dann die Daten –
@@ -101,6 +111,12 @@ func checkBackupArchive(p string, m []string, tmpDir string) error {
 		return errors.New("keine gzip-Datei")
 	}
 	tr := tar.NewReader(gz)
+	// Entpackt höchstens halb so viel, wie frei ist (Schutz vor einer „Zip-Bombe“, die die Platte füllt).
+	limit := int64(1) << 40
+	if free, err := freeBytes(tmpDir); err == nil {
+		limit = int64(free / 2)
+	}
+	var total int64
 	audio := m[5] != ""
 	order := []string{"meta.json", "env", "pebble.db"}
 	n, format, users := 0, 0, 0
@@ -114,6 +130,9 @@ func checkBackupArchive(p string, m []string, tmpDir string) error {
 		}
 		if h.Typeflag != tar.TypeReg {
 			return fmt.Errorf("%s ist keine normale Datei", h.Name)
+		}
+		if total += h.Size; h.Size < 0 || total > limit {
+			return errors.New("entpackt größer als der freie Platz erlaubt")
 		}
 		switch {
 		case n < len(order):
@@ -155,6 +174,10 @@ func checkBackupArchive(p string, m []string, tmpDir string) error {
 				return errors.New("meta.json passt nicht zum Dateinamen")
 			}
 			format = meta.Format
+			// Kein Zurück auf Versionen, die das Datenbankschema nicht kennen (wie bei Updates).
+			if v, _, ok := parseVersion(meta.Version); ok && v.less(minRollback) {
+				return errors.New("Backup einer zu alten Version")
+			}
 			if format >= 2 {
 				order[2] = "system.db"
 			}

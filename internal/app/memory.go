@@ -318,14 +318,14 @@ func (a *App) train(ctx context.Context) (info TrainInfo) {
 	input := fmt.Sprintf("Heute ist der %s.\n\n%s\n\nVorhandene Listen: %s\n%s\n\nNotizen:\n%s\nPlanungen:\n%s\nBeobachtungen (Korrekturen und Antworten des Nutzers, meist Einzelfälle):\n%s",
 		time.Now().Format("02.01.2006"), a.memoryHint(), strings.Join(names, ", "), a.tagHint(), notes.String(), plans.String(), obs.String())
 	res, err := a.respond(ctx, openai.Request{
-		Model: a.Cfg.DictationModel, Instructions: fmt.Sprintf(trainInstructions, trainNewMax), Input: input,
+		Area: openai.AreaDictation, Instructions: fmt.Sprintf(trainInstructions, trainNewMax), Input: input,
 		MaxOutputTokens: 3000, ReasoningEffort: a.Cfg.PlanReasoningEffort, SchemaName: "lernlauf", Schema: trainSchema,
 	})
 	if err != nil {
 		info.Fehler = a.T("KI nicht erreichbar:") + " " + err.Error()
 		return
 	}
-	info.KostenUSD = a.cost(res)
+	info.KostenUSD = res.Cost
 	var out struct {
 		Eintraege []string `json:"eintraege"`
 	}
@@ -486,7 +486,7 @@ func (a *App) learnObservations(ctx context.Context) {
 		names = append(names, listRef(l))
 	}
 	res, err := a.respond(ctx, openai.Request{
-		Model: a.Cfg.DictationModel, Instructions: fmt.Sprintf(observeInstructions, 4), SchemaName: "beobachtungen", Schema: trainSchema,
+		Area: openai.AreaDictation, Instructions: fmt.Sprintf(observeInstructions, 4), SchemaName: "beobachtungen", Schema: trainSchema,
 		MaxOutputTokens: 1500, ReasoningEffort: a.Cfg.PlanReasoningEffort,
 		Input: fmt.Sprintf("%s\n\nListen: %s\n\nBeobachtungen:\n%s", a.memoryHint(), strings.Join(names, ", "), obs.String()),
 	})

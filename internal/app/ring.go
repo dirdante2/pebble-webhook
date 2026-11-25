@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"pebble-webhook/internal/config"
+	"pebble-webhook/internal/openai"
 	"pebble-webhook/internal/store"
 )
 
@@ -77,10 +78,11 @@ func (a *App) audioSeconds(path string) float64 {
 
 // costSeconds: Länge aus den Transkriptionskosten zurückgerechnet (-1 = nicht möglich).
 func (a *App) costSeconds(j *store.Job) float64 {
-	if j.CostTranscribe == nil || *j.CostTranscribe <= 0 || a.Cfg.PriceTranscribeMin == nil || *a.Cfg.PriceTranscribeMin <= 0 {
+	step := a.AI.First(openai.AreaTranscribe) // Näherung: Preis des ersten Cloud-Eintrags
+	if j.CostTranscribe == nil || *j.CostTranscribe <= 0 || step == nil || step.PriceMinute <= 0 {
 		return -1
 	}
-	return *j.CostTranscribe / *a.Cfg.PriceTranscribeMin * 60
+	return *j.CostTranscribe / step.PriceMinute * 60
 }
 
 // Schätzwerte, wenn eine Aufnahme keine lesbare Länge hat (die Transkription trägt die echte Länge später nach):

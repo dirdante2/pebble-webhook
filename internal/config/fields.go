@@ -5,22 +5,32 @@ import (
 	"encoding/hex"
 	"os"
 	"strings"
+
+	"pebble-webhook/internal/whisper"
 )
 
 // Field beschreibt eine Einstellung, die in der Datenbank liegt und über die Web-Oberfläche gepflegt wird
 // (Einrichtungsassistent, Status → Einstellungen). Default füllt das Formular vor und gilt, wenn nichts gesetzt ist.
 type Field struct {
-	Key      string   `json:"key"`
-	Group    string   `json:"gruppe"`
-	Label    string   `json:"name"`
-	Help     string   `json:"hilfe,omitempty"`
-	Kind     string   `json:"art"` // text | secret | int | num | choice | url
-	Default  string   `json:"vorgabe"`
-	Required bool     `json:"pflicht,omitempty"`
-	Choices  []string `json:"auswahl,omitempty"`
-	Generate bool     `json:"erzeugen,omitempty"`    // Geheimnis, das der Assistent selbst erzeugt
-	Personal bool     `json:"persoenlich,omitempty"` // je Nutzer (in seiner Datenbank), sonst für das ganze System
+	Key      string            `json:"key"`
+	Group    string            `json:"gruppe"`
+	Label    string            `json:"name"`
+	Help     string            `json:"hilfe,omitempty"`
+	Kind     string            `json:"art"` // text | secret | int | num | choice | multi (Komma-Liste aus Choices, „keine“ = nichts) | url
+	Default  string            `json:"vorgabe"`
+	Required bool              `json:"pflicht,omitempty"`
+	Choices  []string          `json:"auswahl,omitempty"`
+	Generate bool              `json:"erzeugen,omitempty"`      // Geheimnis, das der Assistent selbst erzeugt
+	Personal bool              `json:"persoenlich,omitempty"`   // je Nutzer (in seiner Datenbank), sonst für das ganze System
+	Labels   map[string]string `json:"bezeichnungen,omitempty"` // Anzeige je Auswahlwert (sonst der Wert selbst)
+	// Hidden: nicht in Formularen (KI_ZUGAENGE/KI_BEREICHE haben eigene Seiten; frühere KI-Einzelwerte bleiben nur
+	// als Quelle für die Übernahme in Zugänge und Bereiche). Setup: trotzdem im Einrichtungsassistenten.
+	Hidden bool `json:"-"`
+	Setup  bool `json:"-"`
 }
+
+// providerLabels: Anzeige der Anbieter eines KI-Bereichs.
+var providerLabels = map[string]string{"openai": "OpenAI", "dienst": "Dienst", "lokal": "Lokal"}
 
 // personal: Einstellungen, die jeder Nutzer selbst setzt (überlagern den Wert des Systems).
 var personal = map[string]bool{"LANGUAGE": true, "TRIGGER_SINGLE": true, "TRIGGER_DOUBLE": true, "RING_CAPACITY_HOURS": true,
@@ -63,26 +73,52 @@ var Fields = []Field{
 	{Key: "HOOK_MAX_MB", Group: "Pebble-App", Label: "Größte Aufnahme (MB)", Help: "Größere Aufnahmen weist der Webhook ab.", Kind: "int", Default: "25"},
 	{Key: "HOOK_RATE_PER_MIN", Group: "Pebble-App", Label: "Aufrufe je Minute", Help: "Höchstens so viele Webhook-Aufrufe je Minute; mehr werden abgewiesen (Schutz vor Missbrauch).", Kind: "int", Default: "30"},
 
-	{Key: "OPENAI_API_KEY", Group: "OpenAI", Label: "API-Schlüssel", Help: "Schlüssel für Transkription, Auswertung und Recherche bei OpenAI.", Kind: "secret", Required: true},
-	{Key: "OPENAI_BASE_URL", Group: "OpenAI", Label: "API-Adresse", Help: "Adresse der OpenAI-API; nur für einen kompatiblen anderen Anbieter ändern.", Kind: "url", Default: "https://api.openai.com/v1"},
-	{Key: "TRANSCRIPTION", Group: "OpenAI", Label: "Transkription", Help: "openai = Audio bei OpenAI transkribieren; pebble = Text der Pebble-App übernehmen.", Kind: "choice", Default: "openai", Choices: []string{"openai", "pebble"}},
-	{Key: "OPENAI_TRANSCRIBE_MODEL", Group: "OpenAI", Label: "Modell Transkription", Help: "Modell, das die Aufnahme in Text umwandelt.", Kind: "text", Default: "gpt-transcribe"},
-	{Key: "OPENAI_TITLE_MODEL", Group: "OpenAI", Label: "Modell Kurztitel und Zuordnung", Help: "Günstiges Modell für Kurztitel und die Zuordnung zu Listen.", Kind: "text", Default: "gpt-6-luna", Required: true},
-	{Key: "OPENAI_PLAN_MODEL", Group: "OpenAI", Label: "Modell Recherche", Help: "Modell für Recherchen (Responses-API mit Websuche).", Kind: "text", Default: "gpt-6-luna", Required: true},
-	{Key: "OPENAI_DICTATION_MODEL", Group: "OpenAI", Label: "Modell Notizen", Help: "Modell für die Auswertung von Notizen. Leer = Modell der Recherche.", Kind: "text"},
-	{Key: "OPENAI_PLAN_REASONING_EFFORT", Group: "OpenAI", Label: "Denkaufwand Recherche", Help: "Wie gründlich das Modell bei Recherchen nachdenkt; höher = besser, aber teurer. standard = Vorgabe des Modells.", Kind: "choice", Default: "low", Choices: []string{"standard", "none", "low", "medium", "high"}},
-	{Key: "RESEARCH_LIMIT_USD", Group: "OpenAI", Label: "Kostenlimit je Recherche (USD)", Help: "Eine Recherche bricht ab, sobald ihre Kosten diesen Betrag erreichen.", Kind: "num", Default: "0.50", Required: true},
-	{Key: "OPENAI_IMAGE_MODEL", Group: "OpenAI", Label: "Modell Bilder", Help: "Modell, mit dem die KI erklärende Bilder erzeugt (Images-API).", Kind: "text", Default: "gpt-image-1-mini"},
-	{Key: "IMAGES_GENERATE", Group: "OpenAI", Label: "Bilder erzeugen", Help: "aktiv = die KI darf zu Notizen und Planungen eigene Bilder erzeugen, wenn sie etwas besser erklären (kostet je Bild). Externe Bilder und Diagramme gibt es immer.", Kind: "choice", Default: "aktiv", Choices: []string{"aktiv", "inaktiv"}},
-	{Key: "RESEARCH_MAX_OUTPUT_TOKENS", Group: "OpenAI", Label: "Höchstens Ausgabe-Tokens", Help: "Obergrenze für die Länge einer Recherche-Antwort.", Kind: "int", Default: "6000"},
+	{Key: "KI_ZUGAENGE", Group: "KI-Zugänge", Label: "KI-Zugänge", Kind: "json", Hidden: true},
+	{Key: "KI_BEREICHE", Group: "KI-Zugänge", Label: "KI-Bereiche", Kind: "json", Hidden: true},
+	{Key: "OPENAI_ENABLED", Group: "KI-Zugänge", Label: "OpenAI", Help: "Zugang zu OpenAI nutzen.", Kind: "choice", Default: "aktiv", Choices: []string{"aktiv", "inaktiv"}, Hidden: true},
+	{Key: "OPENAI_API_KEY", Group: "KI-Zugänge", Label: "OpenAI: API-Schlüssel", Help: "Nur nötig, wenn ein Bereich OpenAI nutzt. Einziger Anbieter mit erzeugten Bildern.", Kind: "secret", Hidden: true, Setup: true},
+	{Key: "OPENAI_BASE_URL", Group: "KI-Zugänge", Label: "OpenAI: API-Adresse", Help: "Adresse der OpenAI-API (Responses-API).", Kind: "url", Default: "https://api.openai.com/v1", Hidden: true},
+	{Key: "SERVICE_ENABLED", Group: "KI-Zugänge", Label: "Dienst", Help: "Zugang zu einem OpenAI-kompatiblen Dienst nutzen.", Kind: "choice", Default: "inaktiv", Choices: []string{"aktiv", "inaktiv"}, Hidden: true},
+	{Key: "SERVICE_BASE_URL", Group: "KI-Zugänge", Label: "Dienst: API-Adresse", Help: "Ein OpenAI-kompatibler Dienst (Chat-Completions), z. B. OpenRouter https://openrouter.ai/api/v1, Gemini https://generativelanguage.googleapis.com/v1beta/openai, Groq https://api.groq.com/openai/v1, Mistral https://api.mistral.ai/v1, Perplexity https://api.perplexity.ai. Gratis-Kontingente nutzen Daten teils zum Training.", Kind: "url", Hidden: true},
+	{Key: "SERVICE_API_KEY", Group: "KI-Zugänge", Label: "Dienst: API-Schlüssel", Help: "Schlüssel des Dienstes.", Kind: "secret", Hidden: true},
+	{Key: "LOCAL_ENABLED", Group: "KI-Zugänge", Label: "Lokal", Help: "Zugang zu einem lokalen Modell nutzen.", Kind: "choice", Default: "inaktiv", Choices: []string{"aktiv", "inaktiv"}, Hidden: true},
+	{Key: "LOCAL_BASE_URL", Group: "KI-Zugänge", Label: "Lokal: API-Adresse", Help: "Ollama (http://<server>:11434/v1) oder LM Studio im eigenen Netz; ohne Schlüssel, Daten bleiben im Haus. Sucht nicht selbst im Web.", Kind: "url", Hidden: true},
+	{Key: "SEARXNG_ENABLED", Group: "KI-Zugänge", Label: "SearXNG", Help: "Eigene Suchmaschine nutzen.", Kind: "choice", Default: "inaktiv", Choices: []string{"aktiv", "inaktiv"}, Hidden: true},
+	{Key: "SEARXNG_URL", Group: "KI-Zugänge", Label: "SearXNG: Adresse", Help: "Eigene Suchmaschine für die Websuche, auch für lokale Modelle. JSON-Ausgabe muss erlaubt sein (settings.yml: formats json).", Kind: "url", Hidden: true},
+	{Key: "USER_DAILY_LIMIT_USD", Group: "KI-Zugänge", Label: "Tageslimit KI-Kosten je Nutzer (USD)", Help: "Darüber warten neue Aufträge eines Nutzers bis zum nächsten Tag. 0 = kein Limit; Admins ausgenommen.", Kind: "num", Default: "2"},
 
-	{Key: "PRICE_PLAN_INPUT_PER_MTOK", Group: "Preise", Label: "Recherche: Eingabe (USD je 1 Mio. Tokens)", Help: "Fehlt ein Recherche-Preis, läuft keine Recherche.", Kind: "num", Default: "0.10"},
-	{Key: "PRICE_PLAN_OUTPUT_PER_MTOK", Group: "Preise", Label: "Recherche: Ausgabe (USD je 1 Mio. Tokens)", Help: "Preis für erzeugte Tokens der Recherche; zählt für das Kostenlimit und die KI-Kosten.", Kind: "num", Default: "0.50"},
-	{Key: "PRICE_SEARCH_PER_CALL", Group: "Preise", Label: "Websuche (USD je Aufruf)", Help: "Preis je Websuche der Recherche.", Kind: "num", Default: "0.01"},
-	{Key: "PRICE_TITLE_INPUT_PER_MTOK", Group: "Preise", Label: "Kurztitel: Eingabe (USD je 1 Mio. Tokens)", Help: "Preis für gelesene Tokens beim Kurztitel und der Zuordnung.", Kind: "num", Default: "0.10"},
-	{Key: "PRICE_TITLE_OUTPUT_PER_MTOK", Group: "Preise", Label: "Kurztitel: Ausgabe (USD je 1 Mio. Tokens)", Help: "Preis für erzeugte Tokens beim Kurztitel und der Zuordnung.", Kind: "num", Default: "0.50"},
-	{Key: "PRICE_IMAGE_PER_PICTURE", Group: "Preise", Label: "Bild erzeugen (USD je Bild)", Help: "Preis je erzeugtem Bild; zählt zu den KI-Kosten des Eintrags.", Kind: "num", Default: "0.01"},
-	{Key: "PRICE_TRANSCRIBE_PER_MIN", Group: "Preise", Label: "Transkription (USD je Minute)", Help: "Preis je Minute Audio bei der Transkription.", Kind: "num", Default: "0.0045"},
+	{Key: "TRANSCRIPTION", Group: "Transkription", Label: "Transkription", Help: "Wer die Aufnahme in Text umwandelt. Lokal = Whisper auf diesem Server, die Aufnahme verlässt ihn nicht; das Modell wird nach dem Speichern geladen. Mit Ausweichweg übernimmt der Cloud-Anbieter, wenn lokal etwas scheitert (am Eintrag vermerkt).", Kind: "choice", Default: "openai", Choices: []string{"openai", "lokal", "lokal-openai", "pebble"},
+		Labels: map[string]string{"openai": "Nur Cloud-Anbieter", "lokal": "Nur lokal (Whisper)", "lokal-openai": "Lokal, Cloud-Anbieter als Ausweichweg", "pebble": "Text der Pebble-App übernehmen"}, Hidden: true},
+	{Key: "TRANSCRIBE_PROVIDER", Group: "Transkription", Label: "Cloud-Anbieter", Help: "Wer in der Cloud transkribiert: OpenAI oder der Dienst (z. B. Groq mit Whisper).", Kind: "choice", Default: "openai", Choices: []string{"openai", "dienst"},
+		Labels: map[string]string{"openai": "OpenAI", "dienst": "Dienst"}, Hidden: true},
+	{Key: "OPENAI_TRANSCRIBE_MODEL", Group: "Transkription", Label: "Modell (Cloud)", Help: "Modell, das die Aufnahme in der Cloud in Text umwandelt (Groq z. B. whisper-large-v3-turbo).", Kind: "text", Default: "gpt-transcribe", Hidden: true},
+	{Key: "PRICE_TRANSCRIBE_PER_MIN", Group: "Transkription", Label: "Preis (USD je Minute)", Help: "Preis je Minute Audio in der Cloud.", Kind: "num", Default: "0.0045", Hidden: true},
+	{Key: "WHISPER_MODEL", Group: "Transkription", Label: "Whisper-Modell", Help: "Größer = genauer, aber langsamer und mehr RAM.", Kind: "choice", Default: whisper.DefaultModel, Choices: whisper.IDs()},
+	{Key: "WHISPER_KEEP_MINUTES", Group: "Transkription", Label: "Modell im RAM halten (Minuten)", Help: "So lange bleibt das Whisper-Modell nach der letzten Aufnahme im RAM, damit es nicht jedes Mal neu geladen wird. 0 = dauerhaft.", Kind: "int", Default: "0"},
+
+	{Key: "TITLE_PROVIDER", Group: "Kurztitel", Label: "Anbieter", Help: "Kurztitel, Zuordnung zu offenen Planungen, Termine nachtragen, Beschreibungen der Listen. Kleine Aufgaben: ein lokales Modell reicht.", Kind: "choice", Default: "openai", Choices: []string{"openai", "dienst", "lokal"}, Labels: providerLabels, Hidden: true},
+	{Key: "OPENAI_TITLE_MODEL", Group: "Kurztitel", Label: "Modell", Help: "Modell beim gewählten Anbieter.", Kind: "text", Default: "gpt-6-luna", Hidden: true},
+	{Key: "PRICE_TITLE_INPUT_PER_MTOK", Group: "Kurztitel", Label: "Preis Eingabe (USD je 1 Mio. Tokens)", Help: "Lokal: 0.", Kind: "num", Default: "0.10", Hidden: true},
+	{Key: "PRICE_TITLE_OUTPUT_PER_MTOK", Group: "Kurztitel", Label: "Preis Ausgabe (USD je 1 Mio. Tokens)", Help: "Lokal: 0.", Kind: "num", Default: "0.50", Hidden: true},
+
+	{Key: "DICTATION_PROVIDER", Group: "Auswertung & Sortierung", Label: "Anbieter", Help: "Notizen auswerten, in Gruppen und Listen einsortieren, Lernlauf des Gedächtnisses. Braucht strukturierte Ausgabe (JSON-Schema); sehr kleine lokale Modelle liefern oft unbrauchbares JSON.", Kind: "choice", Default: "openai", Choices: []string{"openai", "dienst", "lokal"}, Labels: providerLabels, Hidden: true},
+	{Key: "OPENAI_DICTATION_MODEL", Group: "Auswertung & Sortierung", Label: "Modell", Help: "Modell beim gewählten Anbieter. Leer = Modell der Webrecherche.", Kind: "text", Hidden: true},
+	{Key: "PRICE_DICTATION_INPUT_PER_MTOK", Group: "Auswertung & Sortierung", Label: "Preis Eingabe (USD je 1 Mio. Tokens)", Help: "Leer = wie Webrecherche. Lokal: 0.", Kind: "num", Hidden: true},
+	{Key: "PRICE_DICTATION_OUTPUT_PER_MTOK", Group: "Auswertung & Sortierung", Label: "Preis Ausgabe (USD je 1 Mio. Tokens)", Help: "Leer = wie Webrecherche. Lokal: 0.", Kind: "num", Hidden: true},
+
+	{Key: "RESEARCH_PROVIDER", Group: "Webrecherche", Label: "Anbieter", Help: "Planungen mit Antwort und Trailer-Suche.", Kind: "choice", Default: "openai", Choices: []string{"openai", "dienst", "lokal"}, Labels: providerLabels, Hidden: true},
+	{Key: "OPENAI_PLAN_MODEL", Group: "Webrecherche", Label: "Modell", Help: "Modell beim gewählten Anbieter.", Kind: "text", Default: "gpt-6-luna", Hidden: true},
+	{Key: "RESEARCH_WEB_SEARCH", Group: "Webrecherche", Label: "Websuche", Help: "Mehrere möglich. Anbieter = Suche von OpenAI, OpenRouter (Web-Plugin) oder einem Modell, das selbst sucht (Perplexity Sonar, Groq Compound); ein lokales Modell sucht nicht selbst. Gilt auch für kurze Suchen der Auswertung. Keine = Antwort aus dem Modellwissen.", Kind: "multi", Default: "anbieter", Choices: []string{"anbieter", "searxng"},
+		Labels: map[string]string{"anbieter": "Websuche des Anbieters", "searxng": "SearXNG"}, Hidden: true},
+	{Key: "OPENAI_PLAN_REASONING_EFFORT", Group: "Webrecherche", Label: "Denkaufwand (nur OpenAI)", Help: "Wie gründlich das Modell nachdenkt; gilt auch für die Auswertung. Höher = besser, aber teurer. standard = Vorgabe des Modells.", Kind: "choice", Default: "low", Choices: []string{"standard", "none", "low", "medium", "high"}},
+	{Key: "RESEARCH_LIMIT_USD", Group: "Webrecherche", Label: "Kostenlimit je Recherche (USD)", Help: "Eine Recherche bricht ab, sobald ihre Kosten diesen Betrag erreichen.", Kind: "num", Default: "0.50", Required: true},
+	{Key: "RESEARCH_MAX_OUTPUT_TOKENS", Group: "Webrecherche", Label: "Höchstens Ausgabe-Tokens", Help: "Obergrenze für die Länge einer Recherche-Antwort.", Kind: "int", Default: "6000"},
+	{Key: "PRICE_PLAN_INPUT_PER_MTOK", Group: "Webrecherche", Label: "Preis Eingabe (USD je 1 Mio. Tokens)", Help: "Fehlt ein Recherche-Preis, läuft keine Recherche. Lokal: 0.", Kind: "num", Default: "0.10", Hidden: true},
+	{Key: "PRICE_PLAN_OUTPUT_PER_MTOK", Group: "Webrecherche", Label: "Preis Ausgabe (USD je 1 Mio. Tokens)", Help: "Zählt für das Kostenlimit und die KI-Kosten. Lokal: 0.", Kind: "num", Default: "0.50", Hidden: true},
+	{Key: "PRICE_SEARCH_PER_CALL", Group: "Webrecherche", Label: "Preis Websuche (USD je Aufruf)", Help: "Preis je Websuche des Anbieters; SearXNG: 0.", Kind: "num", Default: "0.01", Hidden: true},
+	{Key: "IMAGES_GENERATE", Group: "Webrecherche", Label: "Bilder erzeugen (nur OpenAI)", Help: "aktiv = die KI darf zu Notizen und Planungen eigene Bilder erzeugen (braucht den OpenAI-Schlüssel, kostet je Bild). Externe Bilder und Diagramme gibt es immer.", Kind: "choice", Default: "aktiv", Choices: []string{"aktiv", "inaktiv"}, Hidden: true},
+	{Key: "OPENAI_IMAGE_MODEL", Group: "Webrecherche", Label: "Modell Bilder", Help: "Modell, mit dem die KI erklärende Bilder erzeugt (Images-API).", Kind: "text", Default: "gpt-image-1-mini", Hidden: true},
+	{Key: "PRICE_IMAGE_PER_PICTURE", Group: "Webrecherche", Label: "Preis Bild (USD je Bild)", Help: "Zählt zu den KI-Kosten des Eintrags.", Kind: "num", Default: "0.01", Hidden: true},
 
 	{Key: "YOUTUBE_API_KEY", Group: "YouTube", Label: "YouTube-API-Schlüssel", Help: "Schlüssel der YouTube Data API v3 für Trailer zu Filmen und Serien (kostenlos, ca. 100 Suchen am Tag). Leer = die KI sucht den Trailer über die Websuche (ungenauer, kostet).", Kind: "secret"},
 
@@ -116,7 +152,7 @@ var Fields = []Field{
 	{Key: "UPDATE_CHANNEL", Group: "Zugang und Updates", Label: "Update-Kanal", Help: "stable = Langzeit-Versionen; beta = neue, noch nicht ausgereifte Funktionen; nightly = jede Änderung, auch ungetestet.", Kind: "choice", Default: "stable", Choices: []string{"stable", "beta", "nightly"}},
 	{Key: "AUTO_UPDATE", Group: "Zugang und Updates", Label: "Automatisches Update", Help: "aktiv = jeden Tag zur gewählten Uhrzeit die neueste Version des Update-Kanals installieren, wenn es eine neuere gibt (vorher Backup).", Kind: "choice", Default: "aktiv", Choices: []string{"aktiv", "inaktiv"}},
 	{Key: "AUTO_UPDATE_TIME", Group: "Zugang und Updates", Label: "Uhrzeit automatisches Update", Help: "Uhrzeit (HH:MM, Zeitzone des Servers), zu der das automatische Update prüft und installiert.", Kind: "text", Default: "04:00"},
-	{Key: "UPDATE_REPO", Group: "Zugang und Updates", Label: "Update-Quelle (GitHub owner/repo)", Help: "aus = keine Update-Prüfung.", Kind: "text", Default: "dirdante2/pebble-webhook"},
+	{Key: "UPDATE_REPO", Group: "Zugang und Updates", Label: "Update-Quelle (GitHub owner/repo)", Help: "aus = keine Update-Prüfung. Auf Servern mit Updater fest in /etc/pebble-webhook/env (UPDATE_REPO).", Kind: "text", Default: "dirdante2/pebble-webhook"},
 
 	{Key: "BACKUP_SCHEDULE", Group: "Backup", Label: "Backup-Plan", Help: "Wann das Komplett-Backup läuft (Datenbank mit Einstellungen, Version und Kanal): täglich, wöchentlich (montags), monatlich (am 1.) oder aus.", Kind: "choice", Default: "täglich", Choices: []string{"täglich", "wöchentlich", "monatlich", "aus"}},
 	{Key: "BACKUP_TIME", Group: "Backup", Label: "Uhrzeit Backup", Help: "Uhrzeit (HH:MM, Zeitzone des Servers) des geplanten Backups.", Kind: "text", Default: "03:00"},
@@ -134,11 +170,19 @@ func FieldByKey(key string) (Field, bool) {
 	return Field{}, false
 }
 
+// Private: persönliche Werte, die nie vom System geerbt werden – Zugangsdaten fremder Dienste (Joplin) und
+// persönliche Geheimnisse. Sonst nutzte ein Nutzer ohne eigene Werte den Zugang eines anderen.
+func (f Field) Private() bool {
+	return f.Personal && (f.Kind == "secret" || strings.HasPrefix(f.Key, "JOPLIN_"))
+}
+
 // EnvLocked: Geheimnisse des Systems (API-Schlüssel), die in der Umgebung gesetzt sind (Docker, env-Datei), gelten
 // immer – sie gehen der Datenbank vor und sind in der App gesperrt. Persönliche Geheimnisse (Joplin) nie.
+// Ebenso die Update-Quelle: der Updater läuft als root und nimmt nur das Repo aus der env-Datei (install.sh trägt
+// es dort ein); in der App ist sie dann nur zu sehen.
 func EnvLocked(key string) (string, bool) {
 	f, ok := FieldByKey(key)
-	if !ok || f.Kind != "secret" || f.Personal {
+	if !ok || f.Personal || (f.Kind != "secret" && key != "UPDATE_REPO") {
 		return "", false
 	}
 	v := strings.TrimSpace(os.Getenv(key))

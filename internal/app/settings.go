@@ -5,6 +5,7 @@ import (
 	"crypto/subtle"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -14,7 +15,9 @@ import (
 
 	"pebble-webhook/internal/config"
 	"pebble-webhook/internal/i18n"
+	"pebble-webhook/internal/schluessel"
 	"pebble-webhook/internal/store"
+	"pebble-webhook/internal/whisper"
 )
 
 // Einstellungen: alle Werte außer den Start-Werten liegen in der Datenbank (kv „einstellung:…“) und werden
@@ -27,9 +30,15 @@ var ErrNotConfigured = fmt.Errorf("noch nicht eingerichtet")
 // LoadSettings liest die Einstellungen aus der Datenbank. Gibt es noch keine, übernimmt es einmalig die Werte
 // einer alten env-Datei (Umgebung), sofern dort eine öffentliche Adresse steht.
 func LoadSettings(db *store.System, boot config.Bootstrap) (*config.Config, error) {
+	unsealSystemSecrets(db, boot.KeyDir)
 	values, err := db.Settings()
 	if err != nil {
 		return nil, err
+	}
+	for k, v := range values {
+		if schluessel.Sealed(v) {
+			delete(values, k) // noch verschlüsselt (Systemschlüssel fehlt): gilt als nicht gesetzt
+		}
 	}
 	if values["PUBLIC_URL"] == "" {
 		imported := map[string]string{}
@@ -73,7 +82,19 @@ const (
 )
 
 func inScope(f config.Field, scope int) bool {
+	if f.Hidden && !(f.Setup && scope == scopeAll) {
+		return false
+	}
 	return scope == scopeAll || (scope == scopePersonal) == f.Personal
+}
+
+// envLockedSet: Wert aus der Umgebung (gesperrt, nur zu sehen) eintragen.
+func envLockedSet(key string, m map[string]any) bool {
+	v, locked := config.EnvLocked(key)
+	if locked {
+		m["wert"], m["gesetzt"], m["gesperrt"] = v, true, true
+	}
+	return locked
 }
 
 // settingsView liefert die Felder mit den gespeicherten Werten; Geheimnisse nur als „gesetzt“.
@@ -86,7 +107,11 @@ func settingsView(values map[string]string, generate bool, scope int) []map[stri
 		v, set := values[f.Key]
 		m := map[string]any{"key": f.Key, "gruppe": f.Group, "name": f.Label, "hilfe": f.Help, "art": f.Kind,
 			"vorgabe": f.Default, "pflicht": f.Required, "auswahl": f.Choices, "persoenlich": f.Personal}
+		if f.Labels != nil {
+			m["bezeichnungen"] = f.Labels
+		}
 		switch {
+		case f.Kind != "secret" && envLockedSet(f.Key, m):
 		case f.Kind == "secret":
 			if _, locked := config.EnvLocked(f.Key); locked {
 				m["gesetzt"], m["gesperrt"], m["wert"] = true, true, ""
@@ -146,7 +171,7 @@ func (a *System) handleSettings(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, "speicher", "Datenbankfehler")
 		return
 	}
-	writeJSON(w, 200, map[string]any{"felder": settingsView(values, false, scopeSystem)})
+	writeJSON(w, 200, map[string]any{"felder": settingsView(values, false, scopeSystem), "whisper": whisperInfo(a.Whisper)})
 }
 
 func (a *System) handleSettingsSave(w http.ResponseWriter, r *http.Request) {
@@ -196,6 +221,11 @@ func (a *App) effectiveSettings() (map[string]string, error) {
 	own, err := a.DB.Settings()
 	if err != nil {
 		return nil, err
+	}
+	for _, f := range config.Fields {
+		if f.Private() {
+			delete(values, f.Key) // Zugangsdaten nie vom System anzeigen oder übernehmen
+		}
 	}
 	for k, v := range own {
 		if f, ok := config.FieldByKey(k); ok && f.Personal {
@@ -261,7 +291,8 @@ type SetupServer struct {
 	LoadErr error // warum der Dienst nicht normal startet (nil = noch nie eingerichtet)
 
 	rateMu sync.Mutex
-	fails  int
+	fails  map[string]int // Fehlversuche je Adresse (so sperrt ein Fremder den Betreiber nicht aus)
+	total  int            // alle Fehlversuche – Obergrenze gegen Raten über viele Adressen
 }
 
 func (s *SetupServer) Handler() http.Handler {
@@ -273,6 +304,8 @@ func (s *SetupServer) Handler() http.Handler {
 	mux.HandleFunc("GET /api/ersteinrichtung", s.handleGet)
 	mux.HandleFunc("POST /api/ersteinrichtung/openai", s.handleCheckOpenAI)
 	mux.HandleFunc("POST /api/ersteinrichtung", s.handleSave)
+	mux.HandleFunc("POST /api/ersteinrichtung/backup", s.handleBackupUpload)
+	mux.HandleFunc("POST /api/ersteinrichtung/backup/wiederherstellen", s.handleBackupRestore)
 	mux.HandleFunc("/", staticHandler(s.lang))
 	// Meldungen des Assistenten in der Sprache der Seite.
 	inner := securityHeaders(mux)
@@ -297,23 +330,31 @@ func (s *SetupServer) lang(r *http.Request) string {
 	return i18n.Norm(r.Header.Get("Accept-Language"))
 }
 
-// codeOK prüft den Einmal-Code; nach 20 Fehlversuchen ist bis zum Neustart Schluss.
-func (s *SetupServer) codeOK(code string) bool {
+// codeOK prüft den Einmal-Code; nach 20 Fehlversuchen einer Adresse (oder 1000 insgesamt) ist bis zum Neustart Schluss.
+func (s *SetupServer) codeOK(r *http.Request, code string) bool {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
+	}
 	s.rateMu.Lock()
 	defer s.rateMu.Unlock()
-	if s.fails >= 20 {
+	if s.fails == nil {
+		s.fails = map[string]int{}
+	}
+	if s.fails[host] >= 20 || s.total >= 1000 {
 		return false
 	}
 	want, err := s.DB.Get(setupCodeKey)
 	if err != nil || want == "" || subtle.ConstantTimeCompare([]byte(code), []byte(want)) != 1 {
-		s.fails++
+		s.fails[host]++
+		s.total++
 		return false
 	}
 	return true
 }
 
 func (s *SetupServer) handleGet(w http.ResponseWriter, r *http.Request) {
-	if !s.codeOK(r.URL.Query().Get("code")) {
+	if !s.codeOK(r, r.URL.Query().Get("code")) {
 		writeErr(w, http.StatusForbidden, "code", "Der Einrichtungs-Code fehlt oder ist falsch. Er steht im Log des Dienstes (pebble ersteinrichtung).")
 		return
 	}
@@ -323,7 +364,8 @@ func (s *SetupServer) handleGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	users, _ := s.DB.Users()
-	resp := map[string]any{"felder": settingsView(values, true, scopeAll), "version": s.Version, "eingerichtet": len(users) > 0}
+	resp := map[string]any{"felder": settingsView(values, true, scopeAll), "version": s.Version, "eingerichtet": len(users) > 0,
+		"whisper": whisperInfo(whisper.New(s.Boot.DataDir))}
 	if s.LoadErr != nil && s.LoadErr != ErrNotConfigured {
 		resp["fehler"] = strings.TrimPrefix(s.LoadErr.Error(), "Konfiguration: ")
 	}
@@ -337,11 +379,18 @@ func (s *SetupServer) handleCheckOpenAI(w http.ResponseWriter, r *http.Request) 
 		Key     string `json:"key"`
 		BaseURL string `json:"base_url"`
 	}
-	if readJSON(r, &in) != nil || r.Header.Get("X-App") != "1" || !s.codeOK(in.Code) {
+	if readJSON(r, &in) != nil || r.Header.Get("X-App") != "1" || !s.codeOK(r, in.Code) {
 		writeErr(w, http.StatusForbidden, "code", "Nicht erlaubt")
 		return
 	}
+	// Der in der Umgebung gesetzte Schlüssel geht nur an die Adresse aus der Umgebung bzw. an OpenAI selbst.
 	if v, locked := config.EnvLocked("OPENAI_API_KEY"); locked && in.Key == "" {
+		base := strings.TrimRight(strings.TrimSpace(in.BaseURL), "/")
+		envBase := strings.TrimRight(strings.TrimSpace(os.Getenv("OPENAI_BASE_URL")), "/")
+		if base != "" && base != envBase && base != "https://api.openai.com/v1" {
+			writeJSON(w, 200, map[string]any{"ok": false, "fehler": i18n.T("Für eine andere API-Adresse den Schlüssel eingeben")})
+			return
+		}
 		in.Key = v
 	}
 	err := checkOpenAI(r.Context(), in.BaseURL, in.Key)
@@ -354,7 +403,7 @@ func (s *SetupServer) handleSave(w http.ResponseWriter, r *http.Request) {
 		Name  string            `json:"name"`
 		Werte map[string]string `json:"werte"`
 	}
-	if readJSON(r, &in) != nil || r.Header.Get("X-App") != "1" || !s.codeOK(in.Code) {
+	if readJSON(r, &in) != nil || r.Header.Get("X-App") != "1" || !s.codeOK(r, in.Code) {
 		writeErr(w, http.StatusForbidden, "code", "Der Einrichtungs-Code fehlt oder ist falsch")
 		return
 	}
@@ -415,11 +464,11 @@ func errText(err error) string {
 
 // checkOpenAI ruft GET /models mit dem Schlüssel ab.
 func checkOpenAI(ctx context.Context, base, key string) error {
-	if key == "" {
-		return i18n.Errorf("kein Schlüssel")
-	}
 	if base == "" {
 		base = "https://api.openai.com/v1"
+	}
+	if key == "" && strings.HasPrefix(base, "https://api.openai.com/") { // lokale Dienste (Ollama) laufen ohne
+		return i18n.Errorf("kein Schlüssel")
 	}
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
@@ -427,7 +476,9 @@ func checkOpenAI(ctx context.Context, base, key string) error {
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Authorization", "Bearer "+key)
+	if key != "" {
+		req.Header.Set("Authorization", "Bearer "+key)
+	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return err

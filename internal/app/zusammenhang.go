@@ -222,7 +222,7 @@ func (a *App) noteSearchOne(q, except string) string {
 		b.WriteString(store.Preview(line.String(), searchLineMax))
 		b.WriteString("\n")
 	}
-	logf("Auswertung %s: Suche „%s“ → %d Treffer", except, q, n)
+	logf("Auswertung %s: Notizsuche (%d Zeichen) → %d Treffer", except, len([]rune(q)), n)
 	head := fmt.Sprintf("Suche „%s“: ", q)
 	switch {
 	case n == 0:

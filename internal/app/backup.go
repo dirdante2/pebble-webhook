@@ -105,8 +105,6 @@ func (a *System) backups() []backupEntry {
 			continue
 		}
 		dir := filepath.Join(a.Cfg.DataDir, "backup", e.Name())
-		_, errBin := os.Stat(filepath.Join(dir, "pebble-webhook"))
-		_, errDB := os.Stat(filepath.Join(dir, "pebble.db"))
 		channel := ""
 		if b, err := os.ReadFile(filepath.Join(dir, "kanal")); err == nil {
 			channel = strings.TrimSpace(string(b))
@@ -123,7 +121,7 @@ func (a *System) backups() []backupEntry {
 			return nil
 		})
 		out = append(out, backupEntry{Name: e.Name(), Version: m[1], Channel: channel, Kind: "update", At: at.UnixMilli(),
-			Size: size, Restorable: errBin == nil && errDB == nil, Legacy: true})
+			Size: size, Restorable: false, Legacy: true}) // nur noch löschbar (Programm liefe beim Einspielen als root)
 	}
 	sort.Slice(out, func(i, k int) bool { return out[i].At > out[k].At })
 	return out
@@ -194,6 +192,9 @@ func (a *System) snapshot(dir string) ([]backupUser, error) {
 	}
 	if err := a.DB.Snapshot(filepath.Join(dir, "system.db")); err != nil {
 		return nil, err
+	}
+	if err := sealSystemSecrets(filepath.Join(dir, "system.db"), a.Cfg.KeyDir); err != nil {
+		return nil, fmt.Errorf("Geheimnisse im Backup verschlüsseln: %w", err)
 	}
 	users, err := a.DB.Users()
 	if err != nil {
@@ -578,6 +579,7 @@ func (a *System) handleBackupDownload(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 404, "fehlt", "Backup nicht gefunden")
 		return
 	}
+	w.Header().Set("Cache-Control", "private, no-store") // nie in einem Proxy- oder CDN-Zwischenspeicher
 	w.Header().Set("Content-Disposition", `attachment; filename="`+name+`"`)
 	w.Header().Set("Content-Type", "application/gzip")
 	http.ServeFile(w, r, path)
@@ -588,7 +590,8 @@ func (a *System) handleUpdateRestore(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Name string `json:"name"`
 	}
-	if readJSON(r, &in) != nil || (!archiveNameRe.MatchString(in.Name) && !legacyNameRe.MatchString(in.Name)) {
+	// Alte Backup-Ordner (bis 1.28, mit Programm) spielt der Updater nicht mehr ein: ihr Programm liefe als root.
+	if readJSON(r, &in) != nil || !archiveNameRe.MatchString(in.Name) {
 		writeErr(w, 400, "ungueltig", "Backup fehlt")
 		return
 	}
@@ -614,19 +617,25 @@ func (a *System) handleUpdateRestore(w http.ResponseWriter, r *http.Request) {
 // requestRestore stößt das Einspielen eines Backups über den Updater an (install.sh: Daten ersetzen, Version aus dem
 // Backup installieren). Im Docker-Container: vormerken und neu starten; der Start spielt es ein (DockerStart).
 func (a *System) requestRestore(name string) error {
+	return requestRestoreAt(a.bootstrap(), name, "")
+}
+
+// requestRestoreAt: dasselbe ohne laufendes System (Ersteinrichtung). Das Programm kommt immer aus der Update-Quelle
+// der env-Datei (install.sh), nie aus der Anfrage.
+// publicURL (nur Ersteinrichtung): neue öffentliche Adresse, die nach dem Einspielen gilt (Umzug auf neue Domain).
+func requestRestoreAt(boot config.Bootstrap, name, publicURL string) error {
+	if publicURL != "" && !publicURLRe.MatchString(publicURL) {
+		return i18n.Errorf("Öffentliche Adresse ungültig (https://name.domain)")
+	}
 	if inDocker() {
-		if err := RequestRestore(a.bootstrap(), name); err != nil {
+		if err := RequestRestoreAt(boot, name, publicURL); err != nil {
 			return err
 		}
 		restartSoonFor("Wiederherstellen vorgemerkt")
 		return nil
 	}
-	repo := a.Cfg.UpdateRepo
-	if repo == "" {
-		repo = "-"
-	}
-	os.WriteFile(filepath.Join(a.Cfg.DataDir, "update-status"), []byte("requested restore "+name+"\n"), 0o640)
-	if err := os.WriteFile(filepath.Join(a.Cfg.DataDir, "update-request"), []byte("restore "+name+" "+repo+"\n"), 0o640); err != nil {
+	os.WriteFile(filepath.Join(boot.DataDir, "update-status"), []byte("requested restore "+name+"\n"), 0o640)
+	if err := os.WriteFile(filepath.Join(boot.DataDir, "update-request"), []byte(strings.TrimSpace("restore "+name+" "+publicURL)+"\n"), 0o640); err != nil {
 		return i18n.Errorf("Anfrage nicht schreibbar")
 	}
 	return nil

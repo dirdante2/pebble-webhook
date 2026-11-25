@@ -70,6 +70,10 @@ func (a *App) handleCalendarNewLink(w http.ResponseWriter, r *http.Request) {
 
 // handleCalendarFeed liefert die .ics-Datei; falscher oder alter Link → 404.
 func (a *System) handleCalendarFeed(w http.ResponseWriter, r *http.Request) {
+	if !a.allow("ical:"+a.clientIP(r), 60) {
+		http.Error(w, "Zu viele Anfragen", http.StatusTooManyRequests)
+		return
+	}
 	tok, ok := strings.CutSuffix(r.PathValue("datei"), ".ics")
 	t, found := a.DB.TokenUser(store.TokenICal, tok)
 	if !ok || !found {
@@ -114,7 +118,8 @@ func (a *App) icalFeed(jobs []*store.Job, now time.Time) string {
 			title = "✓ " + title
 		}
 		link := a.Cfg.PublicURL + "/eintrag/" + j.ID
-		text, place := j.Transcript, ""
+		// Nie der Wortlaut: Kalenderdienste speichern den Feed bei sich; nur die kurze Notiz der Auswertung.
+		text, place := "", ""
 		if d := parseDictation(j.Result); d != nil {
 			if d.Notiz != "" {
 				text = d.Notiz

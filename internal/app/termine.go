@@ -242,14 +242,14 @@ func (a *App) BackfillAppointments(ctx context.Context, days int) (checked, foun
 		}
 		checked++
 		res, err := a.respond(ctx, openai.Request{
-			Model: a.Cfg.TitleModel, Instructions: backfillInstructions, MaxOutputTokens: 400,
+			Area: openai.AreaTitle, Instructions: backfillInstructions, MaxOutputTokens: 400,
 			SchemaName: "termin", Schema: backfillSchema,
 			Input: appointmentHint(j.RecordedAt) + "\n\nNotiz:\n" + j.Transcript,
 		})
 		if err != nil {
 			return checked, found, cost, fmt.Errorf("Auftrag %s: %w", j.ID, err)
 		}
-		if c := a.cost(res); c != nil {
+		if c := res.Cost; c != nil {
 			cost += *c
 		}
 		var out struct {

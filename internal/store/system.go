@@ -4,6 +4,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -128,6 +130,25 @@ func (s *System) Set(k, v string) error        { return kvSet(s.DB, k, v) }
 func (s *System) Settings() (map[string]string, error)        { return kvSettings(s.DB) }
 func (s *System) SaveSettings(values map[string]string) error { return kvSaveSettings(s.DB, values) }
 
+// --- KI-Kosten je Eintrag eines Bereichs und Monat (Monatslimit der Einträge) ---
+
+func aiSpentKey(id string) string { return "ki-kosten:" + time.Now().Format("2006-01") + ":" + id }
+
+// Spent: Kosten des Eintrags im laufenden Monat (USD).
+func (s *System) Spent(id string) float64 {
+	var v float64
+	s.DB.QueryRow(`SELECT CAST(v AS REAL) FROM kv WHERE k = ?`, aiSpentKey(id)).Scan(&v)
+	return v
+}
+
+// Spend zählt Kosten auf den Eintrag im laufenden Monat.
+func (s *System) Spend(id string, usd float64) {
+	if _, err := s.DB.Exec(`INSERT INTO kv (k, v) VALUES (?, ?) ON CONFLICT(k) DO UPDATE SET v = CAST(CAST(v AS REAL) + CAST(excluded.v AS REAL) AS TEXT)`,
+		aiSpentKey(id), strconv.FormatFloat(usd, 'f', -1, 64)); err != nil {
+		log.Printf("KI-Kosten nicht gezählt (%s): %v", id, err)
+	}
+}
+
 // --- Nutzer ---
 
 type User struct {
@@ -185,17 +206,39 @@ func (s *System) AddUser(u *User) (int64, error) {
 	if u.Role != RoleAdmin {
 		u.Role = RoleUser
 	}
-	var id any
-	if u.ID > 0 {
-		id = u.ID
+	id := u.ID
+	if id <= 0 {
+		// Nie eine früher vergebene Id wiederverwenden: Zugänge eines gelöschten Nutzers (z. B. OAuth-Freigaben)
+		// dürfen nie auf einen neuen Nutzer zeigen.
+		var top int64
+		if err := s.DB.QueryRow(`SELECT COALESCE(MAX(id), 0) FROM users`).Scan(&top); err != nil {
+			return 0, err
+		}
+		id = max(top, s.highestUserID()) + 1
 	}
-	res, err := s.DB.Exec(`INSERT INTO users (id, name, role, webauthn_id, key_id, key_wrap, created_at) VALUES (?,?,?,?,?,?,?)`,
-		id, u.Name, u.Role, u.WebAuthnID, u.KeyID, u.KeyWrap, Now())
-	if err != nil {
+	if _, err := s.DB.Exec(`INSERT INTO users (id, name, role, webauthn_id, key_id, key_wrap, created_at) VALUES (?,?,?,?,?,?,?)`,
+		id, u.Name, u.Role, u.WebAuthnID, u.KeyID, u.KeyWrap, Now()); err != nil {
 		return 0, err
 	}
-	u.ID, err = res.LastInsertId()
-	return u.ID, err
+	u.ID = id
+	s.noteUserID(id)
+	return id, nil
+}
+
+const userIDMaxKey = "nutzer_id_max"
+
+// highestUserID: höchste je vergebene Nutzer-Id (auch gelöschter Nutzer).
+func (s *System) highestUserID() int64 {
+	v, _ := kvGet(s.DB, userIDMaxKey)
+	var n int64
+	fmt.Sscan(v, &n)
+	return n
+}
+
+func (s *System) noteUserID(id int64) {
+	if id > s.highestUserID() {
+		kvSet(s.DB, userIDMaxKey, fmt.Sprint(id))
+	}
 }
 
 func (s *System) SetUserName(id int64, name string) error {
@@ -227,6 +270,7 @@ func (s *System) SetUserKey(id int64, keyID, wrap string) error {
 
 // DeleteUser entfernt den Nutzer samt Anmeldung und Zugängen aus system.db (Dateien löscht der Aufrufer).
 func (s *System) DeleteUser(id int64) error {
+	s.noteUserID(id)
 	tx, err := s.DB.Begin()
 	if err != nil {
 		return err
@@ -241,10 +285,10 @@ func (s *System) DeleteUser(id int64) error {
 	return tx.Commit()
 }
 
-// Admins: Zahl der Administratoren (der letzte bleibt geschützt).
+// Admins: Zahl der nicht gesperrten Administratoren (der letzte bleibt geschützt).
 func (s *System) Admins() (int, error) {
 	var n int
-	err := s.DB.QueryRow(`SELECT COUNT(*) FROM users WHERE role = ?`, RoleAdmin).Scan(&n)
+	err := s.DB.QueryRow(`SELECT COUNT(*) FROM users WHERE role = ? AND locked_at = 0`, RoleAdmin).Scan(&n)
 	return n, err
 }
 
@@ -344,6 +388,19 @@ func (s *System) Session(token string, ttl time.Duration) (uid int64, passkeyID 
 	return uid, passkeyID, true
 }
 
+// SessionCreated: Zeitpunkt der Anmeldung einer Sitzung (0 = unbekannt).
+func (s *System) SessionCreated(token string) int64 {
+	var at int64
+	s.DB.QueryRow(`SELECT created_at FROM sessions WHERE token_hash = ?`, Hash(token)).Scan(&at)
+	return at
+}
+
+// DeleteUserSessions meldet einen Nutzer auf allen Geräten ab (z. B. beim Sperren).
+func (s *System) DeleteUserSessions(uid int64) error {
+	_, err := s.DB.Exec(`DELETE FROM sessions WHERE user_id = ?`, uid)
+	return err
+}
+
 func (s *System) DeleteSession(token string) error {
 	_, err := s.DB.Exec(`DELETE FROM sessions WHERE token_hash = ?`, Hash(token))
 	return err
@@ -377,6 +434,106 @@ func (s *System) EnrollToken(token string) (*Enroll, bool) {
 		return nil, false
 	}
 	return &e, true
+}
+
+// Invite: eine offene Einladung (Id = Anfang des Token-Hashs; der Link selbst ist nicht mehr lesbar).
+type Invite struct {
+	ID        string
+	Name      string
+	Role      string
+	ExpiresAt int64
+}
+
+const inviteIDLen = 16
+
+// Invites: offene, gültige Einladungen, älteste zuerst.
+func (s *System) Invites() ([]Invite, error) {
+	rows, err := s.DB.Query(`SELECT token_hash, name, role, expires_at FROM enroll_tokens WHERE purpose = ? AND expires_at >= ? ORDER BY expires_at`,
+		EnrollInvite, Now())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Invite
+	for rows.Next() {
+		var i Invite
+		var h string
+		if err := rows.Scan(&h, &i.Name, &i.Role, &i.ExpiresAt); err != nil {
+			return nil, err
+		}
+		i.ID = h[:inviteIDLen]
+		out = append(out, i)
+	}
+	return out, rows.Err()
+}
+
+// inviteHash: voller Hash zur Id einer offenen Einladung.
+func (s *System) inviteHash(id string) (string, bool) {
+	if len(id) != inviteIDLen {
+		return "", false
+	}
+	var h string
+	err := s.DB.QueryRow(`SELECT token_hash FROM enroll_tokens WHERE purpose = ? AND expires_at >= ? AND substr(token_hash, 1, ?) = ?`,
+		EnrollInvite, Now(), inviteIDLen, id).Scan(&h)
+	return h, err == nil
+}
+
+// Invite liefert eine offene Einladung.
+func (s *System) Invite(id string) (*Invite, bool) {
+	h, ok := s.inviteHash(id)
+	if !ok {
+		return nil, false
+	}
+	i := Invite{ID: id}
+	if err := s.DB.QueryRow(`SELECT name, role, expires_at FROM enroll_tokens WHERE token_hash = ?`, h).Scan(&i.Name, &i.Role, &i.ExpiresAt); err != nil {
+		return nil, false
+	}
+	return &i, true
+}
+
+// DeleteInvite widerruft eine Einladung.
+func (s *System) DeleteInvite(id string) bool {
+	h, ok := s.inviteHash(id)
+	if !ok {
+		return false
+	}
+	res, err := s.DB.Exec(`DELETE FROM enroll_tokens WHERE token_hash = ?`, h)
+	if err != nil {
+		return false
+	}
+	n, _ := res.RowsAffected()
+	return n == 1
+}
+
+// RotateInvite tauscht eine Einladung gegen einen neuen Einmal-Link (gleicher Name, Rolle, Ablauf); der alte Link
+// gilt danach nicht mehr. So bekommt, wer den Kurz-Code eingibt, einen Link, ohne dass der alte lesbar sein muss.
+func (s *System) RotateInvite(id string) (string, bool) {
+	h, ok := s.inviteHash(id)
+	if !ok {
+		return "", false
+	}
+	tx, err := s.DB.Begin()
+	if err != nil {
+		return "", false
+	}
+	defer tx.Rollback()
+	var e Enroll
+	var exp int64
+	if err := tx.QueryRow(`SELECT user_id, purpose, name, role, expires_at FROM enroll_tokens WHERE token_hash = ?`, h).
+		Scan(&e.UserID, &e.Purpose, &e.Name, &e.Role, &exp); err != nil {
+		return "", false
+	}
+	if res, err := tx.Exec(`DELETE FROM enroll_tokens WHERE token_hash = ?`, h); err != nil {
+		return "", false
+	} else if n, _ := res.RowsAffected(); n != 1 {
+		return "", false
+	}
+	token := NewID() + NewID()
+	if _, err := tx.Exec(`INSERT INTO enroll_tokens (token_hash, user_id, purpose, name, role, expires_at) VALUES (?,?,?,?,?,?)`,
+		Hash(token), e.UserID, e.Purpose, e.Name, e.Role, exp); err != nil {
+		return "", false
+	}
+	return token, tx.Commit() == nil
 }
 
 // UseEnrollToken verbraucht einen Einmal-Link; false, wenn er nicht (mehr) gilt.

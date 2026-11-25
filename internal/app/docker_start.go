@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -33,13 +34,25 @@ func DockerStart(boot config.Bootstrap, version string) error {
 	restored := false
 	if b, err := os.ReadFile(filepath.Join(boot.DataDir, restoreRequestFile)); err == nil {
 		os.Remove(filepath.Join(boot.DataDir, restoreRequestFile))
-		name := strings.TrimSpace(string(b))
+		f := strings.Fields(string(b))
+		name, url := "", ""
+		if len(f) > 0 {
+			name = f[0]
+		}
+		if len(f) > 1 && publicURLRe.MatchString(f[1]) {
+			url = f[1]
+		}
 		setStatus(boot, "running restore "+name)
 		if err := restoreArchive(boot, version, name); err != nil {
 			logf("Wiederherstellen %s: %v", name, err)
 			setStatus(boot, "error: restore "+name+": "+err.Error())
 		} else {
 			logf("Wiederhergestellt: %s", name)
+			if url != "" {
+				if err := SetPublicURL(boot.DataDir, url); err != nil {
+					logf("Neue Adresse %s nicht gesetzt: %v", url, err)
+				}
+			}
 			setStatus(boot, "done restore "+name)
 			restored = true
 		}
@@ -123,12 +136,31 @@ func offlineBackup(boot config.Bootstrap, lastVersion string) (backupEntry, erro
 
 // RequestRestore prüft ein Backup aus BACKUP_DIR und merkt es zum Einspielen beim nächsten Start vor (Docker).
 // Lehnt ab, wenn die Datenbank im Backup neuer ist, als dieses Programm kennt.
-func RequestRestore(boot config.Bootstrap, name string) error {
+func RequestRestore(boot config.Bootstrap, name string) error { return RequestRestoreAt(boot, name, "") }
+
+// RequestRestoreAt: wie RequestRestore, publicURL = neue öffentliche Adresse nach dem Einspielen (leer = die des Backups).
+func RequestRestoreAt(boot config.Bootstrap, name, publicURL string) error {
 	if err := checkRestorable(boot, name); err != nil {
 		return err
 	}
 	setStatus(boot, "requested restore "+name)
-	return os.WriteFile(filepath.Join(boot.DataDir, restoreRequestFile), []byte(name+"\n"), 0o640)
+	return os.WriteFile(filepath.Join(boot.DataDir, restoreRequestFile), []byte(strings.TrimSpace(name+" "+publicURL)+"\n"), 0o640)
+}
+
+// publicURLRe: öffentliche Adresse ohne Pfad (wie sie auch die Passkeys brauchen).
+var publicURLRe = regexp.MustCompile(`^https://[A-Za-z0-9.-]+(:[0-9]{1,5})?$`)
+
+// SetPublicURL setzt die öffentliche Adresse in system.db (nach dem Einspielen auf einem Server mit neuer Domain).
+func SetPublicURL(dataDir, url string) error {
+	if !publicURLRe.MatchString(url) {
+		return fmt.Errorf("Adresse ungültig: %s", url)
+	}
+	db, err := store.OpenSystem(filepath.Join(dataDir, "system.db"))
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	return db.SaveSettings(map[string]string{"PUBLIC_URL": url})
 }
 
 func checkRestorable(boot config.Bootstrap, name string) error {

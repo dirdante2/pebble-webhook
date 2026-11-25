@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/go-webauthn/webauthn/webauthn"
 
@@ -19,6 +20,7 @@ import (
 	"pebble-webhook/internal/i18n"
 	"pebble-webhook/internal/schluessel"
 	"pebble-webhook/internal/store"
+	"pebble-webhook/internal/whisper"
 )
 
 // Mehrere Nutzer: System hält, was alle teilen (system.db, Einstellungen, Anmeldung, Updates, Backups); je Nutzer
@@ -34,6 +36,10 @@ type System struct {
 	Version string
 	// NewNotes baut das Joplin-Ziel eines Nutzers aus seinen Einstellungen (nil = Joplin aus).
 	NewNotes func(*config.Config) Notes
+	Whisper  *whisper.Manager // lokale Transkription (Modelle unter DATA_DIR/modelle/whisper)
+
+	ki        atomic.Pointer[kiLive] // KI-Zugänge, Bereiche und Whisper – ändern sich beim Speichern unter KI ohne Neustart
+	keepAlive sync.Once              // Whisper-Keepalive läuft höchstens einmal
 
 	rateMu sync.Mutex
 	rate   map[string][]int64
@@ -49,6 +55,7 @@ type System struct {
 	oauth   oauthServer // OAuth für den MCP-Server (Einmal-Codes, Zugriff auf kv „oauth“ in system.db)
 
 	appsMu sync.RWMutex
+	lifeMu sync.Mutex // Öffnen, Schließen, Sperren, Löschen von Nutzern nacheinander (keine verwaisten Apps, keine überholte Sperre)
 	apps   map[int64]*App
 	locked map[int64]string // Nutzer, deren Daten nicht geöffnet sind → Grund (gesperrt, Schlüssel fehlt …)
 	runCtx context.Context  // Lebensdauer der Worker (für später geöffnete Nutzer)
@@ -80,6 +87,9 @@ type App struct {
 	sortFails map[string]int // Planung → gescheiterte Versuche beim Einsortieren (nur im Worker)
 	joplinErr string
 	joplinAt  int64
+
+	mcpMu       sync.Mutex
+	mcpApproved map[string]time.Time // Freigaben von listen_aufraeumen-Vorschlägen (einmal, 15 min)
 }
 
 // Gründe, warum die Daten eines Nutzers nicht geöffnet sind.
@@ -92,11 +102,15 @@ const (
 // NewSystem baut den geteilten Teil; die Nutzer öffnet OpenUsers.
 func NewSystem(cfg *config.Config, db *store.System, ai AI, version string, notes func(*config.Config) Notes) (*System, error) {
 	i18n.Set(cfg.Language)
+	// Joplin-Zugangsdaten gehören einem Nutzer, nie dem System: wer nichts Eigenes gesetzt hat, bekommt s.Cfg und
+	// darf so nie den Zugang eines anderen nutzen (Altwerte in system.db verschiebt movePrivateSettings).
+	cfg.JoplinEnabled, cfg.JoplinURL, cfg.JoplinEmail, cfg.JoplinPassword = false, "", "", ""
 	if notes == nil {
 		notes = func(*config.Config) Notes { return nil }
 	}
-	s := &System{Cfg: cfg, DB: db, AI: ai, Version: version, NewNotes: notes, rate: map[string][]int64{},
+	s := &System{Cfg: cfg, DB: db, AI: ai, Version: version, NewNotes: notes, Whisper: whisper.New(cfg.DataDir), rate: map[string][]int64{},
 		cer: map[string]ceremony{}, apps: map[int64]*App{}, locked: map[int64]string{}}
+	s.SetKI(cfg)
 	if err := s.initAuth(); err != nil {
 		return nil, err
 	}
@@ -128,7 +142,64 @@ func (s *System) OpenUsers() error {
 			logf("Nutzer %d: Daten nicht geöffnet: %v", u.ID, err)
 		}
 	}
+	s.movePrivateSettings(users)
+	s.ensureSystemKey()
 	return nil
+}
+
+// movePrivateSettings: Zugangsdaten (Joplin), die noch in system.db stehen (Umzug aus der Einzelnutzer-Version,
+// env-Datei, Einrichtungsassistent), gehören dem ersten Admin. Sie wandern in seine Datenbank und werden in
+// system.db geleert – kein anderer Nutzer erbt sie. Hat der Admin schon eigene, gelten seine; die alten fallen weg.
+func (s *System) movePrivateSettings(users []*store.User) {
+	sys, err := s.DB.Settings()
+	if err != nil {
+		return
+	}
+	moved := map[string]string{}
+	for _, f := range config.Fields {
+		if f.Private() && sys[f.Key] != "" {
+			moved[f.Key] = sys[f.Key]
+		}
+	}
+	if len(moved) == 0 {
+		return
+	}
+	var owner *App
+	for _, u := range users {
+		if u.Admin() {
+			owner, _ = s.app(u.ID)
+			break
+		}
+	}
+	if owner == nil {
+		logf("Joplin-Zugang in system.db: erster Admin nicht geöffnet, bleibt dort (gilt für niemanden)")
+		return
+	}
+	own, err := owner.DB.Settings()
+	if err != nil {
+		return
+	}
+	if own["JOPLIN_URL"] == "" {
+		for k, v := range moved {
+			if own[k] == "" {
+				own[k] = v
+			}
+		}
+		if err := owner.DB.SaveSettings(own); err != nil {
+			logf("Joplin-Zugang nicht zu Nutzer %d verschoben: %v", owner.UserID, err)
+			return
+		}
+	}
+	empty := map[string]string{}
+	for k := range moved {
+		empty[k] = ""
+	}
+	if err := s.DB.SaveSettings(empty); err != nil {
+		logf("Joplin-Zugang in system.db nicht geleert: %v", err)
+		return
+	}
+	logf("Joplin-Zugang aus system.db zu Nutzer %d verschoben", owner.UserID)
+	s.reloadUser(owner.UserID)
 }
 
 // openUser öffnet Schlüssel und Datenbank eines Nutzers und meldet seine App an (Worker startet, wenn Run läuft).
@@ -180,7 +251,7 @@ func newApp(s *System, uid int64, db *store.Store, audioKey []byte) (*App, error
 	if err != nil {
 		return nil, err
 	}
-	a := &App{System: s, UserID: uid, Cfg: cfg, DB: db, Notes: s.NewNotes(cfg), audioKey: audioKey,
+	a := &App{System: s, UserID: uid, Cfg: cfg, DB: db, Notes: s.guardNotes(s.NewNotes(cfg), uid), audioKey: audioKey,
 		wake: make(chan struct{}, 1), hub: newHub(), sortFails: map[string]int{}}
 	if err := a.normalizeStoredTags(); err != nil {
 		return nil, err
@@ -198,7 +269,7 @@ func (s *System) userConfig(db *store.Store) (*config.Config, error) {
 		return nil, err
 	}
 	if len(own) == 0 {
-		return s.Cfg, nil // nichts Eigenes gesetzt: die Einstellungen des Systems
+		return s.Cfg, nil // nichts Eigenes gesetzt: die Einstellungen des Systems (ohne Joplin, siehe NewSystem)
 	}
 	sys, err := s.DB.Settings()
 	if err != nil {
@@ -207,8 +278,8 @@ func (s *System) userConfig(db *store.Store) (*config.Config, error) {
 	boot := config.Bootstrap{Listen: s.Cfg.Listen, DataDir: s.Cfg.DataDir, MediaDir: s.Cfg.MediaDir, BackupDir: s.Cfg.BackupDir, KeyDir: s.Cfg.KeyDir}
 	return config.FromValues(boot, func(k string) string {
 		if f, ok := config.FieldByKey(k); ok && f.Personal {
-			if v, set := own[k]; set {
-				return v
+			if v, set := own[k]; set || f.Private() {
+				return v // Zugangsdaten (Joplin) nur eigene, nie die des Systems
 			}
 		}
 		return sys[k]
@@ -252,6 +323,7 @@ func (s *System) Run(ctx context.Context) {
 	go s.CheckUpdates(ctx)
 	go s.AutoUpdate(ctx)
 	go s.BackupSchedule(ctx)
+	s.startWhisper(ctx)
 	for _, a := range apps {
 		s.startApp(ctx, a)
 	}
@@ -343,6 +415,13 @@ func createUser(sys *store.System, dataDir, keyDir string, id int64, name, role,
 	if _, err := sys.AddUser(u); err != nil {
 		return nil, "", err
 	}
+	// Nie Schlüssel oder Daten eines früheren Nutzers mit dieser Id überschreiben (z. B. nach Verlust von system.db).
+	for _, p := range []string{schluessel.Path(keyDir, u.ID), UserDir(dataDir, u.ID)} {
+		if _, err := os.Lstat(p); err == nil {
+			sys.DeleteUser(u.ID)
+			return nil, "", fmt.Errorf("%s gibt es schon – Daten eines früheren Nutzers %d? Erst Backup einspielen oder Ordner sichern und entfernen", p, u.ID)
+		}
+	}
 	fail := func(err error) (*App, string, error) {
 		sys.DeleteUser(u.ID)
 		os.Remove(schluessel.Path(keyDir, u.ID))
@@ -428,6 +507,8 @@ func (a *App) Errorf(format string, v ...any) error { return fmt.Errorf(a.T(form
 
 // reloadUser öffnet die Daten eines Nutzers neu (neue persönliche Einstellungen gelten sofort, ohne Neustart des Dienstes).
 func (s *System) reloadUser(uid int64) {
+	s.lifeMu.Lock()
+	defer s.lifeMu.Unlock()
 	u, err := s.DB.User(uid)
 	if err != nil {
 		return

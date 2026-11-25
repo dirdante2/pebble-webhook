@@ -436,13 +436,13 @@ func (a *App) readImage(name string) ([]byte, time.Time, error) {
 	return data, st.ModTime(), err
 }
 
-// generateImage erzeugt ein Bild bei OpenAI.
+// generateImage erzeugt ein Bild über die Einträge des Bereichs Bilder.
 func (a *App) generateImage(ctx context.Context, m *Medium) (*float64, error) {
-	if !a.Cfg.ImagesEnabled {
+	if !a.KI().Images {
 		return nil, errors.New(i18n.T("Bilder erzeugen ist ausgeschaltet"))
 	}
 	gen, ok := a.AI.(interface {
-		Image(ctx context.Context, model, prompt, size, quality string) ([]byte, error)
+		Image(ctx context.Context, prompt, size, quality string) ([]byte, float64, error)
 	})
 	if !ok {
 		return nil, errors.New(i18n.T("Bilder erzeugen wird nicht unterstützt"))
@@ -450,21 +450,55 @@ func (a *App) generateImage(ctx context.Context, m *Medium) (*float64, error) {
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
 	defer cancel()
 	prompt := m.Prompt + "\n\nStyle: clean, simple explanatory illustration, flat colors, white background, no text or only very short labels."
-	data, err := gen.Image(ctx, a.Cfg.ImageModel, prompt, "1536x1024", "low")
+	data, price, err := gen.Image(ctx, prompt, "1536x1024", "low")
 	if err != nil {
 		return nil, err
 	}
-	var cost *float64
-	if a.Cfg.PriceImage != nil {
-		c := *a.Cfg.PriceImage
-		cost = &c
-	}
+	cost := &price
 	name, err := a.saveImage(data)
 	if err != nil {
 		return cost, err
 	}
 	m.Bild = name
 	return cost, nil
+}
+
+// restrictExternalImages: Fremde Bilder nur von Seiten, die die Websuche dieses Laufs als Quelle geliefert hat, und
+// mit kurzer Adresse. Sonst könnte eingeschleuster Text (eine Webseite, eine fremde Notiz) das Modell dazu bringen,
+// eine Bildadresse mit privaten Inhalten im Pfad oder in der Abfrage zu bauen, die der Server dann abruft.
+func restrictExternalImages(list []Medium, cits []openai.Citation) {
+	domains := map[string]bool{}
+	for _, c := range cits {
+		if u, err := url.Parse(c.URL); err == nil {
+			d := baseDomain(u.Hostname())
+			domains[d] = true
+			if d == "wikipedia.org" || d == "wikimedia.org" {
+				domains["wikipedia.org"], domains["wikimedia.org"] = true, true
+			}
+		}
+	}
+	for i := range list {
+		m := &list[i]
+		if m.Art != "bild_extern" || !m.pending() {
+			continue
+		}
+		u, err := url.Parse(m.URL)
+		switch {
+		case err != nil || len(m.URL) > 400 || len(u.RawQuery) > 120:
+			m.Fehler = i18n.T("Bildadresse zu lang")
+		case !domains[baseDomain(u.Hostname())]:
+			m.Fehler = i18n.T("Bild nicht von einer Quelle der Websuche")
+		}
+	}
+}
+
+// baseDomain: die letzten zwei Teile des Hostnamens (genügt hier: gleiche Seite oder nicht).
+func baseDomain(host string) string {
+	parts := strings.Split(strings.ToLower(strings.TrimSuffix(host, ".")), ".")
+	if len(parts) <= 2 {
+		return strings.Join(parts, ".")
+	}
+	return strings.Join(parts[len(parts)-2:], ".")
 }
 
 // fetchImage lädt ein Bild aus dem Netz (nur öffentliche Adressen) und legt es ab.
@@ -539,9 +573,28 @@ var publicHTTP = &http.Client{
 
 var cgnat = net.IPNet{IP: net.IPv4(100, 64, 0, 0), Mask: net.CIDRMask(10, 32)}
 
+// nichtOeffentlich: übrige Bereiche, die nie ein öffentliches Ziel sind (dieses Netz, Benchmark, IETF, Dokumentation, NAT64).
+var nichtOeffentlich = func() (out []*net.IPNet) {
+	for _, c := range []string{"0.0.0.0/8", "192.0.0.0/24", "192.0.2.0/24", "198.18.0.0/15", "198.51.100.0/24", "203.0.113.0/24",
+		"240.0.0.0/4", "64:ff9b::/96", "64:ff9b:1::/48", "2001:db8::/32", "100::/64"} {
+		_, n, _ := net.ParseCIDR(c)
+		out = append(out, n)
+	}
+	return
+}()
+
 func publicIP(ip net.IP) bool {
 	return !(ip.IsLoopback() || ip.IsPrivate() || ip.IsUnspecified() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
-		ip.IsInterfaceLocalMulticast() || ip.IsMulticast() || cgnat.Contains(ip) || ip.Equal(net.IPv4bcast))
+		ip.IsInterfaceLocalMulticast() || ip.IsMulticast() || cgnat.Contains(ip) || ip.Equal(net.IPv4bcast) || inNets(ip, nichtOeffentlich))
+}
+
+func inNets(ip net.IP, nets []*net.IPNet) bool {
+	for _, n := range nets {
+		if n.Contains(ip) {
+			return true
+		}
+	}
+	return false
 }
 
 // cleanImages löscht Bilder, auf die keine Auswertung und kein Planungsstand mehr zeigt (auch nicht im Papierkorb).
@@ -616,7 +669,7 @@ func (a *App) findTrailer(ctx context.Context, m *Medium) (*float64, error) {
 			return nil, nil
 		}
 		apiErr = err
-		logf("Trailer „%s“: YouTube-API: %v – versuche KI-Websuche", m.Suche, err)
+		logf("Trailer: YouTube-API: %v – versuche KI-Websuche", err) // Suchbegriff (Inhalt) nicht ins Log
 	}
 	cost, id, err := a.aiTrailer(ctx, m.Suche, lang)
 	if err != nil {
@@ -735,21 +788,20 @@ var trailerSchema = map[string]any{"type": "object", "additionalProperties": fal
 	"properties": map[string]any{"url": map[string]any{"type": "string"}}}
 
 func (a *App) aiTrailer(ctx context.Context, query, lang string) (*float64, string, error) {
-	c := a.Cfg
-	if c.PricePlanIn == nil || c.PricePlanOut == nil || c.PriceSearchCall == nil {
-		return nil, "", errors.New(i18n.T("kein YouTube-Schlüssel und keine Websuche (Preise fehlen)"))
+	if !a.KI().AI.HasWebSearch() {
+		return nil, "", errors.New(i18n.T("kein YouTube-Schlüssel und keine Websuche"))
 	}
 	language := "Deutsch"
 	if lang == "en" {
 		language = "Englisch"
 	}
-	res, err := a.AI.Respond(ctx, openai.Request{Model: c.DictationModel, Instructions: fmt.Sprintf(trailerInstructions, language),
+	res, err := a.AI.Respond(ctx, openai.Request{Area: openai.AreaResearch, Instructions: fmt.Sprintf(trailerInstructions, language),
 		Input: query, MaxOutputTokens: 1500, ReasoningEffort: "low", WebSearch: true, SearchContext: "low", MaxToolCalls: 2,
 		SchemaName: "trailer", Schema: trailerSchema})
 	if err != nil {
 		return nil, "", err
 	}
-	cost := a.cost(res)
+	cost := res.Cost
 	var out struct {
 		URL string `json:"url"`
 	}

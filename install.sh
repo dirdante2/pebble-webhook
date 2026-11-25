@@ -10,6 +10,7 @@
 #                       release of that name). A new installation always starts with stable; the channel is
 #                       changed afterwards in the web app.
 #   --repo OWNER/NAME   GitHub repository to download from (default below)
+#   --signing-key FILE  public key (PEM) the release must be signed with, instead of the one below (forks)
 #   --source            build from the source tree this script lives in (needs Go)
 #   --binary PATH       install a prebuilt binary (used by deploy/deploy.sh)
 #   --apply-request     run by pebble-webhook-update.service: install the version requested in the web app,
@@ -19,6 +20,13 @@
 set -euo pipefail
 
 REPO="dirdante2/pebble-webhook"
+REPO_SET=""
+# Releases are signed (Ed25519 over SHA256SUMS, deploy/release.sh); only this key counts. A fork signs with its own
+# key and puts its public key here (or passes --signing-key FILE).
+SIGNING_KEY='-----BEGIN PUBLIC KEY-----
+MCowBQYDK2VwAyEAp3ldhpKRc+ydaA+039LFVX3/EKRWa/QjGVXPA/WPuYI=
+-----END PUBLIC KEY-----'
+SIGNING_KEY_FILE=""
 VERSION=""
 CHANNEL=""
 MODE="release"
@@ -33,7 +41,9 @@ while [ $# -gt 0 ]; do
         --version) VERSION="${2#v}"; shift 2 ;;
         --channel) CHANNEL="$2"; shift 2
             [[ "$CHANNEL" =~ ^(stable|beta|nightly)$ ]] || { echo "--channel must be stable, beta or nightly" >&2; exit 2; } ;;
-        --repo) REPO="$2"; shift 2 ;;
+        --signing-key) SIGNING_KEY_FILE="$2"; shift 2 ;;
+        --repo) REPO="$2"; REPO_SET=1; shift 2
+            [[ "$REPO" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || { echo "--repo must be OWNER/NAME" >&2; exit 2; } ;;
         --source) MODE="source"; shift ;;
         --binary) MODE="binary"; BINARY="$2"; shift 2 ;;
         --apply-request) MODE="request"; shift ;;
@@ -46,6 +56,8 @@ command -v systemctl >/dev/null || { echo "systemd is required" >&2; exit 1; }
 
 # Start values from the env file (defaults for a fresh install).
 envval() { local v; v="$(grep -oP "^$1=\K.*" /etc/pebble-webhook/env 2>/dev/null | tail -n1 || true)"; v="${v%\"}"; v="${v#\"}"; echo "${v:-$2}"; }
+# Update source: only from the root-owned env file (or --repo here), never from the web app – this script runs as root.
+[ -n "$REPO_SET" ] || REPO="$(envval UPDATE_REPO "$REPO")"
 # Media (recordings and images, from 4.0 MEDIA_DIR/<id>/audio|bilder); until 3.x the env file named it AUDIO_DIR.
 MEDIA_DEFAULT=/srv/pebble-medien
 [ -f /etc/pebble-webhook/env ] && [ -d /srv/pebble-audio ] && [ ! -d /srv/pebble-medien ] && MEDIA_DEFAULT=/srv/pebble-audio   # program default until 3.x
@@ -72,13 +84,18 @@ replace_data() {   # DATA_DIR gets exactly the data set from $1
     for f in $DB_FILES; do rm -f "$DATA_DIR/$f"; done
     [ -d "$DATA_DIR/users" ] && find "$DATA_DIR/users" -mindepth 1 -delete
     copy_data "$1" "$DATA_DIR"
-    for f in $DB_FILES; do [ -f "$DATA_DIR/$f" ] && { chown pebble:pebble "$DATA_DIR/$f"; chmod 0640 "$DATA_DIR/$f"; }; done
+    for f in $DB_FILES; do [ -f "$DATA_DIR/$f" ] && [ ! -L "$DATA_DIR/$f" ] && { chown -h pebble:pebble "$DATA_DIR/$f"; chmod 0640 "$DATA_DIR/$f"; }; done
     [ -d "$DATA_DIR/users" ] && chown -R pebble:pebble "$DATA_DIR/users"
     return 0
 }
 
+# Files in folders of the service user are written as that user, never as root (no following of planted links).
+as_pebble_write() {   # $1 = file, rest = line
+    local f="$1"; shift
+    runuser -u pebble -- sh -c 'umask 027; printf "%s\n" "$2" > "$1"' _ "$f" "$*"
+}
 status() {
-    if [ -n "${FROM_REQUEST:-}" ]; then echo "$*" > "$STATUS"; chown pebble:pebble "$STATUS"; fi
+    if [ -n "${FROM_REQUEST:-}" ]; then as_pebble_write "$STATUS" "$*"; fi
     echo "$*"
 }
 
@@ -89,23 +106,21 @@ if [ "$MODE" = request ]; then
     read -r REQ_REPO REQ_VERSION REQ_EXTRA < "$REQUEST" || true
     rm -f "$REQUEST"
     if [ "$REQ_REPO" = restore ]; then
-        # "restore <backup> [<owner/repo>]": an archive from BACKUP_DIR (data + the version it names), or an old
-        # backup folder from DATA_DIR/backup (program and database, until 1.28).
-        if [[ "$REQ_VERSION" =~ $ARCHIVE_RE ]]; then
-            ARCHIVE="$BACKUP_DIR/$REQ_VERSION"
-            [ -f "$ARCHIVE" ] && [ ! -L "$ARCHIVE" ] || { status "error: backup not found"; exit 1; }
-            [[ "${REQ_EXTRA:-}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] && REPO="$REQ_EXTRA"
-            MODE="archive"
-        else
-            [[ "$REQ_VERSION" =~ ^pebble-[0-9A-Za-z.+-]+-[0-9]{8}-[0-9]{6}$ ]] || { status "error: invalid backup"; exit 1; }
-            RESTORE="$DATA_DIR/backup/$REQ_VERSION"
-            [ -x "$RESTORE/pebble-webhook" ] && [ -f "$RESTORE/pebble.db" ] || { status "error: backup incomplete"; exit 1; }
-            MODE="restore"
-        fi
+        # "restore <backup> [<owner/repo>]": an archive from BACKUP_DIR (data + the version it names). The program
+        # always comes from the trusted repository (env file); old backup folders with a program (until 1.28) are no
+        # longer restored – their program would run as root.
+        [[ "$REQ_VERSION" =~ $ARCHIVE_RE ]] || { status "error: invalid backup (old backup folders are no longer supported)"; exit 1; }
+        ARCHIVE="$BACKUP_DIR/$REQ_VERSION"
+        [ -f "$ARCHIVE" ] && [ ! -L "$ARCHIVE" ] || { status "error: backup not found"; exit 1; }
+        MODE="archive"
+        # Optional (Ersteinrichtung auf neuer Domain): öffentliche Adresse, die nach dem Einspielen gilt.
+        NEW_URL=""
+        [[ "${REQ_EXTRA:-}" =~ ^https://[A-Za-z0-9.-]+(:[0-9]{1,5})?$ ]] && NEW_URL="$REQ_EXTRA"
         trap 'status "error: going back to $REQ_VERSION failed (journalctl -u pebble-webhook-update)"' ERR
         status "running restore $REQ_VERSION"
     else
     [[ "$REQ_REPO" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || { status "error: invalid repository"; exit 1; }
+    [ "$REQ_REPO" = "$REPO" ] || { status "error: update source $REQ_REPO not allowed (UPDATE_REPO in /etc/pebble-webhook/env is $REPO)"; exit 1; }
     [[ "$REQ_VERSION" =~ $RELEASE_RE ]] || { status "error: invalid version"; exit 1; }
     REPO="$REQ_REPO"; VERSION="$REQ_VERSION"; MODE="release"
     trap 'status "error: update to $VERSION failed (journalctl -u pebble-webhook-update)"' ERR
@@ -150,31 +165,41 @@ fi
 case "$MODE" in
     release)
         # Downloaded releases stay in DATA_DIR/releases/<version> (unused for 30 days → deleted), so switching
-        # back and forth between versions does not download them again. Checksums are verified either way.
+        # back and forth between versions does not download them again. The folder belongs to the service user:
+        # the checksums always come fresh from the release, cached files only count if they match them.
+        command -v curl >/dev/null || { apt-get update -q && apt-get install -yq curl ca-certificates; }
+        if [ -n "$VERSION" ]; then BASE="https://github.com/$REPO/releases/download/v$VERSION"
+        elif [ -n "$CHANNEL" ]; then BASE="https://github.com/$REPO/releases/download/$CHANNEL"
+        else BASE="https://github.com/$REPO/releases/latest/download"; fi
+        curl -fsSL -o "$TMP/SHA256SUMS" "$BASE/SHA256SUMS"
+        # Signature first: everything else is only trusted through SHA256SUMS.
+        command -v openssl >/dev/null || { apt-get update -q && apt-get install -yq openssl; }
+        if [ -n "$SIGNING_KEY_FILE" ]; then cp "$SIGNING_KEY_FILE" "$TMP/signing.pub"; else printf '%s\n' "$SIGNING_KEY" > "$TMP/signing.pub"; fi
+        curl -fsSL -o "$TMP/SHA256SUMS.sig" "$BASE/SHA256SUMS.sig" \
+            || { status "error: release ${VERSION:-${CHANNEL:-latest}} is not signed (yet)"; exit 1; }
+        openssl pkeyutl -verify -pubin -inkey "$TMP/signing.pub" -rawin -in "$TMP/SHA256SUMS" -sigfile "$TMP/SHA256SUMS.sig" >/dev/null \
+            || { status "error: signature of ${VERSION:-${CHANNEL:-latest}} invalid"; exit 1; }
         CACHE=""
         [ -n "$VERSION" ] && CACHE="$DATA_DIR/releases/$VERSION"
-        if [ -n "$CACHE" ] && [ -f "$CACHE/SHA256SUMS" ] && [ -f "$CACHE/pebble-webhook-linux-$ARCH" ] && [ -f "$CACHE/install.sh" ]; then
+        if [ -n "$CACHE" ] && [ -d "$CACHE" ] && [ ! -L "$CACHE" ] \
+            && runuser -u pebble -- cat "$CACHE/pebble-webhook-linux-$ARCH" > "$TMP/pebble-webhook-linux-$ARCH" 2>/dev/null \
+            && runuser -u pebble -- cat "$CACHE/install.sh" > "$TMP/install.sh" 2>/dev/null \
+            && (cd "$TMP" && grep -E " (pebble-webhook-linux-$ARCH|install.sh)\$" SHA256SUMS | sha256sum -c --quiet - >/dev/null 2>&1); then
             echo "Using pebble-webhook $VERSION ($ARCH) from the local cache"
-            cp -p "$CACHE/pebble-webhook-linux-$ARCH" "$CACHE/install.sh" "$CACHE/SHA256SUMS" "$TMP/"
-            touch "$CACHE"
+            runuser -u pebble -- touch "$CACHE" || true
         else
-            command -v curl >/dev/null || { apt-get update -q && apt-get install -yq curl ca-certificates; }
-            if [ -n "$VERSION" ]; then BASE="https://github.com/$REPO/releases/download/v$VERSION"
-            elif [ -n "$CHANNEL" ]; then BASE="https://github.com/$REPO/releases/download/$CHANNEL"
-            else BASE="https://github.com/$REPO/releases/latest/download"; fi
             echo "Downloading pebble-webhook ${VERSION:-${CHANNEL:-latest}} ($ARCH) from github.com/$REPO …"
             curl -fsSL -o "$TMP/pebble-webhook-linux-$ARCH" "$BASE/pebble-webhook-linux-$ARCH"
             curl -fsSL -o "$TMP/install.sh" "$BASE/install.sh"
-            curl -fsSL -o "$TMP/SHA256SUMS" "$BASE/SHA256SUMS"
         fi
         (cd "$TMP" && grep -E " (pebble-webhook-linux-$ARCH|install.sh)\$" SHA256SUMS | sha256sum -c --quiet -) \
             || { echo "checksum mismatch" >&2; exit 1; }
         [ "$(grep -cE " (pebble-webhook-linux-$ARCH|install.sh)\$" "$TMP/SHA256SUMS")" = 2 ] || { echo "checksums missing" >&2; exit 1; }
-        if [ -n "$CACHE" ] && [ ! -f "$CACHE/SHA256SUMS" ]; then
-            install -d -o pebble -g pebble -m 0750 "$DATA_DIR/releases" "$CACHE" 2>/dev/null || install -d -m 0750 "$DATA_DIR/releases" "$CACHE"
-            cp -p "$TMP/pebble-webhook-linux-$ARCH" "$TMP/install.sh" "$TMP/SHA256SUMS" "$CACHE/"
+        if [ -n "$CACHE" ] && id pebble >/dev/null 2>&1; then
+            chmod 0644 "$TMP/pebble-webhook-linux-$ARCH" "$TMP/install.sh" "$TMP/SHA256SUMS"
+            runuser -u pebble -- sh -c 'umask 027; mkdir -p "$1" && cp "$2"/pebble-webhook-linux-* "$2/install.sh" "$2/SHA256SUMS" "$1/"' _ "$CACHE" "$TMP" || true
+            runuser -u pebble -- find "$DATA_DIR/releases" -mindepth 1 -maxdepth 1 -type d -mtime +30 -exec rm -rf {} + 2>/dev/null || true
         fi
-        [ -d "$DATA_DIR/releases" ] && find "$DATA_DIR/releases" -mindepth 1 -maxdepth 1 -type d -mtime +30 -exec rm -rf {} +
         install -m 0755 "$TMP/pebble-webhook-linux-$ARCH" "$TMP/pebble-webhook"
         ;;
     source)
@@ -190,13 +215,6 @@ case "$MODE" in
     keep)
         install -m 0755 /usr/local/bin/pebble-webhook "$TMP/pebble-webhook"
         ;;
-    restore)
-        # Copy first: the backup of the current state below may rotate the old one away.
-        install -m 0755 "$RESTORE/pebble-webhook" "$TMP/pebble-webhook"
-        install -d "$TMP/restore-db"
-        for f in pebble.db pebble.db-wal pebble.db-shm; do [ -f "$RESTORE/$f" ] && cp -p "$RESTORE/$f" "$TMP/restore-db/"; done
-        cp -p "$RESTORE/kanal" "$TMP/kanal" 2>/dev/null || true
-        ;;
 esac
 "$TMP/pebble-webhook" version >/dev/null
 
@@ -206,7 +224,7 @@ esac
 #         number (no "schema" command) count as 0. ---
 SCHEMA_DB=""
 if [ -n "${RESTORE_DATA:-}" ]; then SCHEMA_DB="$(schema_file "$TMP/restore")"
-elif [ "$MODE" != restore ]; then SCHEMA_DB="$(schema_file "$DATA_DIR")"; fi
+else SCHEMA_DB="$(schema_file "$DATA_DIR")"; fi
 if [ -n "$SCHEMA_DB" ] && id pebble >/dev/null 2>&1; then
     APP_SCHEMA="$("$TMP/pebble-webhook" schema 2>/dev/null || true)"
     [[ "$APP_SCHEMA" =~ ^[0-9]+$ ]] || APP_SCHEMA=0
@@ -254,6 +272,12 @@ if ! grep -q '^MEDIA_DIR=' /etc/pebble-webhook/env; then
         printf '\n# Media: recordings and images per user (MEDIA_DIR/<id>/audio|bilder).\nMEDIA_DIR=%s\n' "$MEDIA_DIR" >> /etc/pebble-webhook/env
     fi
 fi
+# Update source for the root updater (also shown, locked, in the web app). --repo changes it.
+if ! grep -q '^UPDATE_REPO=' /etc/pebble-webhook/env; then
+    printf '\n# Update source (GitHub owner/repo) for the updater, which runs as root; "aus" = no updates. Not settable in the web app.\nUPDATE_REPO=%s\n' "$REPO" >> /etc/pebble-webhook/env
+elif [ -n "$REPO_SET" ]; then
+    sed -i "s|^UPDATE_REPO=.*|UPDATE_REPO=$REPO|" /etc/pebble-webhook/env
+fi
 # From 4.1 an API key set in the environment always wins over the database and is locked in the app. Old env files
 # (before the settings moved into the database) still carry the imported key: comment it out once, the database has it.
 if ! grep -q '^# api-keys-from-env' /etc/pebble-webhook/env; then
@@ -291,12 +315,15 @@ if data_present "$DATA_DIR" && [ -x /usr/local/bin/pebble-webhook ]; then
 EOF
     { echo "# Start values at the time of the backup (/etc/pebble-webhook/env)"
       grep -E '^(LISTEN|DATA_DIR|MEDIA_DIR|BACKUP_DIR)=' /etc/pebble-webhook/env 2>/dev/null || true; } > "$TMP/old/env"
+    # API-Schlüssel und Web-Push-Schlüssel nie im Klartext ins Backup (Programme ab 4.3.1 können das).
+    if [ -f "$TMP/old/system.db" ] && "$TMP/pebble-webhook" geheimnisse-versiegeln --kann >/dev/null 2>&1; then
+        PEBBLE_ENV_FILE=/etc/pebble-webhook/env "$TMP/pebble-webhook" geheimnisse-versiegeln "$TMP/old/system.db" \
+            || echo "Warning: secrets in the update backup could not be encrypted" >&2
+    fi
     NAME="pebble-$OLD-$OLD_CH-$(date +%Y%m%d-%H%M%S)-update.tar.gz"
     install -d -o pebble -g pebble -m 0750 "$BACKUP_DIR"
-    tar -czf "$BACKUP_DIR/.$NAME.tmp" -C "$TMP/old" .   # users/ holds only encrypted files
-    mv "$BACKUP_DIR/.$NAME.tmp" "$BACKUP_DIR/$NAME"
-    chown pebble:pebble "$BACKUP_DIR/$NAME"
-    chmod 0640 "$BACKUP_DIR/$NAME"
+    # Read as root, written as the service user (its folder): users/ holds only encrypted files.
+    tar -czf - -C "$TMP/old" . | runuser -u pebble -- sh -c 'umask 027; cat > "$1" && mv -fT "$1" "$2"' _ "$BACKUP_DIR/.$NAME.tmp" "$BACKUP_DIR/$NAME"
     BACKUP="$BACKUP_DIR/$NAME"
     find "$BACKUP_DIR" -maxdepth 1 -type f -name 'pebble-*-update*.tar.gz' -mtime +30 -not -path "$BACKUP" -delete
     [ -d "$DATA_DIR/backup" ] && find "$DATA_DIR/backup" -mindepth 1 -maxdepth 1 -name 'pebble-*' -type d -mtime +30 -exec rm -rf {} +
@@ -306,29 +333,24 @@ if [ -n "${RESTORE_DATA:-}" ]; then
     systemctl stop pebble-webhook 2>/dev/null || true
     replace_data "$TMP/restore"
     install -d -o pebble -g pebble -m 0750 "$MEDIA_DIR"
+    chown -R pebble:pebble "$MEDIA_DIR"   # -R follows no links; mounts may belong to root
+    # Copied as the service user (unpacked as it, into its folder): links planted in MEDIA_DIR lead nowhere.
     if [ -d "$TMP/restore/medien" ]; then   # from 4.0: medien/<id>/audio|bilder/…
-        cp -R "$TMP/restore/medien/." "$MEDIA_DIR/"
+        runuser -u pebble -- cp -R "$TMP/restore/medien/." "$MEDIA_DIR/"
     fi
     if [ -d "$TMP/restore/audio" ]; then    # 3.x: audio/<id>/… → MEDIA_DIR/<id>/audio/…; up to 2.x: audio/<diktat|planung>/…
         for d in "$TMP/restore/audio"/*/; do
             [ -d "$d" ] || continue
             n="$(basename "$d")"
             if [[ "$n" =~ ^[1-9][0-9]*$ ]]; then
-                install -d -o pebble -g pebble -m 0750 "$MEDIA_DIR/$n/audio"
-                cp -R "$d." "$MEDIA_DIR/$n/audio/"
+                runuser -u pebble -- mkdir -p "$MEDIA_DIR/$n/audio"
+                runuser -u pebble -- cp -R "$d." "$MEDIA_DIR/$n/audio/"
             else
-                cp -R "$d" "$MEDIA_DIR/"
+                runuser -u pebble -- cp -R "$d" "$MEDIA_DIR/"
             fi
         done
     fi
-    chown -R pebble:pebble "$MEDIA_DIR"
     echo "Data restored from $ARCHIVE"
-fi
-if [ "$MODE" = restore ]; then
-    systemctl stop pebble-webhook 2>/dev/null || true
-    replace_data "$TMP/restore-db"
-    echo "Database restored from $RESTORE"
-    VERSION="$REQ_VERSION"
 fi
 
 # --- 4. program, CLI wrapper, updater, systemd units ---
@@ -381,9 +403,19 @@ ProtectHome=true
 PrivateTmp=true
 PrivateDevices=true
 ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
 ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+CapabilityBoundingSet=
+AmbientCapabilities=
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
 LockPersonality=true
+SystemCallArchitectures=native
 
 [Install]
 WantedBy=multi-user.target
@@ -407,11 +439,25 @@ Description=pebble-webhook: install the version requested in the web app
 [Service]
 Type=oneshot
 ExecStart=$LIB_DIR/install.sh --apply-request
+PrivateTmp=true
+ProtectHome=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectClock=true
+ProtectHostname=true
+RestrictRealtime=true
+LockPersonality=true
 EOF
 
 systemctl daemon-reload
 systemctl enable -q pebble-webhook pebble-webhook-update.path
 systemctl restart pebble-webhook-update.path
+# Restore onto a new domain: set the public address before the first start (all users then create new passkeys).
+if [ -n "${NEW_URL:-}" ] && /usr/local/bin/pebble-webhook adresse --kann >/dev/null 2>&1; then
+    systemctl stop pebble-webhook 2>/dev/null || true
+    runuser -u pebble -- env PEBBLE_ENV_FILE=/etc/pebble-webhook/env /usr/local/bin/pebble-webhook adresse "$NEW_URL" \
+        && echo "Public address set to $NEW_URL" || echo "Warning: public address not set" >&2
+fi
 # Bring the data set to this version while the service is stopped (e.g. moving to per-user databases), without the
 # time limit of the health check. Programs before 2.3 do not know the command.
 PREPARED=1
@@ -454,12 +500,10 @@ fi
 # Remember where this version came from (shown with its backup later).
 case "$MODE" in
     release) case "$VERSION" in *-beta*) CH=beta ;; *-nightly*) CH=nightly ;; "") CH="${CHANNEL:-stable}" ;; *) CH=stable ;; esac ;;
-    restore) CH="$(cat "$TMP/kanal" 2>/dev/null || echo lokal)" ;;
     keep) if [ -z "$DONE_NOTE" ]; then CH="$R_CHANNEL"; else CH="$(cat "$DATA_DIR/installed-channel" 2>/dev/null || echo lokal)"; fi ;;
     *) CH=lokal ;;
 esac
-echo "$CH" > "$DATA_DIR/installed-channel"
-chown pebble:pebble "$DATA_DIR/installed-channel"
+as_pebble_write "$DATA_DIR/installed-channel" "$CH"
 
 NEW="$(/usr/local/bin/pebble-webhook version)"
 if [ -n "${FROM_REQUEST:-}" ]; then

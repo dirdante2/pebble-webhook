@@ -1,4 +1,5 @@
-// Package openai spricht die Transkriptions- und die Responses-API.
+// Package openai spricht die Transkriptions- und die Responses-API von OpenAI, mit Chat=true die
+// Chat-Completions-API kompatibler Dienste (Ollama, LM Studio, Gemini, Groq, Mistral, OpenRouter …).
 package openai
 
 import (
@@ -22,6 +23,21 @@ type Client struct {
 	Key  string
 	Base string
 	HTTP *http.Client
+	// Chat: Respond über /chat/completions statt /responses (Dienst, Lokal).
+	Chat bool
+	// Websuche bei Request.WebSearch: ProviderSearch = die des Anbieters (OpenAI web_search, OpenRouter Web-Plugin,
+	// Modelle, die selbst suchen); SearchURL = SearXNG als eigenes Werkzeug. Beides geht, keins = ohne Websuche.
+	Plugin         bool // Websuche als OpenRouter-Web-Plugin (sonst an der Adresse erkannt)
+	ProviderSearch bool
+	SearchURL      string
+}
+
+// label: Name des Gegenübers in Fehlermeldungen.
+func (c *Client) label() string {
+	if c.Chat {
+		return i18n.T("KI-Dienst")
+	}
+	return "OpenAI"
 }
 
 func New(key, base string) *Client {
@@ -29,6 +45,7 @@ func New(key, base string) *Client {
 }
 
 type APIError struct {
+	Label   string
 	Status  int
 	Code    string
 	Message string
@@ -37,23 +54,25 @@ type APIError struct {
 func (e *APIError) Error() string {
 	switch e.Status {
 	case 401:
-		return i18n.T("OpenAI lehnt den API-Schlüssel ab (HTTP 401)")
+		return i18n.Tf("%s lehnt den API-Schlüssel ab (HTTP 401)", e.Label)
 	case 429:
-		return i18n.Tf("OpenAI: Limit erreicht (HTTP 429, %s)", e.Code)
+		return i18n.Tf("%s: Limit erreicht (HTTP 429, %s)", e.Label, e.Code)
 	}
-	return i18n.Tf("OpenAI-Fehler HTTP %d: %s", e.Status, e.Message)
+	return i18n.Tf("%s-Fehler HTTP %d: %s", e.Label, e.Status, e.Message)
 }
 
 func (c *Client) send(req *http.Request, out any) error {
-	req.Header.Set("Authorization", "Bearer "+c.Key)
+	if c.Key != "" { // lokale Dienste (Ollama) brauchen keinen Schlüssel
+		req.Header.Set("Authorization", "Bearer "+c.Key)
+	}
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
-		return i18n.Errorf("OpenAI nicht erreichbar: %w", err)
+		return i18n.Errorf("%s nicht erreichbar: %w", c.label(), err)
 	}
 	defer resp.Body.Close()
 	data, err := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
 	if err != nil {
-		return i18n.Errorf("OpenAI-Antwort unvollständig: %w", err)
+		return i18n.Errorf("%s-Antwort unvollständig: %w", c.label(), err)
 	}
 	if resp.StatusCode != 200 {
 		var e struct {
@@ -68,10 +87,10 @@ func (c *Client) send(req *http.Request, out any) error {
 		if e.Error.Code == nil {
 			code = e.Error.Type
 		}
-		return &APIError{Status: resp.StatusCode, Code: code, Message: e.Error.Message}
+		return &APIError{Label: c.label(), Status: resp.StatusCode, Code: code, Message: e.Error.Message}
 	}
 	if err := json.Unmarshal(data, out); err != nil {
-		return i18n.Errorf("OpenAI-Antwort nicht lesbar: %w", err)
+		return i18n.Errorf("%s-Antwort nicht lesbar: %w", c.label(), err)
 	}
 	return nil
 }
@@ -122,6 +141,9 @@ func (c *Client) Transcribe(ctx context.Context, model, name string, audio []byt
 
 // Image erzeugt ein Bild (Images-API) und liefert es als WebP. quality: low | medium | high; size z. B. 1536x1024.
 func (c *Client) Image(ctx context.Context, model, prompt, size, quality string) ([]byte, error) {
+	if c.Chat {
+		return nil, i18n.Errorf("Bilder erzeugen gibt es nur mit OpenAI")
+	}
 	body, _ := json.Marshal(map[string]any{"model": model, "prompt": prompt, "n": 1, "size": size, "quality": quality,
 		"output_format": "webp", "output_compression": 80})
 	req, err := http.NewRequestWithContext(ctx, "POST", c.Base+"/images/generations", bytes.NewReader(body))
@@ -158,6 +180,8 @@ type Request struct {
 	MaxToolCalls    int
 	SchemaName      string
 	Schema          map[string]any
+	// Area: Bereich der KI (AreaTitle, AreaDictation, AreaResearch); der Router wählt danach den Anbieter.
+	Area string
 	// Functions: eigene Werkzeuge, die die KI aufrufen darf; Call führt einen Aufruf aus (Ergebnis als Text an die KI).
 	// Höchstens MaxFunctionRounds Runden mit Aufrufen, danach muss sie antworten.
 	Functions         []Function
@@ -180,13 +204,37 @@ type Result struct {
 	InputTokens  int
 	OutputTokens int
 	Searches     int
-	Calls        int    // ausgeführte eigene Werkzeugaufrufe
-	Incomplete   string // Grund, wenn die Antwort abgeschnitten wurde
+	Calls        int      // ausgeführte eigene Werkzeugaufrufe
+	Incomplete   string   // Grund, wenn die Antwort abgeschnitten wurde
+	Cost         *float64 // USD nach den Preisen des Eintrags (Router); nil = nicht berechnet
+	Provider     string   // Name des Eintrags, der geantwortet hat (Router)
 }
 
 // Respond ruft die Responses-API auf. Mit Functions läuft eine Schleife: ruft die KI ein Werkzeug, wird es ausgeführt
 // und das Ergebnis samt bisheriger Ausgabe (store=false, Denkschritte verschlüsselt) zurückgegeben, bis sie antwortet.
 func (c *Client) Respond(ctx context.Context, r Request) (*Result, error) {
+	if c.Chat {
+		return c.respondChat(ctx, r)
+	}
+	var found *hitList
+	if r.WebSearch && c.SearchURL != "" {
+		found = &hitList{}
+		r = c.withSearx(r, found)
+	}
+	if r.WebSearch && !c.ProviderSearch {
+		if c.SearchURL == "" {
+			r.Instructions += noSearchNote
+		}
+		r.WebSearch = false
+	}
+	res, err := c.respondResponses(ctx, r)
+	if err == nil && found != nil {
+		res.Citations = found.cited(res.Text, res.Citations)
+	}
+	return res, err
+}
+
+func (c *Client) respondResponses(ctx context.Context, r Request) (*Result, error) {
 	body := map[string]any{"model": r.Model, "input": r.Input, "store": false}
 	if r.Instructions != "" {
 		body["instructions"] = r.Instructions

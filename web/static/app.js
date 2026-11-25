@@ -467,6 +467,27 @@ async function vergissGeraet() {
   try { await caches.delete('bilder'); } catch { /* ohne Cache-API */ }
 }
 
+// abmelden: Push-Abo dieses Geräts beenden (sonst kämen Meldungen des Nutzers weiter an), abmelden, Gerät vergessen.
+async function abmelden() {
+  try {
+    const sub = await (await navigator.serviceWorker?.getRegistration())?.pushManager?.getSubscription();
+    if (sub) {
+      await api('/api/push/abo/entfernen', { method: 'POST', body: { endpoint: sub.endpoint } }).catch(() => {});
+      await sub.unsubscribe().catch(() => {});
+    }
+  } catch { /* ohne Push */ }
+  await api('/api/auth/abmelden', { method: 'POST' });
+  await vergissGeraet();
+}
+
+// nachAnmeldung: Meldet sich ein anderer Nutzer an als zuletzt auf diesem Gerät, erst alles des alten löschen –
+// auch vorgemerkte Aktionen, die sonst im Konto des neuen landeten.
+async function nachAnmeldung() {
+  const s = await api('/api/sitzung');
+  if (ich.id && s.id !== ich.id) await vergissGeraet();
+  merkeIch(s);
+}
+
 // ---------- Router ----------
 
 const routen = [
@@ -507,10 +528,13 @@ const routen = [
   [/^\/verbinden$/, 'verbinden', zeigeVerbinden],
   [/^\/ersteinrichtung$/, 'ersteinrichtung', zeigeErsteinrichtung],
   [/^\/status\/einstellungen$/, 'einstellungen', zeigeEinstellungen],
+  [/^\/status\/ki$/, 'ki', zeigeKI],
+  [/^\/status\/ki\/([a-z]+)$/, 'kiBereich', zeigeKIBereich],
   [/^\/status\/update$/, 'update', () => zeigeUpdate('')],
   [/^\/status\/backups$/, 'backups', () => zeigeUpdate('backups')],
   [/^\/status\/update\/backups$/, 'backups', () => geheZu('/status/backups', true)],
   [/^\/status\/backups\/hochladen$/, 'backupHochladen', zeigeBackupHochladen],
+  [/^\/status\/systemschluessel$/, 'systemschluessel', zeigeSystemschluessel],
   [/^\/status\/einstellungen\/bearbeiten$/, 'einstellungenBearbeiten', () => geheZu('/status/einstellungen', true)],
   [/^\/status\/einstellungen\/([A-Z_]+)$/, 'einstellungBearbeiten', zeigeEinstellungBearbeiten],
   [/^\/einrichten$/, 'einrichten', zeigeEinrichten],
@@ -520,6 +544,8 @@ const routen = [
   [/^\/status\/zugang\/code$/, 'zugangCode', zeigeNeuerCode],
   [/^\/admin\/nutzer$/, 'nutzer', zeigeNutzer],
   [/^\/admin\/nutzer\/neu$/, 'nutzerNeu', zeigeNutzerNeu],
+  [/^\/admin\/nutzer\/einladung\/([0-9a-f]{16})$/, 'einladung', zeigeEinladung],
+  [/^\/admin\/nutzer\/(\d+)\/code$/, 'neuEinladen', zeigeNeuEinladen],
   [/^\/admin\/nutzer\/(\d+)\/bearbeiten$/, 'nutzerBearbeiten', zeigeNutzerBearbeiten],
 ];
 let aktuell = null;
@@ -1734,6 +1760,10 @@ function eintragHtml(e, offline) {
   let aufnahme = T('<p class="leise">Keine Aufnahme (Text).</p>');
   if (e.audio === 'da') aufnahme = offline ? T('<p class="leise">Wiedergabe nur mit Verbindung.</p>') : T`<audio controls preload="none" src="/api/eintraege/${e.id}/audio"></audio>`;
   else if (e.audio === 'abgelaufen') aufnahme = T('<p class="leise">Aufnahme abgelaufen – das Audio wurde nach der Aufbewahrungsfrist gelöscht.</p>');
+  // Neu transkribieren: Aufnahme vorhanden, nichts läuft; bei Planungen nur die letzte Runde.
+  if (e.audio === 'da' && !offline && (fertig || e.status === 'fehler') && (e.modus === 'diktat' || (e.modus === 'planung' && (!p || p.letzte_runde)))) {
+    aufnahme += T('<div class="leiste"><button type="button" class="btn klein" data-akt="neu-transkribieren">Neu transkribieren</button></div>');
+  }
   // Wiedergabe direkt unter dem Text; der Original-Wortlaut ist eingeklappt – offen nur, wenn es keinen bereinigten Text gibt.
   // Notizen zeigen das Gesagte schon als Text; der Original-Wortlaut liegt eingeklappt bei der Aufnahme – nur wenn er nicht schon oben steht.
   const obenText = e.modus === 'diktat' && !e.analyse?.notiz;
@@ -1757,7 +1787,7 @@ function eintragHtml(e, offline) {
 
   const details = [];
   if (e.zuordnung) details.push([tx('Zuordnung'), ZUORDNUNG[e.zuordnung] || e.zuordnung]);
-  if (e.transkript_quelle) details.push([tx('Transkript von'), { openai: tx('OpenAI'), pebble: tx('Pebble'), text: tx('getippt'), nutzer: tx('von Hand korrigiert') }[e.transkript_quelle] || e.transkript_quelle]);
+  if (e.transkript_quelle) details.push([tx('Transkript von'), { openai: tx('OpenAI'), lokal: tx('Whisper (lokal)'), 'openai-ausweich': tx('OpenAI (lokal gescheitert)'), pebble: tx('Pebble'), text: tx('getippt'), nutzer: tx('von Hand korrigiert') }[e.transkript_quelle] || e.transkript_quelle]);
   if (e.kosten_usd != null) details.push([e.modus === 'diktat' ? tx('Kosten der Auswertung') : tx('Recherchekosten'), `${e.kosten_usd.toFixed(3)} $`]);
   if (e.joplin?.aktiv) details.push([tx('Joplin'), e.joplin.fehler ? T`Übertragung fehlgeschlagen: ${e.joplin.fehler}` : e.joplin.offen ? tx('noch nicht übertragen') : T`übertragen ${zeit(e.joplin.uebertragen)}`]);
   const pebbleText = e.pebble_text && e.pebble_text !== e.transkript ? T`<h3>Transkript der Pebble-App</h3><blockquote>${esc(e.pebble_text)}</blockquote>` : '';
@@ -1907,6 +1937,12 @@ async function zeigeEintrag(id) {
       } else if (akt === 'neustart') {
         b.disabled = true;
         melde((await merkeVor({ typ: 'neustart', eintrag: e.id })) ? tx('Neu gestartet') : tx('Vorgemerkt – startet bei Verbindung'));
+        await laden();
+      } else if (akt === 'neu-transkribieren') {
+        if (!confirm(tx('Aufnahme neu transkribieren? Danach wertet die KI den neuen Wortlaut neu aus; von Hand korrigierter Wortlaut geht verloren.'))) return;
+        b.disabled = true;
+        await api(T`/api/eintraege/${e.id}/neu-transkribieren`, { method: 'POST' });
+        melde(tx('Wird neu transkribiert'));
         await laden();
       } else if (akt === 'schliessen') {
         if (!confirm(tx('Planung schließen? Sie wird nicht mehr fortgesetzt.'))) return;
@@ -2728,6 +2764,20 @@ document.addEventListener('toggle', (ev) => {
   try { localStorage.setItem(AUF_SCHLUESSEL, JSON.stringify(m)); } catch { /* nur Komfort */ }
 }, true);
 
+// Status → Transkription: Art, bei lokal das Modell mit Zustand, gemessenem Tempo und letztem Fehler.
+function transkriptionKarte(t) {
+  if (!t) return '';
+  const art = esc(t.lokal ? tx('Whisper (dieser Server)') : tx(TRANSKRIPTION[t.modus] || t.modus));
+  if (!t.lokal) return T`<dl><dt>Transkription</dt><dd>${art}</dd></dl>`;
+  const m = t.modell || {};
+  const zustand = m.geladen ? T('<span class="gut">bereit</span>') : m.laedt ? T`${tx('lädt {0} %', m.prozent)}` : m.fehler ? T`<span class="schlecht">${tx('Laden gescheitert')}: ${esc(m.fehler)}</span>` : T('<span class="schlecht">nicht geladen</span>');
+  const tempo = m.faktor_gemessen ? tx('1 Min. Aufnahme ≈ {0} s (Mittel aus {1} Läufen)', Math.round(m.faktor_gemessen * 60), m.laeufe) : tx('noch nicht gemessen');
+  return T`<details${aufAttr('transkription')} class="karte speicherkarte"><summary><span class="zeile kartentitel"><strong>Transkription</strong><span class="leise">${art}</span></span>
+      <span class="zeile"><span>Whisper ${esc(m.name || '')}</span><span>${zustand}</span></span>${t.letzter_fehler ? T`<span class="hinweis schlecht">${tx('Zuletzt gescheitert')} (${esc(zeit(t.letzter_fehler_zeit))}): ${esc(t.letzter_fehler)}</span>` : ''}</summary>
+    <div class="speicherdetails"><dl class="systemliste"><dt>${tx('Im RAM')}</dt><dd>${t.im_ram ? esc(tx('seit {0}', zeit(t.im_ram_seit))) : esc(tx('nein'))} <span class="leise">${t.ram_halten_minuten ? esc(tx('hält {0} Min nach der letzten Aufnahme', t.ram_halten_minuten)) : esc(tx('dauerhaft'))}</span></dd><dt>${tx('Tempo')}</dt><dd>${esc(tempo)}</dd><dt>${tx('Kerne')}</dt><dd>${t.kerne}</dd><dt>${tx('Engine')}</dt><dd>${esc(t.engine || tx('fehlt in diesem Build'))}</dd></dl>
+    ${istAdmin() ? T('<div class="leiste"><a class="btn klein" href="/status/ki/transkription">Ändern</a></div>') : ''}</div></details>`;
+}
+
 async function zeigeStatus() {
   seite.innerHTML = T`${statusReiter('status')}<p class="leer">Lädt …</p>`;
   const laden = async (vorab) => {
@@ -2790,7 +2840,7 @@ async function zeigeStatus() {
       return T`<details${aufAttr('speicher')} class="karte speicherkarte"><summary><span class="zeile kartentitel"><strong>Speicher</strong><span class="eingangszahl">${groesse(gesamt)}</span></span><span class="speicherraster">${oben.map((p) => T`<span class="speicherzeile"><span class="zeile"><span>${esc(tx(p.name))}</span>${p.fehler ? T`<span class="schlecht">nicht lesbar</span>` : T`<span>${groesse(p.belegt)}</span>`}</span>
         ${p.fehler ? '' : (p.art === 'eigen' ? balkenEigen(p) : balken(p))}${p.knapp ? (p.aufnahmen ? T('<span class="hinweis schlecht">Knapp – neue Aufnahmen werden abgewiesen.</span>') : T('<span class="hinweis schlecht">Fast voll.</span>')) : ''}</span>`).join('')}</span></summary>
       <div class="speicherdetails speicherraster">${liste.map((p) => T`<div><strong>${esc(tx(p.name))}</strong>
-        <div class="pfadzeile leise"><span class="pfad">${esc(p.pfad)}</span>${p.fehler || p.art === 'eigen' ? '' : T`<span class="frei">frei ${groesse(p.frei)} von ${groesse(p.gesamt)}</span>`}</div>
+        <div class="pfadzeile leise"><span class="pfad">${esc(p.pfad || '')}</span>${p.fehler || p.art === 'eigen' ? '' : T`<span class="frei">frei ${groesse(p.frei)} von ${groesse(p.gesamt)}</span>`}</div>
         ${p.fehler ? T`<div class="hinweis schlecht">nicht lesbar: ${esc(p.fehler)}</div>` : ''}</div>`).join('')}${nachNutzer(nutzer)}${aufraeumen(x)}</div></details>`; };
     // System: zugeklappt Betriebssystem, CPU- und RAM-Balken; aufgeklappt Maschine, dieser Dienst und die Prozesse mit der höchsten CPU-Last.
     const system = (x) => {
@@ -2825,6 +2875,7 @@ async function zeigeStatus() {
         ${s.audio_unbekannt.length > 1 ? T('<div class="leiste"><button class="btn haupt" data-import-alle="1">Alle importieren</button></div>') : ''}` : ''}
       ${s.joplin.aktiv ? T`<dl><dt>Joplin</dt><dd>${joplin}</dd></dl>` : ''}
       ${s.joplin.aktiv ? T('<div class="leiste"><button class="btn klein" data-a="pruefen">Joplin jetzt prüfen</button></div>') : ''}
+      ${transkriptionKarte(s.transkription)}
       ${(s.speicher || []).length ? speicher(s.speicher, s.aufraeumen, s.speicher_nutzer) : ''}
       ${system(sy)}
       ${s.probleme.length ? T`<h2>Aufträge mit Fehlern</h2>${s.fehlgeschlagen ? T('<div class="leiste"><button class="btn gefahr" data-a="fehler-weg">Alle fehlerhaften löschen</button></div>') : ''}${s.probleme.map(karte).join('')}` : ''}
@@ -2893,7 +2944,7 @@ async function zeigeStatus() {
           return laden();
         }
         case 'pruefen': b.disabled = true; await api('/api/status?pruefen=1'); melde(tx('Joplin geprüft')); return laden();
-        case 'abmelden': await api('/api/auth/abmelden', { method: 'POST' }); try { localStorage.setItem('angemeldet', '0'); } catch { /* nur Startabkürzung */ } return geheZu('/anmelden', true);
+        case 'abmelden': await abmelden(); return geheZu('/anmelden', true);
       }
     } catch (f) { b.disabled = false; melde(f.message); }
   };
@@ -3353,14 +3404,26 @@ async function zeigeRingBearbeiten(nr) {
 // Übertragen in die Pebble-App), sonst Passwortfeld – leer lassen behält den gespeicherten Wert.
 // Sprachen heißen in ihrer eigenen Sprache.
 const WAHL = { de: 'Deutsch', en: 'English' };
-function einstellungsFormular(felder, { assistent }) {
+const TRANSKRIPTION = { audio: 'Audio, Transkription in der Web-App', pebble: 'Text der Pebble-App übernehmen' };
+function einstellungsFormular(felder, { assistent, whisper, whisperLoeschen = false }) {
   const gruppen = [...new Set(felder.map((f) => f.gruppe))];
+  // Jedes Feld in eigenem Rahmen, damit es sich je nach anderen Werten ausblenden lässt.
   const feld = (f) => {
+    const art = f.key.startsWith('WHISPER_') ? 'whisperfeld' : CLOUDFELDER.includes(f.key) ? 'cloudfeld' : 'feld';
+    return T`<div class="${art}" data-feld="${f.key}">${feldInhalt(f)}</div>`;
+  };
+  const feldInhalt = (f) => {
     const id = `f-${f.key}`;
     const hilfe = f.hilfe ? T`<p class="leise hilfe">${esc(tx(f.hilfe))}</p>` : '';
     let eingabe;
-    if (f.art === 'choice') {
-      eingabe = T`<select id="${id}" name="${f.key}">${f.auswahl.map((c) => T`<option value="${esc(c)}"${c === f.wert ? ' selected' : ''}>${esc(WAHL[c] || tx(c))}</option>`).join('')}</select>`;
+    if (f.key === 'WHISPER_MODEL' && whisper) {
+      eingabe = T`<select id="${id}" name="${f.key}">${whisper.modelle.map((m) => T`<option value="${esc(m.id)}"${m.id === f.wert ? ' selected' : ''}>${esc(m.name)} · ${groesse(m.bytes)}</option>`).join('')}</select>`;
+      return T`<label for="${id}">${esc(tx(f.name))}</label>${eingabe}${hilfe}${whisperTabelle(whisper, { loeschen: whisperLoeschen, gewaehlt: f.wert })}`;
+    } else if (f.art === 'multi') {
+      const an = (f.wert || '').split(',');
+      return T`<p class="feldname">${esc(tx(f.name))}</p><div class="mehrfach" data-multi="${f.key}">${f.auswahl.map((c, i) => T`<label class="schalter"><input type="checkbox" id="${id}-${i}" value="${esc(c)}"${an.includes(c) ? ' checked' : ''}> ${esc(wahlText(f, c))}</label>`).join('')}</div>${hilfe}`;
+    } else if (f.art === 'choice') {
+      eingabe = T`<select id="${id}" name="${f.key}">${f.auswahl.map((c) => T`<option value="${esc(c)}"${c === f.wert ? ' selected' : ''}>${esc(wahlText(f, c))}</option>`).join('')}</select>`;
     } else if (f.art === 'secret') {
       const sichtbar = assistent && f.wert;
       const platz = f.gesperrt ? tx('aus der Umgebung gesetzt') : f.gesetzt ? tx('gesetzt – leer lassen zum Behalten') : '';
@@ -3374,11 +3437,54 @@ function einstellungsFormular(felder, { assistent }) {
     }
     return T`<label for="${id}">${esc(tx(f.name))}${f.pflicht ? ' *' : ''}</label>${eingabe}${hilfe}`;
   };
-  return T`<form class="einstellungen" novalidate>${gruppen.map((g) => T`<fieldset><legend>${esc(tx(g))}</legend>${felder.filter((f) => f.gruppe === g).map(feld).join('')}</fieldset>`).join('')}
+  const koerper = gruppen.map((g) => T`<fieldset><legend>${esc(tx(g))}</legend>${felder.filter((f) => f.gruppe === g).map(feld).join('')}</fieldset>`).join('');
+  return T`<form class="einstellungen" novalidate>${koerper}
     <div class="leiste"><button class="btn haupt" type="submit">Speichern</button></div></form>`;
 }
 
-const einstellungsWerte = (form) => Object.fromEntries([...form.querySelectorAll('[name]')].map((e) => [e.name, e.value]));
+// Anzeige eines Auswahlwerts: eigene Bezeichnung des Felds, Sprachname oder der Wert selbst.
+const wahlText = (f, c) => (f.bezeichnungen?.[c] ? tx(f.bezeichnungen[c]) : WAHL[c] || tx(c));
+
+// Whisper-Modelle mit dem, was sie brauchen, und den Mitteln dieses Servers. Tempo: gemessen, sonst Richtwert
+// (gemessen auf 4 Kernen, auf die Kerne des Servers umgerechnet) – als Rechenzeit je Minute Aufnahme.
+function whisperTabelle(w, { loeschen = false, gewaehlt = '' } = {}) {
+  const mb = 1024 * 1024;
+  const tempo = (m) => {
+    const faktor = m.faktor_gemessen || (m.faktor * 4) / Math.max(1, Math.min(w.kerne, 8));
+    const s = Math.max(1, Math.round(faktor * 60));
+    return T`${s < 90 ? tx('{0} s', s) : tx('{0} Min', (s / 60).toLocaleString(LOCALE, { maximumFractionDigits: 1 }))}${m.faktor_gemessen ? T` <span class="leise">${tx('gemessen')}</span>` : ''}`;
+  };
+  const zustand = (m) => {
+    if (m.geladen) return T('<span class="badge fertig">geladen</span>');
+    if (m.laedt) return T`<span class="badge">${tx('lädt {0} %', m.prozent)}</span>`;
+    if (m.fehler) return T`<span class="badge fehler" title="${esc(m.fehler)}">${tx('Fehler beim Laden')}</span>`;
+    return '';
+  };
+  const knapp = (m) => w.ram_verfuegbar > 0 && !m.geladen && m.ram_mb * mb > w.ram_verfuegbar;
+  return T`<div class="whisperwahl">
+    <p class="leise">${tx('Dieser Server: {0} Kerne, {1} RAM frei von {2}.', w.kerne, groesse(w.ram_verfuegbar), groesse(w.ram_gesamt))}${w.engine ? '' : T` <span class="schlecht">${tx('Dieser Build enthält keine Whisper-Engine.')}</span>`}</p>
+    <table class="werte whispertabelle"><thead><tr><th>${tx('Modell')}</th><th>${tx('Größe')}</th><th>${tx('1 Min. Aufnahme ≈')}</th><th>${tx('Güte')}</th></tr></thead><tbody>
+    ${w.modelle.map((m) => T`<tr${knapp(m) ? ' class="knapp"' : ''}><td><strong>${esc(m.name)}</strong> ${zustand(m)}${knapp(m) ? T`<br><span class="schlecht">${tx('zu wenig RAM frei')}</span>` : ''}${w.kerne < m.kerne ? T`<br><span class="leise">${tx('empfohlen ab {0} Kernen', m.kerne)}</span>` : ''}</td>
+      <td>${groesse(m.bytes)}<br><span class="leise">${m.ram_mb < 1000 ? `${m.ram_mb} MB` : `${(m.ram_mb / 1024).toLocaleString(LOCALE, { maximumFractionDigits: 1 })} GB`} RAM</span></td><td>${tempo(m)}</td><td>${esc(tx(m.deutsch))}</td></tr>
+      ${loeschen && m.geladen && m.id !== gewaehlt ? T`<tr class="ohnelinie"><td colspan="4"><button class="btn klein gefahr" type="button" data-whisper-loeschen="${esc(m.id)}">${tx('{0} löschen ({1})', m.name, groesse(m.bytes))}</button></td></tr>` : ''}`).join('')}
+    </tbody></table></div>`;
+}
+
+// Whisper-Modell nur zeigen, wenn lokal transkribiert wird.
+function bindeWhisper(form) {
+  const art = form.querySelector('[name=TRANSCRIPTION]'), felder = form.querySelectorAll('.whisperfeld'), cloud = form.querySelectorAll('.cloudfeld');
+  if (!art || !(felder.length || cloud.length)) return;
+  const zeige = () => {
+    for (const feld of felder) feld.hidden = !art.value.startsWith('lokal');
+    for (const feld of cloud) feld.hidden = art.value !== 'openai' && art.value !== 'lokal-openai';
+  };
+  art.addEventListener('change', zeige);
+  zeige();
+}
+
+// Werte eines Einstellungsformulars; Mehrfachauswahl als Komma-Liste, nichts gewählt = „keine“.
+const einstellungsWerte = (form) => ({ ...Object.fromEntries([...form.querySelectorAll('[name]')].map((e) => [e.name, e.value])),
+  ...Object.fromEntries([...form.querySelectorAll('[data-multi]')].map((d) => [d.dataset.multi, [...d.querySelectorAll('input:checked')].map((e) => e.value).join(',') || 'keine'])) });
 
 // Nach dem Speichern startet der Dienst neu: warten, bis er wieder antwortet.
 async function warteAufNeustart() {
@@ -3405,10 +3511,20 @@ async function zeigeErsteinrichtung() {
   // Sprache: die Seite läuft schon in der gewählten (Browser, ?lang= oder gespeichert); Umschalten lädt neu.
   for (const f of d.felder) if (f.key === 'LANGUAGE') f.wert = SPRACHE;
   seite.innerHTML = T`<h1>Ersteinrichtung</h1>
-    <p class="leise">Alle Werte sind mit Vorgaben gefüllt; Pflichtfelder tragen *. Den Zugang für die Pebble-App findest du nach der Einrichtung unter Status → Pebble-App. Später änderbar unter Status → Konfiguration.</p>
+    ${d.eingerichtet ? '' : T`<nav class="btn-group unter" aria-label="Art"><button type="button" class="btn aktiv" data-art="neu" aria-pressed="true">Neu einrichten</button><button type="button" class="btn" data-art="backup" aria-pressed="false">Backup einspielen</button></nav>
+      <div id="backupweg" hidden></div>`}
+    <div id="neuweg"><p class="leise">Alle Werte sind mit Vorgaben gefüllt; Pflichtfelder tragen *. Den Zugang für die Pebble-App findest du nach der Einrichtung unter Status → Pebble-App. Später änderbar unter Status → Konfiguration.</p>
     ${d.fehler ? T`<div class="hinweis schlecht">Die gespeicherten Einstellungen sind ungültig: ${esc(d.fehler)}</div>` : ''}
-    ${einstellungsFormular(d.felder, { assistent: true })}<div id="ergebnis"></div>`;
+    ${einstellungsFormular(d.felder, { assistent: true, whisper: d.whisper })}<div id="ergebnis"></div></div>`;
+  seite.querySelectorAll('[data-art]').forEach((b) => { b.onclick = () => {
+    seite.querySelectorAll('[data-art]').forEach((x) => { x.classList.toggle('aktiv', x === b); x.setAttribute('aria-pressed', x === b); });
+    document.getElementById('neuweg').hidden = b.dataset.art !== 'neu';
+    const weg = document.getElementById('backupweg');
+    weg.hidden = b.dataset.art !== 'backup';
+    if (!weg.hidden && !weg.innerHTML) einrichtungMitBackup(weg, code);
+  }; });
   const form = seite.querySelector('form');
+  bindeWhisper(form);
   // Erster Nutzer (Admin): sein Name für „Hallo …“.
   if (!d.eingerichtet) form.insertAdjacentHTML('afterbegin', T`<fieldset><legend>Dein Zugang</legend><label for="f-name">Dein Name *</label><input id="f-name" name="_name" autocomplete="given-name" maxlength="40" required><p class="leise hilfe">Du bist der erste Nutzer und Admin. Weitere Nutzer lädst du später unter Einstellungen → Nutzer ein.</p></fieldset>`);
   const sprache = form.querySelector('[name=LANGUAGE]');
@@ -3446,10 +3562,81 @@ async function zeigeErsteinrichtung() {
   };
 }
 
-// Reiter der Statusseite (Buttongruppe): Übersicht, Pebble-App, Joplin (nur wenn aktiv), Konfiguration, Theme.
+// Ersteinrichtung mit Backup: Datei hochladen, dann die Wiederherstellungscodes der Nutzer (und ggf. den Code des
+// Systemschlüssels) eingeben; der Server prüft sie, legt die Schlüssel ab und spielt das Backup ein.
+function einrichtungMitBackup(weg, code) {
+  weg.innerHTML = T`<p class="leise">Eine unveränderte Backup-Datei (pebble-….tar.gz) dieses Programms. Daten, Einstellungen und Passkeys kommen zurück; mit den Wiederherstellungscodes öffnen sich die Daten der Nutzer gleich mit.</p>
+    <form class="einstellungen" id="ebackup" novalidate><label for="ebdatei">Backup-Datei</label>
+      <input type="file" id="ebdatei" accept=".tar.gz,.gz,application/gzip" required>
+      <p class="leise" id="ebstand" aria-live="polite"></p>
+      <div class="leiste"><button class="btn haupt" type="submit" disabled>Hochladen und prüfen</button></div></form><div id="ebcodes"></div>`;
+  const form = document.getElementById('ebackup'), feld = document.getElementById('ebdatei'), stand = document.getElementById('ebstand');
+  const knopf = form.querySelector('[type=submit]');
+  const muster = /^pebble-[0-9A-Za-z.+-]+-(stable|beta|nightly|lokal)-\d{8}-\d{6}-(update|plan|manuell)(-audio)?\.tar\.gz$/;
+  feld.onchange = () => {
+    const f = feld.files[0];
+    const ok = !!f && muster.test(f.name);
+    knopf.disabled = !ok;
+    stand.textContent = f ? (ok ? tx('{0} · {1}', f.name, groesse(f.size)) : tx('Der Dateiname passt nicht zu einem Backup dieser App.')) : '';
+  };
+  form.onsubmit = (ev) => {
+    ev.preventDefault();
+    const f = feld.files[0];
+    knopf.disabled = feld.disabled = true;
+    const x = new XMLHttpRequest();
+    x.open('POST', T`/api/ersteinrichtung/backup?code=${encodeURIComponent(code)}&name=${encodeURIComponent(f.name)}`);
+    x.setRequestHeader('X-App', '1');
+    x.setRequestHeader('X-Sprache', SPRACHE);
+    x.upload.onprogress = (e) => { if (e.lengthComputable) stand.textContent = tx('Lädt hoch … {0} %', Math.round((e.loaded / e.total) * 100)); };
+    x.onload = () => {
+      let a = null;
+      try { a = JSON.parse(x.responseText); } catch { /* leer */ }
+      if (x.status !== 200) { stand.textContent = a?.fehler || tx('Fehler {0}', x.status); knopf.disabled = feld.disabled = false; return; }
+      form.hidden = true;
+      zeigeCodes(a);
+    };
+    x.onerror = () => { stand.textContent = tx('Upload abgebrochen'); knopf.disabled = feld.disabled = false; };
+    x.send(f);
+  };
+  const zeigeCodes = (b) => {
+    const box = document.getElementById('ebcodes');
+    const sysNutzer = b.system?.art === 'nutzer' ? b.nutzer.find((u) => u.id === b.system.uid) : null;
+    box.innerHTML = T`<div class="hinweis gut">Backup geprüft: ${esc(b.name)}</div>
+      <form class="einstellungen" id="ebrest" novalidate><h2>Wiederherstellungscodes</h2>
+      <p class="leise">Je Nutzer sein Code. Wer keinen eingibt, öffnet seine Daten später nach der Anmeldung damit.${sysNutzer ? T` Der Code von ${esc(sysNutzer.name)} stellt auch den Systemschlüssel wieder her (API-Schlüssel, Benachrichtigungen).` : ''}</p>
+      ${b.nutzer.map((u) => T`<label for="ebc-${u.id}">${esc(u.name || tx('Nutzer {0}', u.id))} <span class="badge neutral">${esc(tx(ROLLE[u.rolle] || u.rolle))}</span></label>
+        <input id="ebc-${u.id}" data-uid="${u.id}" autocomplete="off" placeholder="XXXXX-XXXXX-XXXXX-XXXXX-XXXXXX">`).join('')}
+      ${b.system?.art === 'code' ? T`<label for="ebsys">Code des Systemschlüssels</label><input id="ebsys" autocomplete="off" placeholder="XXXXX-XXXXX-XXXXX-XXXXX-XXXXXX">` : ''}
+      <h2>Adresse</h2><label for="ebadr">Öffentliche Adresse dieses Servers</label><input id="ebadr" inputmode="url" placeholder="https://name.domain" value="${location.protocol === 'https:' ? esc(location.origin) : ''}">
+      <p class="leise hilfe">Leer = die Adresse aus dem Backup. Bei einer neuen Adresse legen alle Nutzer neue Passkeys an: der Admin mit seinem Wiederherstellungscode auf der Anmeldeseite, die anderen lädt er danach neu ein.</p>
+      <div class="leiste"><button class="btn haupt" type="submit">Backup einspielen</button></div></form><div id="ebende"></div>`;
+    const rf = document.getElementById('ebrest');
+    rf.onsubmit = async (ev) => {
+      ev.preventDefault();
+      const codes = {};
+      rf.querySelectorAll('[data-uid]').forEach((i) => { if (i.value.trim()) codes[i.dataset.uid] = i.value.trim(); });
+      const k = rf.querySelector('[type=submit]');
+      k.disabled = true;
+      try {
+        const r = await api('/api/ersteinrichtung/backup/wiederherstellen', { method: 'POST', body: { code, name: b.name, codes, systemcode: document.getElementById('ebsys')?.value.trim() || '', adresse: document.getElementById('ebadr').value.trim() } });
+        rf.hidden = true;
+        const ende = document.getElementById('ebende');
+        ende.innerHTML = T`<div class="hinweis gut">Backup wird eingespielt${r.system ? tx(' (mit Systemschlüssel)') : ''}. Der Dienst startet neu …</div>`;
+        const da = await warteAufNeustart();
+        ende.innerHTML = da ? T`<div class="hinweis gut">Fertig. Unter der öffentlichen Adresse anmelden – bei gleicher Adresse mit dem Passkey von vorher, bei neuer als Admin mit dem Wiederherstellungscode.</div><div class="leiste"><a class="btn haupt" href="/anmelden" target="_self">Zur Anmeldung</a></div>`
+          : T`<div class="hinweis warn">Das Einspielen dauert länger (z. B. weil die Version aus dem Backup geladen wird). In einer Minute neu laden.</div><div class="leiste"><a class="btn haupt" href="/anmelden" target="_self">Zur Anmeldung</a></div>`;
+      } catch (f) {
+        k.disabled = false;
+        melde(f.message);
+      }
+    };
+  };
+}
+
+// Reiter der Statusseite (Buttongruppe): Übersicht, Pebble-App, Joplin (nur wenn aktiv), Konfiguration, KI (Admins), Theme.
 let joplinAktiv = (() => { try { return localStorage.getItem('joplin-aktiv') === '1'; } catch { return false; } })();
 const statusReiter = (aktiv) => T`<nav class="btn-group unter reiter4" aria-label="Status">${[['status', '/status', tx('Übersicht')], ['pebble', '/pebble', tx('Pebble-App')],
-  ...(joplinAktiv ? [['joplin', '/status/joplin', tx('Joplin')]] : []), ['benachrichtigungen', '/status/benachrichtigungen', tx('Push')], ['einstellungen', '/status/einstellungen', tx('Konfiguration')], ['darstellung', '/status/darstellung', tx('Theme')]]
+  ...(joplinAktiv ? [['joplin', '/status/joplin', tx('Joplin')]] : []), ['benachrichtigungen', '/status/benachrichtigungen', tx('Push')], ['einstellungen', '/status/einstellungen', tx('Konfiguration')], ...(istAdmin() ? [['ki', '/status/ki', tx('KI')]] : []), ['darstellung', '/status/darstellung', tx('Theme')]]
   .map(([n, href, text]) => T`<a class="btn${n === aktiv ? ' aktiv' : ''}" href="${href}"${n === aktiv ? ' aria-current="page"' : ''}>${text}</a>`).join('')}</nav>`;
 
 // Konfiguration: je Wert „?“ (Erklärung darunter ein-/ausklappen) und ✎ (eigene Bearbeitungsseite für diesen Wert).
@@ -3457,7 +3644,7 @@ const STIFT = T('<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4L19
 // ladeEinstellungen: eigene Werte, bei Admins dazu die des Systems (je Feld „persoenlich“).
 async function ladeEinstellungen() {
   const [eigen, system] = await Promise.all([api('/api/einstellungen/persoenlich'), istAdmin() ? api('/api/einstellungen') : { felder: [] }]);
-  return { felder: [...eigen.felder, ...system.felder] };
+  return { felder: [...eigen.felder, ...system.felder], whisper: system.whisper };
 }
 // speichereEinstellungen: persönliche Werte gelten sofort, Werte des Systems nach einem Neustart des Dienstes.
 async function speichereEinstellungen(werte, persoenlich) {
@@ -3477,9 +3664,9 @@ async function zeigeEinstellungen() {
   const d = await ladeEinstellungen();
   if (aktuell?.name !== 'einstellungen') return;
   // Joplin-Zugang wird unter Status → Joplin eingerichtet; hier steht nur der Schalter.
-  d.felder = d.felder.filter((f) => (f.gruppe !== 'Joplin' || f.key === 'JOPLIN_ENABLED') && f.gruppe !== 'Benachrichtigungen');
+  d.felder = d.felder.filter((f) => (f.gruppe !== 'Joplin' || f.key === 'JOPLIN_ENABLED') && f.gruppe !== 'Benachrichtigungen' && !Object.values(KI_GRUPPEN).includes(f.gruppe));
   const gruppen = [...new Set(d.felder.map((f) => f.gruppe))];
-  const wert = (f) => (f.art === 'secret' ? (f.gesperrt ? tx('aus der Umgebung') : f.gesetzt ? tx('gesetzt') : T('<span class="leise">leer</span>')) : f.wert ? esc(f.art === 'choice' ? WAHL[f.wert] || tx(f.wert) : f.wert) : T('<span class="leise">leer</span>'));
+  const wert = (f) => (f.art === 'multi' ? esc(f.wert === 'keine' ? tx('keine') : (f.wert || '').split(',').map((c) => wahlText(f, c)).join(', ')) : f.art === 'secret' ? (f.gesperrt ? tx('aus der Umgebung') : f.gesetzt ? tx('gesetzt') : T('<span class="leise">leer</span>')) : f.wert ? esc(f.key === 'WHISPER_MODEL' ? d.whisper?.modelle.find((m) => m.id === f.wert)?.name || f.wert : f.art === 'choice' ? wahlText(f, f.wert) : f.wert) : T('<span class="leise">leer</span>'));
   const zeile = (f) => T`<div class="konfzeile">
       <button class="konfhilfe" data-hilfe="${f.key}" aria-expanded="false" aria-controls="hilfe-${f.key}" aria-label="${esc(tx('Erklärung zu {0}', tx(f.name)))}">?</button>
       <span class="konfname">${esc(tx(f.name))}</span>
@@ -3491,7 +3678,7 @@ async function zeigeEinstellungen() {
   seite.innerHTML = T`${statusReiter('einstellungen')}<h1>Konfiguration</h1>
     <p class="leise">? erklärt einen Wert, ✎ ändert ihn.</p>
     <h2>Persönlich</h2><p class="leise">Gilt nur für dich, sofort nach dem Speichern.</p>${teil(true)}
-    ${istAdmin() ? T`<h2>System</h2><p class="leise">Gilt für alle Nutzer; nach dem Speichern startet der Dienst kurz neu.</p>${teil(false)}` : ''}`;
+    ${istAdmin() ? T`<h2>System</h2><p class="leise">Gilt für alle Nutzer; nach dem Speichern startet der Dienst kurz neu. Anbieter und Modelle der KI stehen unter <a href="/status/ki">KI</a>.</p>${teil(false)}` : ''}`;
   seite.onclick = (ev) => {
     const b = ev.target.closest('[data-hilfe]');
     if (!b) return;
@@ -3499,6 +3686,430 @@ async function zeigeEinstellungen() {
     info.hidden = !info.hidden;
     b.setAttribute('aria-expanded', String(!info.hidden));
   };
+  aufraeumen = () => { seite.onclick = null; };
+}
+
+// ---------- KI: Zugänge (beliebig viele, je mit eigenem Namen) und je Bereich die Reihenfolge der Einträge (Admins) ----------
+
+// Unterseiten: Bereich der Daten, Gruppe der übrigen Einstellungen, Titel, kurze Erklärung.
+const KI_SEITEN = {
+  transkription: { bereich: 'transkription', gruppe: 'Transkription', titel: 'Transkription', text: 'Wandelt Aufnahmen in Text um.' },
+  kurztitel: { bereich: 'kurztitel', titel: 'Kurztitel', text: 'Kurztitel, Zuordnung zu Planungen, Termine, Beschreibungen der Listen. Ein kleines Modell reicht.' },
+  auswertung: { bereich: 'auswertung', titel: 'Auswertung & Sortierung', text: 'Notizen auswerten, in Gruppen und Listen einsortieren, Lernlauf. Braucht strukturierte Ausgabe (JSON-Schema).' },
+  webrecherche: { bereich: 'recherche', gruppe: 'Webrecherche', titel: 'Webrecherche', text: 'Planungen mit Antwort und Trailer-Suche.' },
+  bilder: { bereich: 'bilder', titel: 'Bilder', text: 'Erklärende Bilder zu Notizen und Planungen (nur OpenAI). Ohne Eintrag erzeugt die KI keine Bilder.' },
+};
+const KI_GRUPPEN = { zugaenge: 'KI-Zugänge', transkription: 'Transkription', webrecherche: 'Webrecherche' };
+const CLOUDFELDER = [];
+// Anbieter-Arten kommen vom Server (config.ProviderTypes): Name, Adresse, Schlüssel, Bereiche, Websuche, Modellauswahl.
+const kiArt = (d, z) => d.arten?.find((a) => a.id === z?.art);
+const kiErlaubt = (d, bereich) => (d.arten || []).filter((a) => a.bereiche?.includes(bereich)).map((a) => a.id);
+const KI_SONDER = { whisper: 'Whisper (dieser Server)', pebble: 'Text der Pebble-App' };
+const kiCloud = (d, z) => !!kiArt(d, z)?.cloud;
+const kiModelle = (id) => { try { return JSON.parse(localStorage.getItem(T`ki-modelle-${id}`)); } catch { return null; } };
+const kiNeueID = () => Math.random().toString(36).slice(2, 10);
+const kiZahl = (v) => { const t = String(v ?? '').trim().replace(',', '.'); return t === '' ? null : Number(t); };
+const kiUSD = (v) => `${Number(v || 0).toLocaleString(LOCALE, { maximumFractionDigits: 4 })} $`;
+
+async function ladeKI() { return api('/api/ki'); }
+
+async function zeigeKI() {
+  seite.innerHTML = T`${statusReiter('ki')}<p class="leer">Lädt …</p>`;
+  if (!istAdmin()) { seite.innerHTML = T`${statusReiter('ki')}<div class="hinweis schlecht">Nur für Admins.</div>`; return; }
+  const d = await ladeKI();
+  if (aktuell?.name !== 'ki') return;
+  // Je Bereich eine Karte: Titel, der erste aktive Eintrag, was der Bereich macht; rechts ein großer Pfeil.
+  const karte = (seiteName, s) => {
+    const liste = (d.bereiche[s.bereich] || []).filter((e) => !e.inaktiv);
+    const erster = liste[0];
+    const z = erster && d.zugaenge.find((x) => x.id === erster.zugang);
+    const name = erster && (z ? z.name : tx(KI_SONDER[erster.zugang] || erster.zugang));
+    return T`<a class="karte kibereich" href="/status/ki/${seiteName}"><span class="kibereichtext"><strong>${esc(tx(s.titel))}</strong>
+      ${erster ? T`<span><span class="kimarke">${esc(name)}</span> ${esc(erster.modell || '')}${liste.length > 1 ? T` <span class="leise">${tx('+{0} weitere', liste.length - 1)}</span>` : ''}</span>`
+        : T`<span class="${s.bereich === 'bilder' ? 'leise' : 'schlecht'}">${s.bereich === 'bilder' ? tx('Aus') : tx('Kein Anbieter')}</span>`}
+      <span class="leise">${esc(tx(s.text))}</span></span><span class="kipfeil" aria-hidden="true">›</span></a>`;
+  };
+  seite.innerHTML = T`${statusReiter('ki')}<h1>KI</h1>
+    <div class="leiste"><a class="btn" href="/status/ki/zugaenge">${tx('Anbieter')} (${d.zugaenge.length})</a></div>
+    ${Object.entries(KI_SEITEN).map(([n, s]) => karte(n, s)).join('')}`;
+}
+
+// Zugänge: je Zugang eine Zeile; Tippen öffnet ein Fenster zum Bearbeiten, das gleich speichert (Dienst startet neu).
+// „Prüfen“ fragt einen gespeicherten Zugang ab und merkt sich seine Modelle im Browser für die Auswahl in den Bereichen.
+async function zeigeKIZugaenge(d) {
+  const f = Object.fromEntries(d.felder.map((x) => [x.key, x]));
+  const host = (u) => { try { return new URL(u).host; } catch { return u || ''; } };
+  const zeile = (z) => {
+    const m = kiModelle(z.id);
+    const art = kiArt(d, z);
+    const info = [tx(art?.name || z.art), !art?.adresse_fest && host(z.adresse), m && tx('{0} Modelle', m.modelle.length)].filter(Boolean).join(' · ');
+    return T`<button type="button" class="kizeile" data-zugang="${esc(z.id)}"><span class="kizeilename">${esc(z.name)}</span><span class="leise">${esc(info)}</span><span class="kizeilestift" aria-hidden="true">${STIFT}</span></button>`;
+  };
+  seite.innerHTML = T`${statusReiter('ki')}${krumen([[tx('KI'), '/status/ki'], [tx('Anbieter')]])}<h1>Anbieter</h1>
+    <p class="leise">Beliebig viele Anbieter, auch mehrere gleicher Art; jeder mit eigenem Namen. Tippen öffnet den Anbieter.</p>
+    ${d.zugaenge.length ? T`<div class="karte kizeilen">${d.zugaenge.map(zeile).join('')}</div>` : T`<p class="leise">Noch kein Anbieter.</p>`}
+    <div class="leiste"><button type="button" class="btn" data-neu="1">Anbieter hinzufügen</button></div>
+    ${f.USER_DAILY_LIMIT_USD ? T`<div class="karte konfliste"><div class="konfzeile ohnehilfe"><span class="konfname">${esc(tx(f.USER_DAILY_LIMIT_USD.name))}</span>
+      <a class="konfedit" href="/status/einstellungen/USER_DAILY_LIMIT_USD?zurueck=/status/ki/zugaenge" aria-label="${esc(tx('{0} bearbeiten', tx(f.USER_DAILY_LIMIT_USD.name)))}">${STIFT}</a>
+      <span class="konfwert">${esc(f.USER_DAILY_LIMIT_USD.wert)} $</span></div></div>` : ''}
+    <div class="leiste"><a class="btn" href="/status/ki">Zurück</a></div>`;
+  seite.onclick = (ev) => {
+    const b = ev.target.closest('[data-zugang], [data-neu]');
+    if (!b) return;
+    kiZugangFenster(d, b.dataset.zugang ? d.zugaenge.find((z) => z.id === b.dataset.zugang) : null);
+  };
+  aufraeumen = () => { seite.onclick = null; };
+}
+
+// Ein Fenster öffnet ohne fokussiertes Eingabefeld (sonst gehen Tastatur und Modellauswahl auf, ohne dass jemand
+// ins Feld getippt hat). Manche Browser setzen den Fokus nach showModal noch einmal: darum auch in den nächsten Frames.
+function kiFensterRuhig(dlg) {
+  const ruhe = () => { const a = document.activeElement; if (a && a !== dlg && dlg.contains(a) && a.matches('input, select, textarea')) { a.blur(); dlg.focus({ preventScroll: true }); } };
+  dlg.focus({ preventScroll: true });
+  ruhe();
+  requestAnimationFrame(() => { ruhe(); requestAnimationFrame(ruhe); });
+}
+
+// Fenster eines Zugangs: Name, Art, Adresse, Schlüssel; Speichern und Entfernen schreiben sofort.
+function kiZugangFenster(d, alt) {
+  const z = alt ? { ...alt } : { id: kiNeueID(), name: '', art: 'openai', adresse: '' };
+  const dlg = document.createElement('dialog');
+  dlg.className = 'tagdialog';
+  dlg.tabIndex = -1; // Fokus aufs Fenster, nicht aufs erste Feld (sonst springt die Tastatur auf)
+  dlg.autofocus = true;
+  const male = () => {
+    const m = kiModelle(z.id);
+    const art = kiArt(d, z) || {};
+    const schluessel = art.schluessel && art.schluessel !== 'kein';
+    dlg.innerHTML = T`<form method="dialog" class="einstellungen" novalidate><div class="kikopf"><h2>${esc(alt ? alt.name : tx('Neuer Anbieter'))}</h2><button type="button" class="kizu" data-zu="1" aria-label="${esc(tx('Schließen'))}">×</button></div>
+      <label for="kz-name">Name *</label><input type="text" id="kz-name" data-k="name" value="${esc(z.name)}" autocomplete="off">
+      <label for="kz-art">Art</label><select id="kz-art" data-k="art">${(d.arten || []).map((a) => T`<option value="${esc(a.id)}"${a.id === z.art ? ' selected' : ''}>${esc(tx(a.name))}</option>`).join('')}</select>
+      ${art.text ? T`<p class="leise hilfe">${esc(tx(art.text))}</p>` : ''}
+      ${art.adresse_fest ? '' : T`<label for="kz-adresse">Adresse${art.adresse ? '' : ' *'}</label><input id="kz-adresse" type="url" data-k="adresse" value="${esc(z.adresse || '')}" placeholder="${esc(art.adresse || (art.api === 'searxng' ? 'http://<server>:8080' : 'https://…/v1'))}" autocomplete="off" spellcheck="false">`}
+      ${schluessel ? T`<label for="kz-key">Schlüssel${art.schluessel === 'pflicht' ? ' *' : ''}</label><input id="kz-key" type="password" data-k="schluessel" value="${esc(z.schluessel || '')}" placeholder="${alt?.schluessel_gesetzt && alt.art === z.art ? esc(tx('gesetzt – leer lassen zum Behalten')) : ''}" autocomplete="off" spellcheck="false">` : ''}
+      ${alt ? T`<div class="leiste kileiste"><button type="button" class="btn klein" data-pruefen="1">Prüfen</button></div>
+        <p class="leise hilfe" id="kz-pruef">${m ? esc(tx('{0} Modelle, geprüft {1}', m.modelle.length, new Date(m.zeit).toLocaleString(LOCALE))) : ''}</p>` : ''}
+      <p class="hinweis schlecht" id="kz-fehler" hidden></p>
+      <div class="leiste"><button type="submit" class="btn haupt" value="speichern">Speichern</button><button type="button" class="btn" data-zu="1">Abbrechen</button></div>
+      ${alt ? T`<div class="leiste"><button type="button" class="btn gefahr" data-weg="1">Anbieter entfernen</button></div>` : ''}</form>`;
+  };
+  male();
+  const schreibe = async (zugaenge) => {
+    const fehler = dlg.querySelector('#kz-fehler');
+    fehler.hidden = true;
+    dlg.querySelectorAll('button').forEach((b) => { b.disabled = true; });
+    try {
+      await kiNachSpeichern(await api('/api/ki', { method: 'PUT', body: { zugaenge, bereiche: d.bereiche, werte: {} } }));
+      dlg.close();
+      if (aktuell?.name === 'kiBereich') zeigeKIBereich('zugaenge');
+    } catch (f) {
+      fehler.textContent = f.message;
+      fehler.hidden = false;
+      dlg.querySelectorAll('button').forEach((b) => { b.disabled = false; });
+    }
+  };
+  const ohneSchluessel = (x) => ({ id: x.id, name: x.name, art: x.art, adresse: x.adresse });
+  dlg.addEventListener('input', (ev) => { if (ev.target.dataset.k) z[ev.target.dataset.k] = ev.target.value; });
+  dlg.addEventListener('change', (ev) => { if (ev.target.dataset.k === 'art') { z.art = ev.target.value; male(); } });
+  dlg.addEventListener('submit', (ev) => {
+    ev.preventDefault();
+    const rest = d.zugaenge.map(ohneSchluessel);
+    const i = rest.findIndex((x) => x.id === z.id);
+    if (i >= 0) rest[i] = z; else rest.push(z);
+    schreibe(rest);
+  });
+  dlg.addEventListener('click', async (ev) => {
+    const b = ev.target.closest('button[type=button]');
+    if (!b) return;
+    if (b.dataset.zu) dlg.close();
+    else if (b.dataset.weg) {
+      if (confirm(tx('Anbieter {0} entfernen? Seine Einträge in den Bereichen fallen weg.', alt.name))) {
+        d.bereiche = Object.fromEntries(Object.entries(d.bereiche).map(([k, l]) => [k, l.filter((e) => e.zugang !== alt.id).map((e) => ({ ...e, websuche: (e.websuche || []).filter((x) => x !== alt.id) }))]));
+        schreibe(d.zugaenge.filter((x) => x.id !== alt.id).map(ohneSchluessel));
+      }
+    } else if (b.dataset.pruefen) {
+      const info = dlg.querySelector('#kz-pruef');
+      b.disabled = true;
+      info.textContent = tx('Prüft …');
+      try {
+        const r = await api(T`/api/ki/pruefen/${alt.id}`, { method: 'POST' });
+        if (r.ok && r.modelle) localStorage.setItem(T`ki-modelle-${alt.id}`, JSON.stringify({ modelle: r.modelle, zeit: Date.now() }));
+        info.textContent = r.ok ? (r.modelle ? tx('Erreichbar, {0} Modelle', r.modelle.length) : tx('Erreichbar')) : T`${tx('Fehler')}: ${r.fehler}`;
+        info.className = T`leise hilfe ${r.ok ? 'gut' : 'schlecht'}`;
+      } catch (f) { info.textContent = f.message; }
+      b.disabled = false;
+    }
+  });
+  dlg.onclose = () => dlg.remove();
+  document.body.append(dlg);
+  dlg.showModal();
+  kiFensterRuhig(dlg);
+}
+
+// Felder eines Eintrags im Fenster: Zugang, Modell (Vorschläge aus dem letzten Prüfen), bei Cloud-Anbietern Preise
+// und Monatslimit, bei Auswertung und Recherche die Websuche.
+function kiEintragFelder(d, bereich, e) {
+  const id = 'ke';
+  const z = d.zugaenge.find((x) => x.id === e.zugang);
+  const zahl = (k, name) => T`<label for="${id}-${k}">${esc(tx(name))} *</label><input type="text" id="${id}-${k}" data-k="${k}" inputmode="decimal" value="${e[k] ?? ''}" autocomplete="off">`;
+  const art = kiArt(d, z);
+  const cloud = kiCloud(d, z);
+  const suche = bereich === 'recherche' || bereich === 'auswertung';
+  const searx = d.zugaenge.filter((x) => kiArt(d, x)?.api === 'searxng');
+  return T`    ${art?.modelle?.[bereich] ? T`<label for="${id}-modell">Modell</label><select id="${id}-modell" data-k="modell">${art.modelle[bereich].map((m) => T`<option value="${esc(m.id)}"${m.id === e.modell ? ' selected' : ''}>${esc(tx(m.name))} · ${esc(kiPreisText(m))}</option>`).join('')}</select>
+      <p class="leise hilfe">${tx('Ungefähre Preise laut Anbieter; beim Wechsel übernommen, unten anpassbar.')}</p>`
+    : z ? T`<label for="${id}-modell">Modell *</label><input type="text" id="${id}-modell" data-k="modell" value="${esc(e.modell || '')}" list="${id}-liste" autocomplete="off" spellcheck="false">
+      <datalist id="${id}-liste">${(kiModelle(z.id)?.modelle || []).map((m) => T`<option value="${esc(m)}">`).join('')}</datalist>
+      ${kiModelle(z.id) ? '' : T`<p class="leise hilfe">${esc(tx('Keine Modelle gemerkt'))} – <a href="/status/ki/zugaenge">${esc(tx('unter Zugänge prüfen'))}</a></p>`}` : ''}
+    ${e.zugang === 'pebble' ? T`<p class="leise hilfe">${tx('Nur als erster Eintrag; fehlt der Text, übernehmen die folgenden.')}</p>` : ''}
+    ${cloud && bereich === 'transkription' ? zahl('preis_minute', 'Preis (USD je Minute)') : ''}
+    ${cloud && bereich === 'bilder' ? zahl('preis_bild', 'Preis (USD je Bild)') : ''}
+    ${cloud && bereich !== 'transkription' && bereich !== 'bilder' ? T`${zahl('preis_ein', 'Preis Eingabe (USD je 1 Mio. Tokens)')}${zahl('preis_aus', 'Preis Ausgabe (USD je 1 Mio. Tokens)')}` : ''}
+    ${suche && z ? T`<p class="feldname">Websuche</p><div class="mehrfach">
+      ${art?.suche ? T`<label class="schalter"><input type="checkbox" data-suche="anbieter"${e.websuche?.includes('anbieter') ? ' checked' : ''}> ${tx('Suche des Anbieters')}</label>` : ''}
+      ${searx.map((x) => T`<label class="schalter"><input type="checkbox" data-suche="${esc(x.id)}"${e.websuche?.includes(x.id) ? ' checked' : ''}> ${esc(x.name)}</label>`).join('')}</div>
+      ${!art?.suche && !searx.length ? T`<p class="leise hilfe">${tx('Ein lokales Modell sucht nicht selbst im Web; dafür einen SearXNG-Anbieter anlegen.')}</p>` : ''}
+      ${cloud && e.websuche?.includes('anbieter') ? zahl('preis_suche', 'Preis Websuche (USD je Aufruf)') : ''}` : ''}
+    ${cloud ? T`<label for="${id}-limit">${tx('Kostenlimit im Monat (USD)')}</label><input type="text" id="${id}-limit" data-k="limit_monat" inputmode="decimal" value="${e.limit_monat || ''}" placeholder="${esc(tx('ohne'))}" autocomplete="off">
+      <p class="leise hilfe">${tx('Diesen Monat: {0}. Ist das Limit erreicht, übernimmt der nächste Eintrag.', kiUSD(d.verbrauch[e.id]))}</p>` : ''}`;
+}
+
+// Alle Einträge eines Bereichs: gespeicherte und je passendem Zugang, der noch fehlt, ein inaktiver Platzhalter –
+// jeder Zugang steht genau einmal in der Liste.
+function kiAlleEintraege(d, bereich) {
+  const da = (d.bereiche[bereich] || []).filter((e) => d.zugaenge.some((z) => z.id === e.zugang) || KI_SONDER[e.zugang]);
+  const moeglich = [...d.zugaenge.filter((z) => kiErlaubt(d, bereich).includes(z.art)).map((z) => z.id), ...(bereich === 'transkription' ? Object.keys(KI_SONDER) : [])];
+  return [...da, ...moeglich.filter((id) => !da.some((e) => e.zugang === id)).map((id) => ({ id: kiNeueID(), zugang: id, inaktiv: true, neu: true, websuche: [] }))];
+}
+// Zu speichern: alles außer Platzhaltern, die inaktiv geblieben sind.
+const kiZuSpeichern = (liste) => liste.filter((e) => !(e.neu && e.inaktiv)).map(({ neu, ...e }) => e);
+
+// Preise eines Modells der OpenAI-Auswahl als kurzer Text.
+function kiPreisText(m) {
+  if (m.preis_minute) return tx('ca. {0} $/Min', m.preis_minute);
+  if (m.preis_bild) return tx('ca. {0} $/Bild', m.preis_bild);
+  return tx('ca. {0} / {1} $ je 1 Mio. Tokens', m.preis_ein, m.preis_aus);
+}
+// Preise eines Modells der Auswahl in den Eintrag übernehmen (Websuche nur, wenn gewählt).
+function kiPreiseAusKatalog(d, bereich, e) {
+  const m = kiArt(d, d.zugaenge.find((x) => x.id === e.zugang))?.modelle?.[bereich]?.find((x) => x.id === e.modell);
+  if (!m) return;
+  for (const k of ['preis_ein', 'preis_aus', 'preis_minute', 'preis_bild']) if (m[k]) e[k] = m[k];
+  if (m.preis_suche && e.websuche?.includes('anbieter')) e.preis_suche = m.preis_suche;
+}
+
+// Name eines Eintrags (Zugang oder Sondereintrag).
+const kiEintragName = (d, e) => { const z = d.zugaenge.find((x) => x.id === e.zugang); return z ? z.name : tx(KI_SONDER[e.zugang] || e.zugang || 'Neuer Eintrag'); };
+
+// Schreibt die Einträge eines Bereichs (ganz) und startet den Dienst neu; Fehler zeigt das Fenster selbst.
+async function kiSpeichereBereich(d, bereich, liste, werte = {}) {
+  const r = await api('/api/ki', { method: 'PUT', body: { zugaenge: d.zugaenge.map((z) => ({ id: z.id, name: z.name, art: z.art, adresse: z.adresse })),
+    bereiche: { ...d.bereiche, [bereich]: liste }, werte } });
+  await kiNachSpeichern(r);
+}
+
+// Nach dem Speichern unter KI: Änderungen an KI und Whisper gelten sofort, nur andere brauchen einen Neustart.
+async function kiNachSpeichern(r) {
+  if (!r?.neustart) { melde(tx('Gespeichert')); return; }
+  melde(tx('Gespeichert – Dienst startet neu'));
+  await warteAufNeustart();
+}
+
+// Gemeinsames Fenster: Inhalt malen, Fehler zeigen, Speichern sperrt die Knöpfe.
+function kiFenster(titel, inhalt, { speichern, entfernen } = {}) {
+  const dlg = document.createElement('dialog');
+  dlg.className = 'tagdialog';
+  dlg.tabIndex = -1; // Fokus aufs Fenster, nicht aufs erste Feld (sonst springt die Tastatur auf)
+  dlg.autofocus = true;
+  dlg.innerHTML = T`<form class="einstellungen" novalidate><div class="kikopf"><h2>${esc(titel)}</h2><button type="button" class="kizu" data-zu="1" aria-label="${esc(tx('Schließen'))}">×</button></div><div class="kifensterinhalt"></div>
+    <p class="hinweis schlecht" hidden></p>
+    <div class="leiste"><button type="submit" class="btn haupt">Speichern</button><button type="button" class="btn" data-zu="1">Abbrechen</button></div>
+    ${entfernen ? T`<div class="leiste"><button type="button" class="btn gefahr" data-weg="1">Entfernen</button></div>` : ''}</form>`;
+  const koerper = dlg.querySelector('.kifensterinhalt'), fehler = dlg.querySelector('.hinweis');
+  const male = () => { koerper.innerHTML = inhalt(); };
+  const laufe = async (fn) => {
+    fehler.hidden = true;
+    dlg.querySelectorAll('button').forEach((b) => { b.disabled = true; });
+    try {
+      await fn();
+      dlg.close();
+      if (aktuell?.name === 'kiBereich') zeigeKIBereich(aktuell.arg);
+    } catch (f) {
+      fehler.textContent = f.message;
+      fehler.hidden = false;
+      dlg.querySelectorAll('button').forEach((b) => { b.disabled = false; });
+      male();
+    }
+  };
+  dlg.querySelector('form').onsubmit = (ev) => { ev.preventDefault(); laufe(speichern); };
+  dlg.addEventListener('click', (ev) => {
+    const b = ev.target.closest('button[type=button]');
+    if (b?.dataset.zu) dlg.close();
+    else if (b?.dataset.weg && confirm(tx('Eintrag entfernen?'))) laufe(entfernen);
+  });
+  dlg.onclose = () => dlg.remove();
+  male();
+  document.body.append(dlg);
+  dlg.showModal();
+  kiFensterRuhig(dlg);
+  return { dlg, male };
+}
+
+// Fenster eines Eintrags: bearbeiten oder neu (kommt ans Ende der aktiven).
+function kiEintragFenster(d, bereich, alle, alt) {
+  const e = { ...alt, websuche: [...(alt.websuche || [])] };
+  // OpenAI ohne Modell der Auswahl: Vorgabe des Bereichs samt Preisen.
+  const auswahl = kiArt(d, d.zugaenge.find((x) => x.id === e.zugang))?.modelle?.[bereich];
+  if (auswahl && !auswahl.some((m) => m.id === e.modell)) { e.modell = auswahl[0].id; kiPreiseAusKatalog(d, bereich, e); }
+  // Whisper: Modell (mit Tabelle der Mittel, geladene löschen) und RAM-Haltezeit im selben Fenster.
+  const whisper = e.zugang === 'whisper';
+  const whisperFelder = () => {
+    const tmp = document.createElement('div');
+    tmp.innerHTML = einstellungsFormular(d.felder.filter((x) => x.key.startsWith('WHISPER_')), { assistent: false, whisper: d.whisper, whisperLoeschen: true });
+    return [...tmp.querySelectorAll('form > fieldset > *:not(legend)')].map((x) => x.outerHTML).join('');
+  };
+  const { dlg, male } = kiFenster(kiEintragName(d, alt), () => (whisper ? whisperFelder() : '') + kiEintragFelder(d, bereich, e), {
+    speichern: () => kiSpeichereBereich(d, bereich, kiZuSpeichern(alle.map((x) => (x.id === e.id ? { ...e, neu: false } : x))),
+      whisper ? einstellungsWerte(dlg.querySelector('form')) : {}),
+  });
+  dlg.addEventListener('click', async (ev) => {
+    const b = ev.target.closest('[data-whisper-loeschen]');
+    if (!b || !confirm(tx('Modell {0} löschen? Es lässt sich später wieder laden.', b.dataset.whisperLoeschen))) return;
+    b.disabled = true;
+    try {
+      d.whisper = (await api(T`/api/whisper/modelle/${b.dataset.whisperLoeschen}`, { method: 'DELETE' })).whisper || d.whisper;
+      melde(tx('Gelöscht'));
+      male();
+    } catch (f) { b.disabled = false; melde(f.message); }
+  });
+  dlg.addEventListener('input', (ev) => {
+    const k = ev.target.dataset.k;
+    if (k) e[k] = ['preis_ein', 'preis_aus', 'preis_minute', 'preis_suche', 'preis_bild', 'limit_monat'].includes(k) ? kiZahl(ev.target.value) : ev.target.value;
+  });
+  dlg.addEventListener('change', (ev) => {
+    if (ev.target.dataset.suche) { e.websuche = [...dlg.querySelectorAll('[data-suche]:checked')].map((c) => c.dataset.suche); if (auswahl) kiPreiseAusKatalog(d, bereich, e); male(); }
+    else if (auswahl && ev.target.dataset.k === 'modell') { e.modell = ev.target.value; kiPreiseAusKatalog(d, bereich, e); male(); }
+  });
+}
+
+// Ziehbare Liste: Einträge mit Maus oder Finger verschieben (Finger: am Griff sofort, sonst nach kurzem Halten, damit
+// die Seite weiter scrollt), Tastatur: Pfeil hoch/runter. Tippen ohne Ziehen = antippen(li); nach jedem Verschieben
+// geaendert(neue Reihenfolge der data-i).
+function kiZiehbar(liste, { antippen, geaendert }) {
+  let zug = null;
+  const ende = () => liste.querySelectorAll('.ziehen').forEach((x) => x.classList.remove('ziehen'));
+  const melde = () => geaendert([...liste.children].map((x) => Number(x.dataset.i)));
+  liste.addEventListener('pointerdown', (ev) => {
+    const li = ev.target.closest('.kireihezeile');
+    if (!li || ev.button > 0) return;
+    const griff = !!ev.target.closest('.kigriff');
+    zug = { li, id: ev.pointerId, x: ev.clientX, y: ev.clientY, aktiv: false, bewegt: false };
+    const starte = () => { if (!zug) return; zug.aktiv = true; li.classList.add('ziehen'); try { li.setPointerCapture(zug.id); } catch { /* schon losgelassen */ } };
+    if (ev.pointerType === 'mouse' || griff) { if (griff) { ev.preventDefault(); starte(); } } else zug.timer = setTimeout(starte, 250);
+  });
+  liste.addEventListener('pointermove', (ev) => {
+    if (!zug || ev.pointerId !== zug.id) return;
+    const weit = Math.hypot(ev.clientX - zug.x, ev.clientY - zug.y) > 6;
+    if (!zug.aktiv) {
+      if (!weit) return;
+      if (ev.pointerType !== 'mouse') { clearTimeout(zug.timer); zug = null; return; } // Finger bewegt sich: Seite scrollt
+      zug.aktiv = true; zug.li.classList.add('ziehen'); zug.li.setPointerCapture(zug.id);
+    }
+    zug.bewegt = true;
+    const vor = [...liste.children].find((x) => x !== zug.li && ev.clientY < x.getBoundingClientRect().top + x.offsetHeight / 2);
+    if (vor !== zug.li.nextElementSibling) liste.insertBefore(zug.li, vor || null);
+  });
+  // Während des Ziehens darf der Finger die Seite nicht scrollen.
+  liste.addEventListener('touchmove', (ev) => { if (zug?.aktiv) ev.preventDefault(); }, { passive: false });
+  // Geöffnet wird erst beim click, nicht schon beim Loslassen: sonst landet der click danach im neuen Fenster
+  // (auf dem Feld unter dem Finger) und öffnet Tastatur und Modellauswahl. Nach einem Zug wird der click verschluckt.
+  let nachZug = false;
+  const los = (ev) => {
+    if (!zug || ev.pointerId !== zug.id) return;
+    clearTimeout(zug.timer);
+    const { bewegt } = zug;
+    zug = null;
+    ende();
+    if (bewegt) { nachZug = true; setTimeout(() => { nachZug = false; }, 100); melde(); }
+  };
+  liste.addEventListener('click', (ev) => {
+    const li = ev.target.closest('.kireihezeile');
+    if (nachZug) { nachZug = false; return; }
+    if (li) antippen(li);
+  });
+  liste.addEventListener('pointerup', los);
+  liste.addEventListener('pointercancel', (ev) => { if (zug) { clearTimeout(zug.timer); zug = null; ende(); } });
+  liste.addEventListener('contextmenu', (ev) => { if (ev.target.closest('.kireihezeile')) ev.preventDefault(); });
+  liste.addEventListener('keydown', (ev) => {
+    const li = ev.target.closest('.kireihezeile');
+    if (!li) return;
+    if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); antippen(li); return; }
+    if (ev.key !== 'ArrowUp' && ev.key !== 'ArrowDown') return;
+    ev.preventDefault();
+    if (ev.key === 'ArrowUp' && li.previousElementSibling) liste.insertBefore(li, li.previousElementSibling);
+    else if (ev.key === 'ArrowDown' && li.nextElementSibling) liste.insertBefore(li.nextElementSibling, li);
+    const i = li.dataset.i;
+    melde();
+    liste.querySelector(T`[data-i="${i}"]`)?.focus();
+  });
+}
+
+// Bereichsseite: je Eintrag eine Zeile (Tippen öffnet das Fenster), Knopf Reihenfolge, übrige Werte als Zeilen mit ✎.
+async function zeigeKIBereich(seiteName) {
+  const s = KI_SEITEN[seiteName];
+  seite.innerHTML = T`${statusReiter('ki')}<p class="leer">Lädt …</p>`;
+  if ((!s && seiteName !== 'zugaenge') || !istAdmin()) { seite.innerHTML = T`${statusReiter('ki')}<div class="hinweis schlecht">Unbekannter Bereich.</div>`; return; }
+  const d = await ladeKI();
+  if (aktuell?.name !== 'kiBereich') return;
+  if (seiteName === 'zugaenge') return zeigeKIZugaenge(d);
+  const alle = kiAlleEintraege(d, s.bereich);
+  // Reihe: aktive, Trenner „Inaktiv“, inaktive – verschoben wird auf der Seite, gespeichert mit eigenem Knopf.
+  const reihe = [...alle.filter((e) => !e.inaktiv), { trenner: true }, ...alle.filter((e) => e.inaktiv)];
+  const zeile = (e, i, nr) => {
+    const z = d.zugaenge.find((x) => x.id === e.zugang);
+    const voll = e.limit_monat && d.verbrauch[e.id] >= e.limit_monat;
+    const whisperName = e.zugang === 'whisper' && (d.whisper?.modelle.find((m) => m.id === d.felder.find((x) => x.key === 'WHISPER_MODEL')?.wert)?.name);
+    const info = [whisperName || e.modell || (e.neu && KI_SONDER[e.zugang] === undefined ? tx('nicht eingerichtet') : ''), !e.neu && kiCloud(d, z) && T`${kiUSD(d.verbrauch[e.id])}${e.limit_monat ? T` ${tx('von')} ${kiUSD(e.limit_monat)}` : ''} ${tx('im Monat')}`].filter(Boolean).join(' · ');
+    return T`<li class="kireihezeile${nr ? '' : ' kiaus'}" data-i="${i}" tabindex="0" aria-label="${esc(tx('{0} – Enter öffnet, Pfeil hoch/runter verschiebt', kiEintragName(d, e)))}">
+      <span class="kigriff" aria-hidden="true">⠿</span><span class="kireihetext"><span class="kizeilename">${nr ? `${nr}. ` : ''}${esc(kiEintragName(d, e))}${voll ? T` <span class="badge fehler">${tx('Limit erreicht')}</span>` : ''}</span><span class="leise">${esc(info)}</span></span>
+      <span class="kizeilestift" aria-hidden="true">${STIFT}</span></li>`;
+  };
+  const maleReihe = () => {
+    const t = reihe.findIndex((e) => e.trenner);
+    return reihe.map((e, i) => (e.trenner ? T`<li class="kitrenner" data-i="${i}">${tx('Inaktiv')}</li>` : zeile(e, i, i < t ? i + 1 : 0))).join('');
+  };
+  const felder = d.felder.filter((x) => x.gruppe === KI_GRUPPEN[seiteName] && !x.key.startsWith('WHISPER_'));
+  const wert = (f) => esc(f.art === 'choice' ? wahlText(f, f.wert) : f.wert || '–');
+  seite.innerHTML = T`${statusReiter('ki')}${krumen([[tx('KI'), '/status/ki'], [tx(s.titel)]])}<h1>${esc(tx(s.titel))}</h1>
+    <p class="leise">${esc(tx(s.text))} ${tx('Der erste erledigt es; scheitert er oder ist sein Monatslimit erreicht, übernimmt der nächste. Einträge ziehen, um sie zu ordnen oder unter „Inaktiv“ abzuschalten; tippen öffnet sie.')}</p>
+    ${alle.length ? T`<ol class="kireihe" id="ki-reihe">${maleReihe()}</ol>`
+      : T`<p class="leise">${tx('Kein passender Anbieter')} – <a href="/status/ki/zugaenge">${tx('Anbieter anlegen')}</a></p>`}
+    ${felder.length ? T`<div class="karte konfliste">${felder.map((f) => T`<div class="konfzeile ohnehilfe"><span class="konfname">${esc(tx(f.name))}</span>
+      <a class="konfedit" href="/status/einstellungen/${f.key}?zurueck=/status/ki/${seiteName}" aria-label="${esc(tx('{0} bearbeiten', tx(f.name)))}">${STIFT}</a><span class="konfwert">${wert(f)}</span></div>`).join('')}</div>` : ''}
+    <div class="leiste"><a class="btn" href="/status/ki">Zurück</a></div>`;
+  // Einträge in der Reihenfolge der Seite, inaktiv nach dem Trenner – Grundlage für Speichern und Fenster.
+  const stand = () => { const t = reihe.findIndex((e) => e.trenner); return [...reihe.slice(0, t).map((e) => ({ ...e, inaktiv: false })), ...reihe.slice(t + 1).map((e) => ({ ...e, inaktiv: true }))]; };
+  // Jede Verschiebung wird sofort gespeichert (ohne Neustart); danach zeigt die Seite den gespeicherten Stand.
+  let kette = Promise.resolve();
+  const ol = document.getElementById('ki-reihe');
+  if (ol) {
+    kiZiehbar(ol, {
+      antippen: (li) => { const e = reihe[Number(li.dataset.i)]; if (e && !e.trenner) { const alle2 = stand(); kiEintragFenster(d, s.bereich, alle2, alle2.find((x) => x.id === e.id)); } },
+      geaendert: (folge) => {
+        reihe.splice(0, reihe.length, ...folge.map((i) => reihe[i]));
+        ol.innerHTML = maleReihe();
+        const liste = kiZuSpeichern(stand());
+        kette = kette.then(async () => {
+          try {
+            await kiSpeichereBereich(d, s.bereich, liste);
+          } catch (f) {
+            melde(f.message);
+          }
+          if (aktuell?.name === 'kiBereich') await zeigeKIBereich(seiteName); // gespeicherten Stand zeigen (Vorgaben des Servers)
+        });
+      },
+    });
+  }
   aufraeumen = () => { seite.onclick = null; };
 }
 
@@ -3686,10 +4297,24 @@ async function zeigeEinstellungBearbeiten(key) {
   if (aktuell?.name !== 'einstellungBearbeiten') return;
   const f = d.felder.find((x) => x.key === key);
   if (!f) { seite.innerHTML = T`${statusReiter('einstellungen')}<div class="hinweis schlecht">Unbekannte Einstellung.</div>`; return; }
-  seite.innerHTML = T`${statusReiter('einstellungen')}<h1>${esc(tx(f.name))}</h1><p class="leise">${esc(tx(f.gruppe))}</p>
-    ${einstellungsFormular([f], { assistent: false }).replace(/<fieldset><legend>[^<]*<\/legend>/, '<fieldset>')}
+  // Transkription und Whisper-Modell gehören zusammen: beide auf einer Seite.
+  const felder = key === 'TRANSCRIPTION' || key.startsWith('WHISPER_') ? d.felder.filter((x) => x.key === 'TRANSCRIPTION' || x.key.startsWith('WHISPER_')) : [f];
+  seite.innerHTML = T`${statusReiter('einstellungen')}<h1>${esc(tx(felder.length > 1 ? f.gruppe : f.name))}</h1>${felder.length > 1 ? '' : T`<p class="leise">${esc(tx(f.gruppe))}</p>`}
+    ${einstellungsFormular(felder, { assistent: false, whisper: d.whisper, whisperLoeschen: true }).replace(/<fieldset><legend>[^<]*<\/legend>/, '<fieldset>')}
     <div class="leiste"><a class="btn" href="${zurueck}">Abbrechen</a></div>`;
   const form = seite.querySelector('form');
+  bindeWhisper(form);
+  // Geladene, nicht gewählte Whisper-Modelle löschen (Bearbeitungsseite, mit Rückfrage).
+  form.onclick = async (ev) => {
+    const b = ev.target.closest('[data-whisper-loeschen]');
+    if (!b || !confirm(tx('Modell {0} löschen? Es lässt sich später wieder laden.', b.dataset.whisperLoeschen))) return;
+    b.disabled = true;
+    try {
+      await api(T`/api/whisper/modelle/${b.dataset.whisperLoeschen}`, { method: 'DELETE' });
+      melde(tx('Gelöscht'));
+      zeigeEinstellungBearbeiten(key);
+    } catch (f) { b.disabled = false; melde(f.message); }
+  };
   form.querySelector('input,select')?.focus();
   form.onsubmit = async (ev) => {
     ev.preventDefault();
@@ -3722,6 +4347,7 @@ async function zeigeWillkommen() {
     <p>Deine Notizen, Listen und Aufnahmen liegen verschlüsselt mit einem eigenen Schlüssel. Fehlt dieser Schlüssel einmal (z. B. nach einem Umzug auf einen neuen Server), öffnet nur dieser Code deine Daten wieder.</p>
     <div class="karte"><div class="leise">Dein Wiederherstellungscode</div><code class="kopierbar" id="wcode">${esc(d.code)}</code>
       <div class="leiste"><button class="btn" type="button" data-kopieren>Kopieren</button></div></div>
+    ${d.system ? T('<p class="leise">Derselbe Code stellt auch das System aus einem Backup wieder her (API-Schlüssel, Benachrichtigungen). Einen eigenen Code dafür gibt es unter Backups → Systemschlüssel.</p>') : ''}
     <div class="hinweis warn">Schreib ihn auf oder leg ihn in deinen Passwort-Manager. Er wird nur jetzt angezeigt.</div>
     <form class="einstellungen" novalidate>
       ${d.name ? '' : T('<label for="w-name">Dein Name *</label><input id="w-name" name="name" maxlength="40" autocomplete="given-name" required>')}
@@ -3773,7 +4399,7 @@ async function zeigeWiederherstellen() {
     };
   }
   const ab = seite.querySelector('[data-menue-abmelden-seite]');
-  if (ab) ab.onclick = async () => { await api('/api/auth/abmelden', { method: 'POST' }).catch(() => {}); await vergissGeraet(); geheZu('/anmelden', true); };
+  if (ab) ab.onclick = async () => { await abmelden().catch(() => vergissGeraet()); geheZu('/anmelden', true); };
 }
 
 // Zugang und Sicherheit: API-Token (Maschinenzugang) und Wiederherstellungscode – Ansicht mit Aktionen.
@@ -3827,37 +4453,37 @@ const SPERRE = { gesperrt: 'gesperrt', schluessel: 'Schlüssel fehlt', fehler: '
 // Nutzer (Admin): Liste mit Rolle, letzter Anmeldung, Kosten und Speicher – nie Inhalte.
 async function zeigeNutzer() {
   seite.innerHTML = T('<p class="leer">Lädt …</p>');
-  const d = await api('/api/admin/nutzer');
+  const [d, ei] = await Promise.all([api('/api/admin/nutzer'), api('/api/admin/einladungen')]);
   if (aktuell?.name !== 'nutzer') return;
   seite.innerHTML = T`<h1>Nutzer</h1>
     <p class="leise">Jeder sieht nur seine eigenen Daten – auch Admins nicht die der anderen. Hier stehen nur Rolle, Anmeldung und Verbrauch.</p>
-    ${d.nutzer.map((u) => T`<div class="karte"><div class="zeile"><span><strong>${esc(u.name || tx('(ohne Namen)'))}</strong> <span class="badge neutral">${esc(tx(ROLLE[u.rolle] || u.rolle))}</span>${u.id === d.ich ? T(' <span class="badge neutral">du</span>') : ''}${u.gesperrt ? T` <span class="badge fehler">${esc(tx(SPERRE[u.gesperrt] || u.gesperrt))}</span>` : ''}</span>
+    ${d.nutzer.map((u) => T`<div class="karte"><div class="zeile"><span><strong>${esc(u.name || tx('(ohne Namen)'))}</strong> <span class="badge neutral">${esc(tx(ROLLE[u.rolle] || u.rolle))}</span>${u.id === d.ich ? T(' <span class="badge neutral">du</span>') : ''}${u.gesperrt ? T` <span class="badge fehler">${esc(tx(SPERRE[u.gesperrt] || u.gesperrt))}</span>` : ''}${u.passkey_fehlt ? T` <span class="badge fehler">Neue Adresse – neu einladen</span>` : ''}</span>
         <a class="konfedit" href="/admin/nutzer/${u.id}/bearbeiten" aria-label="${esc(tx('{0} bearbeiten', u.name))}">${STIFT}</a></div>
       <div class="leise">${u.zuletzt ? T`zuletzt angemeldet ${zeit(u.zuletzt)}` : tx('noch nie angemeldet')} · KI-Kosten 30 Tage: ${u.kosten_30_tage != null ? esc(u.kosten_30_tage.toFixed(2)) + ' $' : '–'} · Daten ${groesse(u.daten_bytes)} · Aufnahmen ${groesse(u.audio_bytes)}</div></div>`).join('')}
+    ${ei.einladungen.length ? T`<h2>Offene Einladungen</h2>${ei.einladungen.map((e) => T`<div class="karte"><div class="zeile"><span><strong>${e.name ? esc(e.name) : tx('Neuer Nutzer')}</strong> <span class="badge neutral">${esc(tx(ROLLE[e.rolle] || e.rolle))}</span></span>
+        <a class="btn klein" href="/admin/nutzer/einladung/${e.id}">Code anzeigen</a></div>
+      <div class="leise">gültig bis ${zeit(e.bis)}</div></div>`).join('')}` : ''}
     <div class="leiste"><a class="btn haupt" href="/admin/nutzer/neu">Nutzer einladen</a></div>`;
 }
 
-// Einladen (Admin): Name und Rolle; der Link legt den Nutzer mit seinem ersten Passkey an.
+// Einladen (Admin): nur die Rolle; danach zeigt die Einladung ihren 6-stelligen Code (5 Minuten) und den Link.
+// Den Namen gibt der neue Nutzer beim Anlegen seines Passkeys selbst ein.
+let letzteEinladung = null; // { id, link } – der Link ist nur direkt nach dem Erzeugen bekannt
 async function zeigeNutzerNeu() {
   seite.innerHTML = T`<p><a class="btn klein" href="/admin/nutzer">← Nutzer</a></p><h1>Nutzer einladen</h1>
-    <form class="einstellungen" novalidate><label for="n-name">Name *</label><input id="n-name" name="name" maxlength="40" required>
+    <form class="einstellungen" novalidate>
       <label for="n-rolle">Rolle</label><select id="n-rolle" name="rolle"><option value="user">${esc(tx('Nutzer'))}</option><option value="admin">${esc(tx('Admin'))}</option></select>
-      <p class="leise hilfe">Admins verwalten zusätzlich Updates, Backups, Systemeinstellungen und Nutzer – die Daten anderer sehen auch sie nicht.</p>
-      <div class="leiste"><a class="btn" href="/admin/nutzer">Abbrechen</a><button class="btn haupt" type="submit">Einladung erzeugen</button></div></form><div id="einladung"></div>`;
+      <p class="leise hilfe">Admins verwalten zusätzlich Updates, Backups, Systemeinstellungen und Nutzer – die Daten anderer sehen auch sie nicht. Den Namen gibt der neue Nutzer selbst ein.</p>
+      <div class="leiste"><a class="btn" href="/admin/nutzer">Abbrechen</a><button class="btn haupt" type="submit">Einladung erzeugen</button></div></form>`;
   const form = seite.querySelector('form');
-  form.name.focus();
   form.onsubmit = async (ev) => {
     ev.preventDefault();
     const knopf = form.querySelector('[type=submit]');
     knopf.disabled = true;
     try {
-      const r = await api('/api/admin/nutzer/einladung', { method: 'POST', body: { name: form.name.value, rolle: form.rolle.value } });
-      form.hidden = true;
-      document.getElementById('einladung').innerHTML = T`<div class="hinweis gut">Einladung für ${esc(form.name.value)} erzeugt (${r.gueltig_tage} Tage gültig, einmal nutzbar).</div>
-        <div class="karte"><code class="kopierbar">${esc(r.link)}</code><div class="leiste"><button class="btn haupt" data-kopieren>Link kopieren</button></div></div>
-        <p class="leise">Den Link im Browser des neuen Nutzers öffnen: dort legt er seinen Passkey an und bekommt seinen Wiederherstellungscode.</p>
-        <div class="leiste"><a class="btn" href="/admin/nutzer">Zur Liste</a></div>`;
-      seite.querySelector('[data-kopieren]').onclick = async () => { try { await navigator.clipboard.writeText(r.link); melde(tx('Link kopiert')); } catch { melde(tx('Kopieren nicht möglich – Link markieren und kopieren')); } };
+      const r = await api('/api/admin/nutzer/einladung', { method: 'POST', body: { rolle: form.rolle.value } });
+      letzteEinladung = { id: r.id, link: r.link };
+      geheZu(T`/admin/nutzer/einladung/${r.id}`, true);
     } catch (f) { knopf.disabled = false; melde(f.message); }
   };
 }
@@ -3869,6 +4495,7 @@ async function zeigeNutzerBearbeiten(id) {
   if (aktuell?.name !== 'nutzerBearbeiten') return;
   const selbst = u.id === liste.ich;
   seite.innerHTML = T`<p><a class="btn klein" href="/admin/nutzer">← Nutzer</a></p><h1>${esc(u.name || tx('Nutzer'))}</h1>
+    ${u.passkey_fehlt ? T`<div class="hinweis warn">Neue Adresse: ${esc(u.name)} hat noch keinen Passkey dafür.</div><div class="leiste"><a class="btn haupt" href="/admin/nutzer/${u.id}/code">Neu einladen (Code)</a></div>` : ''}
     <form class="einstellungen" novalidate><label for="b-name">Name *</label><input id="b-name" name="name" maxlength="40" value="${esc(u.name)}" required>
       <label for="b-rolle">Rolle</label><select id="b-rolle" name="rolle"><option value="user"${u.rolle === 'user' ? ' selected' : ''}>${esc(tx('Nutzer'))}</option><option value="admin"${u.rolle === 'admin' ? ' selected' : ''}>${esc(tx('Admin'))}</option></select>
       ${selbst ? '' : T`<label class="schalter"><input type="checkbox" name="gesperrt"${u.gesperrt === 'gesperrt' ? ' checked' : ''}> Gesperrt (keine Anmeldung, keine Verarbeitung; Daten bleiben)</label>`}
@@ -3989,6 +4616,8 @@ async function zeigeUpdate(teil) {
       <p class="leise">${b.plan === 'aus' ? tx('Aus – Backups nur von Hand und vor Updates.') : tx('Backups vor Updates bleiben 30 Tage.')} ${u.docker ? tx('Den Ordner legt die Umgebungsvariable BACKUP_DIR des Containers fest.') : tx('Den Ordner legt der Startwert BACKUP_DIR in /etc/pebble-webhook/env fest; danach install.sh erneut ausführen.')}</p>
       ${letzt ? (letzt[2] === 'ok' ? T`<p class="leise">${esc(tx('Letzter Lauf: {0}', letzt[1]))}</p>` : T`<div class="hinweis schlecht">${esc(tx('Letztes geplantes Backup fehlgeschlagen ({0}): {1}', letzt[1], letzt[3]))}</div>`) : ''}
       <div class="leiste"><button class="btn haupt" data-sichern="1">Jetzt sichern</button>${u.installierbar || u.docker ? T('<a class="btn" href="/status/backups/hochladen">Backup hochladen</a>') : ''}</div>
+      <div class="karte konfliste"><div class="konfzeile ohnehilfe"><span class="konfname">Systemschlüssel</span>
+        <a class="konfedit" href="/status/systemschluessel" aria-label="${esc(tx('Systemschlüssel ansehen'))}">${STIFT}</a><span class="konfwert">für einen neuen Server</span></div></div>
       <h2>Backups</h2>
       ${(u.backups || []).length ? T`<p class="backupsumme"><strong>${u.backups.length}</strong> Backups · <strong>${groesse(u.backups.reduce((n, st) => n + (st.groesse || 0), 0))}</strong> belegt</p>` : ''}
       ${(u.backups || []).length > 10 ? T`<div class="leiste"><button class="btn gefahr" data-prune="${u.backups.length - 10}" data-groesse="${u.backups.slice(10).reduce((n, st) => n + (st.groesse || 0), 0)}"${laeuft ? ' disabled' : ''}>${tx('{0} Backups löschen, die 10 neuesten bleiben', u.backups.length - 10)}</button></div>` : ''}
@@ -4079,6 +4708,49 @@ async function zeigeUpdate(teil) {
     }
   };
   await laden(false);
+}
+
+// ---------- Systemschlüssel: macht API-Schlüssel und Push-Schlüssel eines Backups auf einem neuen Server wieder lesbar ----------
+// Vorgabe: an den Wiederherstellungscode eines Admins gebunden (ein Code für Daten und System); auf Wunsch eigener Code.
+async function zeigeSystemschluessel() {
+  seite.innerHTML = T('<p class="leer">Lädt …</p>');
+  const d = await api('/api/admin/systemschluessel');
+  if (aktuell?.name !== 'systemschluessel') return;
+  const kopf = T`${krumen([[tx('Backups'), '/status/backups'], [tx('Systemschlüssel')]])}<h1>Systemschlüssel</h1>
+    <p class="leise">Ein Backup enthält API-Schlüssel und den Schlüssel für Benachrichtigungen verschlüsselt. Auf einem neuen Server macht der Systemschlüssel sie wieder lesbar; die Daten jedes Nutzers öffnet sein eigener Wiederherstellungscode.</p>`;
+  if (d.fehlt) {
+    seite.innerHTML = kopf + (d.art === 'code'
+      ? T`<div class="hinweis warn">Der Systemschlüssel fehlt auf diesem Server. Mit dem Code des Systemschlüssels zurückholen.</div>
+        <form class="einstellungen" id="sysform" novalidate><label for="syscode">Code des Systemschlüssels</label><input id="syscode" autocomplete="off" placeholder="XXXXX-XXXXX-XXXXX-XXXXX-XXXXXX" required>
+          <div class="leiste"><button class="btn haupt" type="submit">Wiederherstellen</button></div></form>`
+      : T`<div class="hinweis warn">Der Systemschlüssel fehlt auf diesem Server. Er kommt automatisch zurück, sobald ${esc(d.name || tx('der Admin'))} die eigenen Daten mit dem Wiederherstellungscode öffnet.</div>`);
+    const f = document.getElementById('sysform');
+    if (f) f.onsubmit = async (ev) => {
+      ev.preventDefault();
+      try { await api('/api/admin/systemschluessel/wiederherstellen', { method: 'POST', body: { code: f.syscode.value } }); melde(tx('Systemschlüssel wiederhergestellt – Dienst startet neu')); setTimeout(() => location.reload(), 4000); } catch (e) { melde(e.message); }
+    };
+    return;
+  }
+  const stand = d.art === 'code' ? tx('Eigener Code nur für das System.')
+    : d.uid === d.ich ? tx('An deinen Wiederherstellungscode gebunden: ein Code stellt deine Daten und das System wieder her.')
+    : tx('An den Wiederherstellungscode von {0} gebunden.', d.name || '?');
+  seite.innerHTML = kopf + T`<div class="karte"><p>${esc(stand)}</p></div><div id="syscodeneu"></div>
+    <div class="leiste">${d.art !== 'nutzer' || d.uid !== d.ich ? T('<button class="btn" data-sys="binden">An meinen Code binden</button>') : ''}<button class="btn" data-sys="code">Eigenen Code erzeugen</button></div>
+    <p class="leise">Ein eigener Code lohnt sich bei mehreren Admins. Für einen einzelnen Nutzer reicht der eigene Wiederherstellungscode.</p>`;
+  seite.onclick = async (ev) => {
+    const b = ev.target.closest('[data-sys]');
+    if (!b) return;
+    if (b.dataset.sys === 'code' && !confirm(tx('Eigenen Code erzeugen? Danach stellt nur noch dieser Code das System wieder her.'))) return;
+    b.disabled = true;
+    try {
+      if (b.dataset.sys === 'binden') { await api('/api/admin/systemschluessel/binden', { method: 'POST' }); melde(tx('Gebunden')); return zeigeSystemschluessel(); }
+      const r = await api('/api/admin/systemschluessel/code', { method: 'POST' });
+      seite.querySelector('.leiste').hidden = true;
+      document.getElementById('syscodeneu').innerHTML = T`<div class="hinweis warn">Diesen Code jetzt aufschreiben – er wird nur einmal gezeigt.</div>
+        <p class="geraetecode wcode">${esc(r.code)}</p><div class="leiste"><a class="btn haupt" href="/status/backups">Notiert</a></div>`;
+    } catch (e) { b.disabled = false; melde(e.message); }
+  };
+  aufraeumen = () => { seite.onclick = null; };
 }
 
 // ---------- Backup hochladen: eine heruntergeladene Backup-Datei einspielen ----------
@@ -4188,11 +4860,9 @@ async function zeigeKosten() {
     const legende = T('<div class="legende"><span><i class="s1"></i>Notizen</span><span><i class="s2"></i>Aufgaben (Planungen)</span></div>');
     const arten = [[tx('Recherche'), k.arten.recherche], [tx('Transkription'), k.arten.transkription], [tx('Kurztitel und Zuordnung'), k.arten.titel_zuordnung]];
     const artMax = Math.max(...arten.map((a) => a[1]), 1e-9);
-    const fehlt = Object.entries({ transkription: tx('Transkription (PRICE_TRANSCRIBE_PER_MIN)'), titel: tx('Kurztitel/Zuordnung (PRICE_TITLE_*)'), recherche: tx('Recherche (PRICE_PLAN_*, PRICE_SEARCH_PER_CALL)') }).filter(([s]) => !k.preise[s]).map(([, n]) => n);
     const tabelle = (tage) => T`<details><summary>Als Tabelle</summary><table class="werte"><thead><tr><th>Tag</th><th>Notizen</th><th>Aufgaben</th><th>Summe</th></tr></thead><tbody>${tage.map((t) => T`<tr><td>${esc(kurzTag(t.tag, true))}</td><td>${usd(t.diktat)}</td><td>${usd(t.planung)}</td><td>${usd(t.diktat + t.planung)}</td></tr>`).join('')}</tbody></table></details>`;
     seite.innerHTML = T`<h1>KI-Kosten</h1>
-      <p class="leise">OpenAI-Kosten je Auftrag, berechnet aus Verbrauch und den Preisen der Konfiguration. Zugeordnet nach Eingangstag.</p>
-      ${fehlt.length ? T`<div class="hinweis warn">Preis fehlt für: ${esc(fehlt.join(', '))}. Diese Anteile sind nicht enthalten.</div>` : ''}
+      <p class="leise">KI-Kosten je Auftrag, berechnet aus Verbrauch und den Preisen der Einträge unter KI. Zugeordnet nach Eingangstag.</p>
       <h2>Letzte 30 Tage</h2>
       <div class="kacheln">${kachel(tx('Gesamt'), { usd: d.usd + p.usd, anzahl: d.anzahl + p.anzahl, ohne_kosten: d.ohne_kosten + p.ohne_kosten })}${kachel(tx('Notizen'), d)}${kachel(tx('Aufgaben (Planungen)'), p)}</div>
       <h2>Letzte 7 Tage – ${usd(summe(t7, 'diktat') + summe(t7, 'planung'))}</h2>
@@ -4244,7 +4914,7 @@ function pebbleSeite(d) {
     <div class="link" id="wert-${schluessel}">${geheim ? '••••••••••••••••' : esc(d[schluessel])}</div></div>`;
   return T`<h1>Pebble-App</h1>
     <dl><dt>Halten</dt><dd>${esc(MODUS[d.halten])}</dd><dt>Klick + Halten</dt><dd>${esc(MODUS[d.doppelklick_halten])}</dd>
-      <dt>Transkription</dt><dd>${d.transkription === 'openai' ? tx('OpenAI') : tx('Pebble-App')}</dd></dl>
+      <dt>Transkription</dt><dd>${esc(tx(TRANSKRIPTION[d.transkription] || d.transkription))}</dd></dl>
     <h2>Einrichten</h2>
     <p class="leise">In der Pebble-App unter Index 01 → Webhooks, für beide Gesten gleich eintragen.</p>
     ${wert(tx('Webhook-URL'), 'url')}
@@ -4275,37 +4945,94 @@ async function pebbleKlick(b, d) {
   return false;
 }
 
-// ---------- Weiteres Gerät: 4-stelliger Code, gültig nur solange diese Seite offen ist ----------
+// ---------- Kurz-Code (6 Ziffern) für ein weiteres Gerät und für Einladungen: derselbe Ablauf ----------
+// Der Code gilt nur, solange die Seite offen ist (Lebenszeichen alle 10 s); beim Verlassen wird er gelöscht.
 
-async function zeigeGeraetNeu() {
-  seite.innerHTML = T('<p class="leer">Lädt …</p>');
-  const d = await api('/api/geraete/code', { method: 'POST' });
-  if (aktuell?.name !== 'geraetNeu') { api('/api/geraete/code', { method: 'DELETE' }).catch(() => {}); return; }
+async function codeFeld(el, basis, seitenName, beiEnde) {
+  const d = await api(basis, { method: 'POST' });
+  if (aktuell?.name !== seitenName) { api(basis, { method: 'DELETE' }).catch(() => {}); return () => {}; }
   let gueltig = true;
   const male = () => {
     const rest = Math.max(0, Math.round((d.bis - Date.now()) / 1000));
     if (rest === 0) gueltig = false;
-    seite.innerHTML = T`<h1>Weiteres Gerät hinzufügen</h1>
-      ${gueltig ? T`<p class="geraetecode" aria-label="Code ${d.code.split('').join(' ')}">${esc(d.code)}</p>
+    el.innerHTML = gueltig ? T`<p class="geraetecode" aria-label="Code ${d.code.split('').join(' ')}">${esc(d.code)}</p>
       <p class="mitte leise">noch ${Math.floor(rest / 60)}:${String(rest % 60).padStart(2, '0')} min · nur solange diese Seite offen ist</p>`
-    : T('<div class="hinweis warn">Der Code ist abgelaufen.</div><div class="leiste"><button class="btn haupt" data-a="neu">Neuen Code erzeugen</button></div>')}
-      <ol><li>Auf dem neuen Gerät diese Adresse öffnen: <strong>${esc(location.host)}</strong></li>
-        <li>„Mit Code hinzufügen“ antippen und den Code eingeben.</li>
-        <li>Namen eingeben und den Passkey anlegen.</li></ol>
-      <div class="leiste"><a class="btn" href="/status">Fertig</a></div>`;
+      : T('<div class="hinweis warn">Der Code ist abgelaufen.</div><div class="leiste"><button class="btn haupt" data-code-neu>Neuen Code erzeugen</button></div>');
   };
   male();
   const uhr = setInterval(() => { if (gueltig) male(); }, 1000);
-  // Lebenszeichen: ohne sie verfällt der Code nach 25 s auf dem Server.
   const halten = setInterval(async () => {
-    try { const r = await api('/api/geraete/code/halten', { method: 'POST' }); if (!r.gueltig && gueltig) { gueltig = false; male(); melde(tx('Code verbraucht oder abgelaufen')); } } catch { /* offline: verfällt */ }
+    try { const r = await api(basis + '/halten', { method: 'POST' }); if (!r.gueltig && gueltig) { gueltig = false; if (beiEnde) { stopp(); beiEnde(); return; } male(); melde(tx('Code verbraucht oder abgelaufen')); } } catch { /* offline: verfällt */ }
   }, 10000);
-  const weg = () => { fetch('/api/geraete/code', { method: 'DELETE', headers: { 'X-App': '1' }, credentials: 'same-origin', keepalive: true }).catch(() => {}); };
+  const weg = () => { fetch(basis, { method: 'DELETE', headers: { 'X-App': '1' }, credentials: 'same-origin', keepalive: true }).catch(() => {}); };
   window.addEventListener('pagehide', weg);
-  const stopp = () => { clearInterval(uhr); clearInterval(halten); window.removeEventListener('pagehide', weg); seite.onclick = null; };
+  let innen = () => {};
+  const stopp = () => { clearInterval(uhr); clearInterval(halten); window.removeEventListener('pagehide', weg); el.onclick = null; innen(); };
   // Neuer Code ersetzt den alten auf dem Server; kein Löschen, das den neuen treffen könnte.
-  seite.onclick = (ev) => { if (ev.target.closest('[data-a=neu]')) { stopp(); aufraeumen = null; zeigeGeraetNeu(); } };
-  aufraeumen = () => { stopp(); weg(); };
+  el.onclick = async (ev) => {
+    if (!ev.target.closest('[data-code-neu]')) return;
+    clearInterval(uhr); clearInterval(halten); window.removeEventListener('pagehide', weg);
+    innen = await codeFeld(el, basis, seitenName, beiEnde).catch((f) => { melde(f.message); return () => {}; });
+  };
+  return () => { stopp(); weg(); };
+}
+
+async function zeigeGeraetNeu() {
+  seite.innerHTML = T`<h1>Weiteres Gerät hinzufügen</h1><div id="codefeld"><p class="leer">Lädt …</p></div>
+    <ol><li>Auf dem neuen Gerät diese Adresse öffnen: <strong>${esc(location.host)}</strong></li>
+      <li>„Mit Code hinzufügen“ antippen und den Code eingeben.</li>
+      <li>Namen eingeben und den Passkey anlegen.</li></ol>
+    <div class="leiste"><a class="btn" href="/status">Fertig</a></div>`;
+  const stopp = await codeFeld(document.getElementById('codefeld'), '/api/geraete/code', 'geraetNeu');
+  aufraeumen = stopp;
+}
+
+// Neu einladen (Admin, nach einem Adresswechsel): Code für einen neuen Passkey eines bestehenden Nutzers.
+async function zeigeNeuEinladen(id) {
+  seite.innerHTML = T('<p class="leer">Lädt …</p>');
+  const u = await api(T`/api/admin/nutzer/${id}`);
+  if (aktuell?.name !== 'neuEinladen') return;
+  seite.innerHTML = T`<p><a class="btn klein" href="/admin/nutzer">← Nutzer</a></p><h1>${esc(u.name)} neu einladen</h1>
+    <p class="leise">Kein neuer Nutzer: ${esc(u.name)} legt nur einen Passkey für diese Adresse an. Fehlt sein Schlüssel auf diesem Server, fragt die Seite dabei seinen Wiederherstellungscode ab.</p>
+    <div id="codefeld"><p class="leer">Lädt …</p></div>
+    <ol><li>Auf dem Gerät von ${esc(u.name)} diese Adresse öffnen: <strong>${esc(location.host)}</strong></li>
+      <li>„Mit Code hinzufügen“ antippen und den Code eingeben.</li>
+      <li>Passkey anlegen (ggf. mit Wiederherstellungscode).</li></ol>
+    <div class="leiste"><a class="btn" href="/admin/nutzer">Fertig</a></div>`;
+  aufraeumen = await codeFeld(document.getElementById('codefeld'), T`/api/admin/nutzer/${id}/code`, 'neuEinladen', () => { melde(tx('Code genutzt')); geheZu('/admin/nutzer', true); });
+}
+
+// Offene Einladung (Admin): Code für das Gerät des Eingeladenen, Widerrufen.
+async function zeigeEinladung(id) {
+  seite.innerHTML = T('<p class="leer">Lädt …</p>');
+  let e;
+  try { e = await api(T`/api/admin/einladungen/${id}`); } catch (f) {
+    seite.innerHTML = T`<p><a class="btn klein" href="/admin/nutzer">← Nutzer</a></p><div class="hinweis warn">${esc(f.message)}</div>`;
+    return;
+  }
+  if (aktuell?.name !== 'einladung') return;
+  const link = letzteEinladung?.id === id ? letzteEinladung.link : '';
+  seite.innerHTML = T`<p><a class="btn klein" href="/admin/nutzer">← Nutzer</a></p><h1>Einladung als ${esc(tx(ROLLE[e.rolle] || e.rolle))}</h1>
+    <p class="leise">${e.name ? T`für ${esc(e.name)} · ` : ''}Einladung gültig bis ${zeit(e.bis)} · einmal nutzbar</p>
+    <div id="codefeld"><p class="leer">Lädt …</p></div>
+    <ol><li>Auf dem neuen Gerät diese Adresse öffnen: <strong>${esc(location.host)}</strong></li>
+      <li>„Mit Code hinzufügen“ antippen und den Code eingeben.</li>
+      <li>Eigenen Namen eingeben und den Passkey anlegen; der Wiederherstellungscode erscheint danach.</li></ol>
+    ${link ? T`<details class="karte"><summary>Stattdessen Link verschicken</summary><code class="kopierbar">${esc(link)}</code>
+      <div class="leiste"><button class="btn" data-kopieren>Link kopieren</button></div><p class="leise">Wird der Code genutzt, gilt der Link nicht mehr.</p></details>` : ''}
+    <div class="leiste"><a class="btn" href="/admin/nutzer">Fertig</a><button class="btn gefahr" data-widerrufen>Einladung widerrufen</button></div>`;
+  // Eingelöst: die Einladung bekommt dabei einen neuen Link (neue Id) – zurück zur Liste.
+  const stopp = await codeFeld(document.getElementById('codefeld'), T`/api/admin/einladungen/${id}/code`, 'einladung', async () => {
+    try { await api(T`/api/admin/einladungen/${id}`); melde(tx('Code abgelaufen')); zeigeEinladung(id); } catch { melde(tx('Code genutzt – der neue Nutzer richtet jetzt seinen Passkey ein')); geheZu('/admin/nutzer', true); }
+  });
+  aufraeumen = stopp;
+  const kopieren = seite.querySelector('[data-kopieren]');
+  if (kopieren) kopieren.onclick = async () => { try { await navigator.clipboard.writeText(link); melde(tx('Link kopiert')); } catch { melde(tx('Kopieren nicht möglich – Link markieren und kopieren')); } };
+  seite.querySelector('[data-widerrufen]').onclick = async (ev) => {
+    if (!confirm(tx('Einladung widerrufen? Link und Code gelten dann nicht mehr.'))) return;
+    ev.target.disabled = true;
+    try { stopp(); aufraeumen = null; await api(T`/api/admin/einladungen/${id}`, { method: 'DELETE' }); melde(tx('Einladung widerrufen')); geheZu('/admin/nutzer', true); } catch (f) { ev.target.disabled = false; melde(f.message); }
+  };
 }
 
 // ---------- Darstellung: Tag/Nacht und Farbpalette (theme.js), je Gerät; der Server merkt sich die letzte Wahl ----------
@@ -4428,8 +5155,11 @@ async function zeigeVerbinden() {
     return;
   }
   seite.innerHTML = T`<div class="mitte"><h1>App verbinden</h1>
-    <p><strong>${esc(d.name)}</strong> möchte auf deine Sprachnotizen zugreifen: Listen und Punkte lesen, Punkte abhaken oder wieder öffnen.</p>
-    <p class="leise">Weiterleitung danach an <strong>${esc(d.ziel)}</strong>. Trennen jederzeit unter Status → Verbundene Apps.</p>
+    <p><strong>${esc(d.name)}</strong> <span class="leise">(Name von der App selbst angegeben, nicht geprüft)</span></p>
+    <p>Die App bekommt vollen Zugriff auf deine Sprachnotizen:</p>
+    <ul><li>alle Notizen, Wortlaute, Termine und Planungen lesen und durchsuchen</li><li>Notizen anlegen (verursacht KI-Kosten)</li><li>Listen ändern, zusammenführen und löschen, Punkte abhaken</li></ul>
+    <div class="hinweis warn">Der Zugang geht an <strong>${esc(d.ziel)}</strong>. Nur erlauben, wenn du die Verbindung gerade selbst gestartet hast und die Adresse zu deiner App gehört.</div>
+    <p class="leise">Trennen jederzeit unter Status → Verbundene Apps.</p>
     <div class="leiste"><button class="btn haupt" data-erlauben="1">Erlauben</button><button class="btn" data-erlauben="0">Ablehnen</button></div></div>`;
   seite.onclick = async (ev) => {
     const b = ev.target.closest('button[data-erlauben]');
@@ -4448,14 +5178,24 @@ async function zeigeAnmelden() {
   if (s?.angemeldet) return geheZu('/', true);
   seite.innerHTML = T`<div class="mitte"><h1>Anmelden</h1>
     ${s && !s.eingerichtet ? T('<div class="hinweis warn">Noch kein Passkey eingerichtet. Auf dem Server <code>pebble-webhook enroll</code> ausführen und den Einmal-Link öffnen.</div>') : ''}
+    ${s?.neue_adresse ? T`<div class="hinweis warn">Neue Adresse: Passkeys gelten nur für die alte. Als Admin mit deinem Wiederherstellungscode anmelden und einen neuen Passkey anlegen; alle anderen lädt der Admin danach unter Nutzer neu ein.</div>
+      <form class="einstellungen" id="codeanmeldung" novalidate><div class="namenfeld"><label for="wcode-an">Wiederherstellungscode (Admin)</label><input id="wcode-an" autocomplete="off" placeholder="XXXXX-XXXXX-XXXXX-XXXXX-XXXXXX" required></div>
+        <div class="leiste"><button class="btn haupt" type="submit">Weiter zum Passkey</button></div></form>` : ''}
     <p class="leise">Anmeldung mit dem Passkey dieses Geräts.</p>
     <p><button class="btn haupt" id="los"${window.PublicKeyCredential ? '' : ' disabled'}>Mit Passkey anmelden</button></p>
     ${window.PublicKeyCredential ? '' : T('<p class="leise">Dieser Browser unterstützt keine Passkeys.</p>')}
-    <h2>Neues Gerät?</h2>
-    <p class="leise">Auf einem angemeldeten Gerät unter Status → „Weiteres Gerät hinzufügen“ den Code anzeigen lassen.</p>
+    <h2>Neues Gerät oder Einladung?</h2>
+    <p class="leise">Den 6-stelligen Code eingeben: für ein weiteres eigenes Gerät von einem angemeldeten Gerät (Status → „Weiteres Gerät hinzufügen“), für eine Einladung vom Admin.</p>
     <form id="codeform" class="codeform"><label for="code">Code</label>
-      <input type="text" id="code" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" autocomplete="one-time-code" placeholder="0000" required>
+      <input type="text" id="code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" placeholder="000000" required>
       <button class="btn" type="submit">Mit Code hinzufügen</button></form></div>`;
+  const codeAn = document.getElementById('codeanmeldung');
+  if (codeAn) codeAn.onsubmit = async (ev) => {
+    ev.preventDefault();
+    const k = codeAn.querySelector('[type=submit]');
+    k.disabled = true;
+    try { const r = await api('/api/auth/wiederherstellungscode', { method: 'POST', body: { code: document.getElementById('wcode-an').value } }); geheZu(T`/einrichten#${r.token}`); } catch (f) { k.disabled = false; melde(f.message); }
+  };
   // Höchstens ein Versuch je 5 Sekunden (der Server prüft das auch); der Knopf zählt herunter.
   const knopf = document.querySelector('#codeform button');
   let sperre = null;
@@ -4484,6 +5224,7 @@ async function zeigeAnmelden() {
       const start = await api('/api/auth/anmelden/start', { method: 'POST' });
       const cred = await navigator.credentials.get(optionenAusJson(start.optionen, false));
       await api(T`/api/auth/anmelden/ende?vorgang=${start.vorgang}`, { method: 'POST', body: credZuJson(cred) });
+      await nachAnmeldung();
       besuche.anmeldung();
       starteLive();
       let weiter = '/';
@@ -4498,17 +5239,33 @@ async function zeigeAnmelden() {
 
 async function zeigeEinrichten() {
   const token = location.hash.slice(1);
-  seite.innerHTML = T`<h1>Passkey einrichten</h1>
-    <p class="leise">Dieses Gerät bekommt einen Passkey. Ein Passwort gibt es nicht.</p>
+  // Einladung ohne Namen: der neue Nutzer gibt ihn hier selbst ein.
+  let art = null;
+  if (token) art = await api('/api/auth/einrichten/art', { method: 'POST', body: { token } }).catch(() => null);
+  const mitName = art?.art === 'einladung' && !art.name;
+  const mitCode = !!art?.code_noetig;
+  seite.innerHTML = T`<h1>${mitName ? tx('Willkommen') : tx('Passkey einrichten')}</h1>
+    ${mitName ? T`<p class="leise">Du wurdest als ${esc(tx(ROLLE[art.rolle] || art.rolle))} eingeladen. Ein Passwort gibt es nicht – dieses Gerät bekommt einen Passkey.</p>
+      <div class="namenfeld"><label for="nutzer">Dein Name</label><input type="text" id="nutzer" maxlength="40" autocomplete="name" placeholder="Vorname" required></div>`
+    : T('<p class="leise">Dieses Gerät bekommt einen Passkey. Ein Passwort gibt es nicht.</p>')}
+    ${mitCode ? T`<div class="namenfeld"><label for="wcode-e">Dein Wiederherstellungscode</label><input id="wcode-e" autocomplete="off" placeholder="XXXXX-XXXXX-XXXXX-XXXXX-XXXXXX" required>
+      <p class="leise hilfe">Deine Daten sind auf diesem Server noch verschlüsselt zu – der Code öffnet sie.</p></div>` : ''}
     <label for="name">Name des Geräts</label><input type="text" id="name" maxlength="40" placeholder="z. B. Handy">
     <div class="leiste"><button class="btn haupt" id="los"${token && window.PublicKeyCredential ? '' : ' disabled'}>Passkey anlegen</button></div>
-    ${token ? '' : T('<div class="hinweis schlecht">Der Link enthält keinen Einrichtungs-Code.</div>')}`;
+    ${token ? '' : T('<div class="hinweis schlecht">Der Link enthält keinen Einrichtungs-Code.</div>')}
+    ${token && !art ? T('<div class="hinweis schlecht">Der Einrichtungs-Link ist ungültig oder abgelaufen.</div>') : ''}`;
+  document.getElementById(mitName ? 'nutzer' : mitCode ? 'wcode-e' : 'name').focus();
   document.getElementById('los').onclick = async (ev) => {
+    const nutzer = document.getElementById('nutzer')?.value.trim() || '';
+    if (mitName && !nutzer) { melde(tx('Bitte deinen Namen eingeben')); document.getElementById('nutzer').focus(); return; }
+    const wcode = document.getElementById('wcode-e')?.value.trim() || '';
+    if (mitCode && !wcode) { melde(tx('Bitte deinen Wiederherstellungscode eingeben')); document.getElementById('wcode-e').focus(); return; }
     ev.target.disabled = true;
     try {
-      const start = await api('/api/auth/einrichten/start', { method: 'POST', body: { token, name: document.getElementById('name').value } });
+      const start = await api('/api/auth/einrichten/start', { method: 'POST', body: { token, name: document.getElementById('name').value, nutzer, wiederherstellungscode: wcode } });
       const cred = await navigator.credentials.create(optionenAusJson(start.optionen, true));
       await api(T`/api/auth/einrichten/ende?vorgang=${start.vorgang}`, { method: 'POST', body: credZuJson(cred) });
+      await nachAnmeldung();
       besuche.anmeldung();
       melde(tx('Passkey angelegt'));
       starteLive();
@@ -4523,7 +5280,7 @@ async function zeigeEinrichten() {
 // ---------- Menü (Hamburger links): drei Hauptseiten, darunter ihre Unterseiten ----------
 
 // Seite → Bereich im Menü.
-const BEREICH = { zugang: 'status', zugangCode: 'status', nutzer: 'system', nutzerNeu: 'system', nutzerBearbeiten: 'system', backupHochladen: 'system', kalender: 'status', mcp: 'status', ring: 'status', ringTauschen: 'status', ringBearbeiten: 'status', joplin: 'status', einstellungBearbeiten: 'status', darstellung: 'status', geraetNeu: 'status', tagsVerwalten: 'status', kosten: 'status', papierkorb: 'status', update: 'system', backups: 'system', einstellungen: 'status', einstellungenBearbeiten: 'status', pebble: 'status', gedaechtnis: 'status', gedaechtnisBearbeiten: 'status', liste: 'listen', verschieben: 'listen', listeBearbeiten: 'listen', gruppeBearbeiten: 'listen', eintrag: 'verlauf', planung: 'verlauf', tags: 'verlauf', antwort: 'verlauf', umhaengen: 'verlauf', wortlaut: 'verlauf', einsortieren: 'verlauf', suche: 'verlauf' };
+const BEREICH = { zugang: 'status', zugangCode: 'status', nutzer: 'system', nutzerNeu: 'system', einladung: 'system', neuEinladen: 'system', nutzerBearbeiten: 'system', backupHochladen: 'system', systemschluessel: 'system', kalender: 'status', mcp: 'status', ring: 'status', ringTauschen: 'status', ringBearbeiten: 'status', joplin: 'status', einstellungBearbeiten: 'status', darstellung: 'status', geraetNeu: 'status', tagsVerwalten: 'status', kosten: 'status', papierkorb: 'status', update: 'system', backups: 'system', einstellungen: 'status', einstellungenBearbeiten: 'status', pebble: 'status', gedaechtnis: 'status', gedaechtnisBearbeiten: 'status', liste: 'listen', verschieben: 'listen', listeBearbeiten: 'listen', gruppeBearbeiten: 'listen', eintrag: 'verlauf', planung: 'verlauf', tags: 'verlauf', antwort: 'verlauf', umhaengen: 'verlauf', wortlaut: 'verlauf', einsortieren: 'verlauf', suche: 'verlauf' };
 const lokal = (k, v = '') => { try { return localStorage.getItem(k) ?? v; } catch { return v; } };
 let alleGruppenZeigen = false;
 function maleMenue() {
@@ -4563,7 +5320,7 @@ function maleMenue() {
     ...(istAdmin() ? [{ id: 'system', name: tx('System'), href: '/status/update', unter: [
       { name: tx('Updates'), href: '/status/update', an: name === 'update', extra: neueVersion ? ` ${updateSymbol}` : '' },
       { name: tx('Backups'), href: '/status/backups', an: name === 'backups' || name === 'backupHochladen' },
-      { name: tx('Nutzer'), href: '/admin/nutzer', an: ['nutzer', 'nutzerNeu', 'nutzerBearbeiten'].includes(name) },
+      { name: tx('Nutzer'), href: '/admin/nutzer', an: ['nutzer', 'nutzerNeu', 'nutzerBearbeiten', 'einladung', 'neuEinladen'].includes(name) },
     ] }] : []),
   ];
   // Verlauf-Filter ohne Einträge (Zähler 0) sind nicht anklickbar: der Verlauf fiele sonst auf „Alles“ zurück.
@@ -4598,7 +5355,7 @@ menue.addEventListener('click', async (e) => {
   const b = e.target.closest('[data-menue-abmelden]');
   if (!b || !confirm(tx('Auf diesem Gerät abmelden?'))) return;
   b.disabled = true;
-  try { await api('/api/auth/abmelden', { method: 'POST' }); await vergissGeraet(); if (menue.open) menue.close(); geheZu('/anmelden', true); } catch (f) { b.disabled = false; melde(f.message); }
+  try { await abmelden(); if (menue.open) menue.close(); geheZu('/anmelden', true); } catch (f) { b.disabled = false; melde(f.message); }
 });
 
 // Offene Gedächtnis-Vorschläge: Zahl an „Gedächtnis“ im Menü, Punkt am Menüknopf.

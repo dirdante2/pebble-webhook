@@ -17,10 +17,16 @@ import (
 // Nutzerverwaltung (nur Admin): einladen, Rolle setzen, sperren, löschen; je Nutzer nur Zahlen (Kosten, Speicher,
 // letzte Anmeldung) – nie Inhalte.
 
-const inviteTTL = 7 * 24 * time.Hour
+const (
+	inviteTTL      = 7 * 24 * time.Hour
+	adminInviteTTL = 24 * time.Hour // Admin-Einladungen kürzer: ein verlorener Link wiegt schwerer
+)
 
 func (s *System) userView(u *store.User) map[string]any {
 	m := map[string]any{"id": u.ID, "name": u.Name, "rolle": u.Role, "angelegt": u.CreatedAt, "zuletzt": u.LastLoginAt}
+	if s.needsPasskey(u.ID) {
+		m["passkey_fehlt"] = true // neue Adresse: neu einladen (Code)
+	}
 	a, reason := s.app(u.ID)
 	if a == nil {
 		m["gesperrt"] = reason
@@ -171,25 +177,68 @@ func (s *System) handleInvite(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "ungueltig", "Angaben nicht lesbar")
 		return
 	}
-	name := store.Preview(strings.TrimSpace(in.Name), 40)
-	if name == "" {
-		writeErr(w, 400, "name", "Bitte einen Namen eingeben")
-		return
-	}
+	name := store.Preview(strings.TrimSpace(in.Name), 40) // leer: der Eingeladene gibt ihn selbst ein
 	if in.Rolle != store.RoleAdmin {
 		in.Rolle = store.RoleUser
 	}
-	token, err := s.DB.NewEnrollToken(store.Enroll{Purpose: store.EnrollInvite, Name: name, Role: in.Rolle}, inviteTTL)
+	ttl := inviteTTL
+	if in.Rolle == store.RoleAdmin {
+		ttl = adminInviteTTL
+	}
+	token, err := s.DB.NewEnrollToken(store.Enroll{Purpose: store.EnrollInvite, Name: name, Role: in.Rolle}, ttl)
 	if err != nil {
 		writeErr(w, 500, "speicher", "Einladung nicht angelegt")
 		return
 	}
 	writeJSON(w, 200, map[string]any{"link": strings.TrimRight(s.Cfg.PublicURL, "/") + "/einrichten#" + token,
-		"gueltig_tage": int(inviteTTL.Hours() / 24)})
+		"id": store.Hash(token)[:16], "bis": time.Now().Add(ttl).UnixMilli()})
+}
+
+func inviteView(i store.Invite) map[string]any {
+	return map[string]any{"id": i.ID, "name": i.Name, "rolle": i.Role, "bis": i.ExpiresAt}
+}
+
+// handleInvites: offene Einladungen (Nutzerseite).
+func (s *System) handleInvites(w http.ResponseWriter, r *http.Request) {
+	list, err := s.DB.Invites()
+	if err != nil {
+		writeErr(w, 500, "speicher", "Datenbankfehler")
+		return
+	}
+	out := []map[string]any{}
+	for _, i := range list {
+		out = append(out, inviteView(i))
+	}
+	writeJSON(w, 200, map[string]any{"einladungen": out})
+}
+
+func (s *System) handleInviteGet(w http.ResponseWriter, r *http.Request) {
+	i, ok := s.DB.Invite(r.PathValue("id"))
+	if !ok {
+		writeErr(w, 404, "fehlt", "Einladung nicht gefunden oder abgelaufen")
+		return
+	}
+	writeJSON(w, 200, inviteView(*i))
+}
+
+// handleInviteDelete widerruft eine Einladung (Link und Code gelten danach nicht mehr).
+func (s *System) handleInviteDelete(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if !s.DB.DeleteInvite(id) {
+		writeErr(w, 404, "fehlt", "Einladung nicht gefunden oder abgelaufen")
+		return
+	}
+	s.devCode.mu.Lock()
+	delete(s.devCode.codes, inviteKey(id))
+	s.devCode.mu.Unlock()
+	logf("Einladung %s widerrufen", id)
+	writeJSON(w, 200, map[string]any{"ok": true})
 }
 
 // handleUserEdit: Name, Rolle, gesperrt. Der letzte Admin bleibt Admin und entsperrt; sich selbst sperrt man nicht.
 func (s *System) handleUserEdit(w http.ResponseWriter, r *http.Request) {
+	s.lifeMu.Lock() // auch: zwei Admins stufen sich nicht gleichzeitig gegenseitig herab
+	defer s.lifeMu.Unlock()
 	u, ok := s.pathUser(w, r)
 	if !ok {
 		return
@@ -209,7 +258,7 @@ func (s *System) handleUserEdit(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, "speicher", "Datenbankfehler")
 		return
 	}
-	lastAdmin := u.Admin() && admins <= 1
+	lastAdmin := u.Admin() && u.LockedAt == 0 && admins <= 1
 	if in.Rolle != nil && *in.Rolle != store.RoleAdmin && lastAdmin {
 		writeErr(w, http.StatusConflict, "letzter_admin", "Der letzte Admin bleibt Admin")
 		return
@@ -242,6 +291,7 @@ func (s *System) handleUserEdit(w http.ResponseWriter, r *http.Request) {
 		}
 		if *in.Gesperrt {
 			s.closeUser(u.ID, lockedByAdmin)
+			s.DB.DeleteUserSessions(u.ID) // gesperrt heißt abgemeldet, auch als Admin
 			logf("Nutzer %d gesperrt", u.ID)
 		} else {
 			u.LockedAt = 0
@@ -251,12 +301,15 @@ func (s *System) handleUserEdit(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	u, _ = s.DB.User(u.ID)
+	s.ensureSystemKey() // Rolle oder Sperre geändert: Bindung nur an aktive Admins
 	writeJSON(w, 200, s.userView(u))
 }
 
 // handleUserDelete löscht einen Nutzer unwiderruflich: Daten, Aufnahmen, Schlüssel, Anmeldung. Backups behalten seine
 // verschlüsselte Datenbank – ohne Schlüssel und Code bleibt sie unlesbar.
 func (s *System) handleUserDelete(w http.ResponseWriter, r *http.Request) {
+	s.lifeMu.Lock()
+	defer s.lifeMu.Unlock()
 	u, ok := s.pathUser(w, r)
 	if !ok {
 		return
@@ -271,7 +324,7 @@ func (s *System) handleUserDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	me, _ := r.Context().Value(sessionKey).(session)
 	admins, _ := s.DB.Admins()
-	if u.ID == me.uid || (u.Admin() && admins <= 1) {
+	if u.ID == me.uid || (u.Admin() && u.LockedAt == 0 && admins <= 1) {
 		writeErr(w, http.StatusConflict, "selbst", "Den eigenen Zugang und den letzten Admin kann man nicht löschen")
 		return
 	}
@@ -283,6 +336,9 @@ func (s *System) handleUserDelete(w http.ResponseWriter, r *http.Request) {
 	s.appsMu.Lock()
 	delete(s.locked, u.ID)
 	s.appsMu.Unlock()
+	if err := s.oauthDropUser(u.ID); err != nil {
+		logf("Nutzer %d gelöscht, OAuth-Freigaben nicht entfernt: %v", u.ID, err)
+	}
 	var errs []error
 	for _, p := range []string{UserDir(s.Cfg.DataDir, u.ID), s.userMediaRoot(u.ID)} {
 		errs = append(errs, os.RemoveAll(p))
@@ -294,6 +350,7 @@ func (s *System) handleUserDelete(w http.ResponseWriter, r *http.Request) {
 		logf("Nutzer %d gelöscht, Dateien nicht vollständig entfernt: %v", u.ID, err)
 	}
 	logf("Nutzer %d („%s“) gelöscht", u.ID, u.Name)
+	s.ensureSystemKey() // war er an den Gelöschten gebunden: an einen anderen Admin
 	writeJSON(w, 200, map[string]any{"ok": true})
 }
 

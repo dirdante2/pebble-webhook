@@ -9,6 +9,28 @@ Version numbers X.Y.Z:
 
 Own builds show X.Y.Z.A: **A** is a local build counter (one per deployed change, starting at 1 for every new X.Y.Z); it never appears in Git or releases, so one version can collect several changes.
 
+## [4.4.0] - 2026-11-25
+
+### New
+- Status → AI: providers as a list (OpenAI, OpenAI-compatible services, local models like Ollama, SearXNG), any number, each with its own name.
+- AI areas (transcription, short titles, evaluation, web research, images) each with an ordered list of providers; drag to reorder or to "Inactive".
+- Fallback: if a provider fails or reaches its monthly cost limit, the next one takes over.
+- Web search per entry: provider's own search and/or SearXNG.
+- OpenAI: fixed model choice per area with approximate prices.
+- Local transcription with Whisper on the server, optionally with cloud fallback.
+- New address: passkeys for a new domain via recovery code or one-time code from the admin.
+- Setup with backup: upload a backup and enter recovery codes instead of a fresh setup.
+
+### Changed
+- Saving AI settings applies immediately without restart; a new Whisper model loads in the background, transcriptions wait meanwhile.
+- API keys in backups are encrypted with a system key that never leaves the server.
+- Releases are signed; the installer only installs signed releases.
+- Docker base images pinned by digest.
+
+### Fixed
+- Webhook: only audio types accepted for recordings.
+- MCP: note contents marked as data for the model.
+
 ## [4.3.0] - 2026-11-25
 
 ### New

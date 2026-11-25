@@ -19,8 +19,9 @@ import (
 
 // AI ist die Schnittstelle zu OpenAI (in Tests ersetzt).
 type AI interface {
-	Transcribe(ctx context.Context, model, name string, audio []byte, mime, language string) (text string, seconds float64, err error)
+	TranscribeStep(ctx context.Context, id, name string, audio []byte, mime, language string) (text string, seconds float64, cost *float64, err error)
 	Respond(ctx context.Context, r openai.Request) (*openai.Result, error)
+	First(area string) *openai.Step
 }
 
 // Notes ist das Einweg-Ziel Joplin (in Tests ersetzt); nil = Joplin aus.
@@ -50,8 +51,12 @@ func (a *System) clientIP(r *http.Request) string {
 	}
 	if a.Cfg.TrustedProxy != "" && host == a.Cfg.TrustedProxy {
 		if ip := strings.TrimSpace(r.Header.Get("X-Real-IP")); ip != "" {
-			return ip
+			host = ip
 		}
+	}
+	// IPv6: ein Anschluss hat meist ein ganzes /64 – als eine Adresse zählen, sonst umgeht man jedes Limit.
+	if ip := net.ParseIP(host); ip != nil && ip.To4() == nil {
+		return ip.Mask(net.CIDRMask(64, 128)).String() + "/64"
 	}
 	return host
 }
@@ -76,7 +81,12 @@ func (a *System) allow(key string, perMin int) bool {
 	}
 	a.rate[key] = append(hits, now)
 	if len(a.rate) > 10_000 {
-		a.rate = map[string][]int64{}
+		// Abgelaufene Zähler entfernen; laufende bleiben (früher wurde alles geleert – ein Weg, Limits zurückzusetzen).
+		for k, ts := range a.rate {
+			if len(ts) == 0 || now-ts[len(ts)-1] >= 60_000 {
+				delete(a.rate, k)
+			}
+		}
 	}
 	return true
 }

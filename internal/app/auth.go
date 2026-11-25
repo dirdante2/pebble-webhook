@@ -29,6 +29,7 @@ type ceremony struct {
 	uid     int64 // Gerät für diesen Nutzer (0 = neuer Nutzer aus einer Einladung)
 	invite  *store.Enroll
 	newWID  string // WebAuthn-Id des eingeladenen Nutzers (erst nach dem Passkey angelegt)
+	dek     *schluessel.DEK // Schlüssel aus dem Wiederherstellungscode (Gerät eines Nutzers, dessen Schlüsseldatei fehlt)
 	expires time.Time
 }
 
@@ -50,6 +51,7 @@ func (s *System) initAuth() error {
 		return err
 	}
 	s.wa = wa
+	s.checkAddress()
 	return nil
 }
 
@@ -87,6 +89,9 @@ func (s *System) putCeremony(c ceremony) string {
 		if time.Now().After(v.expires) {
 			delete(s.cer, k)
 		}
+	}
+	if len(s.cer) >= 1000 { // offene Anmeldevorgänge sind Speicher ohne Anmeldung: begrenzen
+		return ""
 	}
 	id := store.NewID()
 	c.expires = time.Now().Add(5 * time.Minute)
@@ -140,6 +145,12 @@ func isMachine(r *http.Request) bool {
 	return v
 }
 
+// sessionUID: Nutzer der Sitzung (0 ohne Sitzung).
+func sessionUID(r *http.Request) int64 {
+	v, _ := r.Context().Value(sessionKey).(session)
+	return v.uid
+}
+
 // currentPasskey: Gerät der Sitzung (leer beim Maschinenzugang).
 func currentPasskey(r *http.Request) string {
 	v, _ := r.Context().Value(sessionKey).(session)
@@ -189,6 +200,10 @@ func (s *System) signedIn(h func(http.ResponseWriter, *http.Request, *store.User
 		u, err := s.DB.User(sess.uid)
 		if err != nil {
 			writeErr(w, http.StatusUnauthorized, "anmeldung", "Nicht angemeldet")
+			return
+		}
+		if u.LockedAt > 0 { // vom Admin gesperrt: auch keine Verwaltungs- und Wiederherstellungswege
+			writeErr(w, http.StatusForbidden, "gesperrt", "Zugang gesperrt")
 			return
 		}
 		h(w, r.WithContext(context.WithValue(r.Context(), sessionKey, sess)), u)
@@ -257,7 +272,7 @@ func (s *System) public(next http.HandlerFunc) http.HandlerFunc {
 // handleSession: Anmeldestand für die Web-App – mit Name und Rolle, gesperrten Daten und offenem Wiederherstellungscode.
 func (s *System) handleSession(w http.ResponseWriter, r *http.Request) {
 	setUp, _ := s.DB.AnyPasskey()
-	out := map[string]any{"angemeldet": false, "eingerichtet": setUp}
+	out := map[string]any{"angemeldet": false, "eingerichtet": setUp, "neue_adresse": s.adminNeedsPasskey()}
 	sess, ok := s.sessionOf(r)
 	if !ok {
 		writeJSON(w, 200, out)
@@ -277,10 +292,35 @@ func (s *System) handleSession(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, out)
 }
 
-func (s *System) handleEnrollStart(w http.ResponseWriter, r *http.Request) {
+// handleEnrollKind: Art eines Einrichtungs-Links (Einladung oder weiteres Gerät) – die Seite fragt bei einer
+// Einladung zusätzlich den Namen des neuen Nutzers ab.
+func (s *System) handleEnrollKind(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Token string `json:"token"`
-		Name  string `json:"name"`
+	}
+	e, ok := (*store.Enroll)(nil), false
+	if readJSON(r, &in) == nil {
+		e, ok = s.DB.EnrollToken(in.Token)
+	}
+	if !ok {
+		writeErr(w, http.StatusForbidden, "link", "Der Einrichtungs-Link ist ungültig oder abgelaufen")
+		return
+	}
+	out := map[string]any{"art": e.Purpose, "rolle": e.Role, "name": e.Name}
+	if e.Purpose == store.EnrollDevice {
+		if a, _ := s.app(e.UserID); a == nil {
+			out["code_noetig"] = true // Schlüsseldatei fehlt (neuer Server): Wiederherstellungscode mit eingeben
+		}
+	}
+	writeJSON(w, 200, out)
+}
+
+func (s *System) handleEnrollStart(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Token  string `json:"token"`
+		Name   string `json:"name"`
+		Nutzer string `json:"nutzer"` // Einladung: Name des neuen Nutzers (gibt er selbst ein)
+		Code   string `json:"wiederherstellungscode"` // Gerät, Schlüsseldatei fehlt
 	}
 	e, ok := (*store.Enroll)(nil), false
 	if readJSON(r, &in) == nil {
@@ -296,7 +336,16 @@ func (s *System) handleEnrollStart(w http.ResponseWriter, r *http.Request) {
 	}
 	var wu *waUser
 	if e.Purpose == store.EnrollInvite {
-		// Neuer Nutzer: angelegt wird er erst mit dem fertigen Passkey.
+		// Neuer Nutzer: angelegt wird er erst mit dem fertigen Passkey; den Namen gibt er selbst ein.
+		if n := store.Preview(strings.TrimSpace(in.Nutzer), 40); n != "" {
+			inv := *e
+			inv.Name = n
+			e = &inv
+		}
+		if strings.TrimSpace(e.Name) == "" {
+			writeErr(w, 400, "name", "Bitte deinen Namen eingeben")
+			return
+		}
 		c.invite, c.newWID = e, base64.RawURLEncoding.EncodeToString([]byte(store.NewID()+store.NewID()))
 		raw, _ := base64.RawURLEncoding.DecodeString(c.newWID)
 		wu = &waUser{id: raw, name: displayName(e.Name)}
@@ -310,6 +359,19 @@ func (s *System) handleEnrollStart(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		c.uid = u.ID
+		if a, _ := s.app(u.ID); a == nil && u.LockedAt == 0 {
+			// Daten noch zu (Schlüsseldatei fehlt): der Code gehört mit dazu, sonst bliebe der Nutzer ausgesperrt.
+			if strings.TrimSpace(in.Code) == "" {
+				writeErr(w, 400, "wiederherstellungscode", "Bitte deinen Wiederherstellungscode eingeben")
+				return
+			}
+			dek, err := schluessel.Unwrap(in.Code, u.KeyWrap, u.ID)
+			if err != nil || dek.ID() != u.KeyID {
+				writeErr(w, http.StatusForbidden, "code", "Wiederherstellungscode falsch")
+				return
+			}
+			c.dek = &dek
+		}
 	}
 	var exclude []protocol.CredentialDescriptor
 	for _, cr := range wu.creds {
@@ -323,7 +385,12 @@ func (s *System) handleEnrollStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	c.data = *data
-	writeJSON(w, 200, map[string]any{"vorgang": s.putCeremony(c), "optionen": opts})
+	id := s.putCeremony(c)
+	if id == "" {
+		writeErr(w, http.StatusServiceUnavailable, "voll", "Gerade zu viele Anmeldungen – gleich noch einmal versuchen")
+		return
+	}
+	writeJSON(w, 200, map[string]any{"vorgang": id, "optionen": opts})
 }
 
 func (s *System) handleEnrollFinish(w http.ResponseWriter, r *http.Request) {
@@ -374,6 +441,13 @@ func (s *System) handleEnrollFinish(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, "speicher", "Passkey nicht gespeichert")
 		return
 	}
+	if c.dek != nil {
+		if u, err := s.DB.User(uid); err == nil {
+			if err := s.restoreUserKey(u, *c.dek); err != nil {
+				logf("Passkey angelegt, Daten von Nutzer %d nicht geöffnet: %v", uid, err)
+			}
+		}
+	}
 	if err := s.setSession(w, uid, id); err != nil {
 		writeErr(w, 500, "speicher", "Sitzung nicht angelegt")
 		return
@@ -387,7 +461,12 @@ func (s *System) handleLoginStart(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, "webauthn", "Anmeldung nicht möglich")
 		return
 	}
-	writeJSON(w, 200, map[string]any{"vorgang": s.putCeremony(ceremony{data: *data}), "optionen": opts})
+	id := s.putCeremony(ceremony{data: *data})
+	if id == "" {
+		writeErr(w, http.StatusServiceUnavailable, "voll", "Gerade zu viele Anmeldungen – gleich noch einmal versuchen")
+		return
+	}
+	writeJSON(w, 200, map[string]any{"vorgang": id, "optionen": opts})
 }
 
 func (s *System) handleLoginFinish(w http.ResponseWriter, r *http.Request) {
@@ -410,6 +489,12 @@ func (s *System) handleLoginFinish(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusUnauthorized, "webauthn", "Passkey nicht erkannt")
 		return
 	}
+	if cred.Authenticator.CloneWarning {
+		// Zähler des Passkeys ging zurück: Hinweis auf eine Kopie des Schlüssels – nicht anmelden.
+		logf("Anmeldung Nutzer %d: Passkey-Zähler zurückgegangen (mögliche Kopie) – abgewiesen", who.ID)
+		writeErr(w, http.StatusUnauthorized, "webauthn", "Passkey nicht erkannt")
+		return
+	}
 	id := base64.RawURLEncoding.EncodeToString(cred.ID)
 	data, _ := json.Marshal(cred)
 	s.DB.UpdatePasskey(who.ID, id, string(data))
@@ -426,6 +511,8 @@ func (s *System) handleLogout(w http.ResponseWriter, r *http.Request) {
 	}
 	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: "", Path: "/", MaxAge: -1, HttpOnly: true, Secure: true,
 		SameSite: http.SameSiteStrictMode})
+	// HTTP-Zwischenspeicher des Browsers leeren (Aufnahmen, Bilder); Daten der Seite räumt sie selbst (vergissGeraet).
+	w.Header().Set("Clear-Site-Data", `"cache"`)
 	writeJSON(w, 200, map[string]any{"ok": true})
 }
 
@@ -514,7 +601,8 @@ func (a *App) handleRecoveryCode(w http.ResponseWriter, r *http.Request) {
 	if u != nil {
 		name = u.Name
 	}
-	writeJSON(w, 200, map[string]any{"code": code, "name": name})
+	info, _ := a.System.systemKeyInfo()
+	writeJSON(w, 200, map[string]any{"code": code, "name": name, "system": info.Art == "nutzer" && info.UID == a.UserID})
 }
 
 // handleRecoveryConfirm: Name (Pflicht, falls noch leer) speichern und den Code als notiert bestätigen – er wird gelöscht.
@@ -551,7 +639,16 @@ func (a *App) handleRecoveryConfirm(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleRecoveryNew erzeugt einen neuen Wiederherstellungscode (der alte gilt danach nicht mehr) und zeigt ihn einmal.
+// recoveryFresh: Neuer Wiederherstellungscode nur kurz nach einer Anmeldung mit Passkey – eine gestohlene Sitzung
+// allein reicht dafür nicht.
+const recoveryFresh = 10 * time.Minute
+
 func (a *App) handleRecoveryNew(w http.ResponseWriter, r *http.Request) {
+	c, err := r.Cookie(sessionCookie)
+	if err != nil || time.Since(time.UnixMilli(a.System.DB.SessionCreated(c.Value))) > recoveryFresh {
+		writeErr(w, http.StatusForbidden, "frisch", "Zur Sicherheit erst ab- und wieder anmelden, dann innerhalb von 10 Minuten den neuen Code erzeugen")
+		return
+	}
 	u, err := a.System.DB.User(a.UserID)
 	if err != nil {
 		writeErr(w, 500, "speicher", "Datenbankfehler")
@@ -602,6 +699,12 @@ func (s *System) handleRecover(w http.ResponseWriter, r *http.Request, u *store.
 		writeErr(w, 400, "ungueltig", "Code fehlt")
 		return
 	}
+	s.lifeMu.Lock()
+	defer s.lifeMu.Unlock()
+	if a, _ := s.app(u.ID); a != nil { // inzwischen schon geöffnet (zweiter Aufruf)
+		writeJSON(w, 200, map[string]any{"ok": true})
+		return
+	}
 	dek, err := schluessel.Unwrap(in.Code, u.KeyWrap, u.ID)
 	if err != nil || dek.ID() != u.KeyID {
 		writeErr(w, http.StatusForbidden, "code", "Wiederherstellungscode falsch")
@@ -617,6 +720,7 @@ func (s *System) handleRecover(w http.ResponseWriter, r *http.Request, u *store.
 		writeErr(w, 500, "speicher", "Daten lassen sich nicht öffnen")
 		return
 	}
+	s.recoverSystemKeyWith(u.ID, dek) // an ihn gebunden: kommt mit zurück
 	logf("Nutzer %d: Schlüssel mit Wiederherstellungscode zurückgeholt", u.ID)
 	writeJSON(w, 200, map[string]any{"ok": true})
 }

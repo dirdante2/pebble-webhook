@@ -218,7 +218,7 @@ func (a *App) sortPlanning(ctx context.Context, p *store.Planning) error {
 		facts = append(facts, f.Name+": "+f.Wert)
 	}
 	res, err := a.respond(ctx, openai.Request{
-		Model: a.Cfg.DictationModel, Instructions: planSortInstructions, SchemaName: "einsortieren", Schema: planSortSchema,
+		Area: openai.AreaDictation, Instructions: planSortInstructions, SchemaName: "einsortieren", Schema: planSortSchema,
 		MaxOutputTokens: 1000, ReasoningEffort: a.Cfg.PlanReasoningEffort,
 		Input: fmt.Sprintf("%s\n%s\nPlanung #%d:\nTitel: %s\nVorhaben: %s\nGesagt: %s\nEckdaten: %s",
 			hint, a.memoryHint(), p.Nr, p.Title, plan.Vorhaben, plan.Notiz, strings.Join(facts, "; ")),
@@ -228,7 +228,7 @@ func (a *App) sortPlanning(ctx context.Context, p *store.Planning) error {
 	}
 	if rounds, err := a.DB.Rounds(p.ID); err == nil && len(rounds) > 0 {
 		last := rounds[len(rounds)-1]
-		addCost(&last.CostAux, a.auxCost(res))
+		addCost(&last.CostAux, res.Cost)
 		if err := a.DB.SaveJob(last); err != nil {
 			logf("Planung %s: Kosten: %v", p.ID, err)
 		}
@@ -392,7 +392,7 @@ func (a *App) describe(ctx context.Context) (int, error) {
 		return 0, nil
 	}
 	res, err := a.respond(ctx, openai.Request{
-		Model: a.Cfg.TitleModel, Instructions: describeInstructions, SchemaName: "beschreibungen", Schema: describeSchema,
+		Area: openai.AreaTitle, Instructions: describeInstructions, SchemaName: "beschreibungen", Schema: describeSchema,
 		MaxOutputTokens: 400 * len(due), Input: in.String(),
 	})
 	if err != nil {
@@ -625,7 +625,7 @@ func (a *App) BackfillNoteLists(ctx context.Context) (checked, sorted int, cost 
 				return checked, sorted, cost, err
 			}
 			res, err := a.respond(ctx, openai.Request{
-				Model: a.Cfg.DictationModel, Instructions: noteSortInstructions, SchemaName: "einsortieren", Schema: planSortSchema,
+				Area: openai.AreaDictation, Instructions: noteSortInstructions, SchemaName: "einsortieren", Schema: planSortSchema,
 				MaxOutputTokens: 1000, ReasoningEffort: a.Cfg.PlanReasoningEffort,
 				Input: fmt.Sprintf("%s\n%s\nNotiz #%d:\nTitel: %s\nText: %s\nWortlaut: %s",
 					hint, a.memoryHint(), j.Nr, shortTitle(j.Title), notiz, j.Transcript),
@@ -633,7 +633,7 @@ func (a *App) BackfillNoteLists(ctx context.Context) (checked, sorted int, cost 
 			if err != nil {
 				return checked, sorted, cost, fmt.Errorf("Notiz #%d: %w", j.Nr, err)
 			}
-			if c := a.auxCost(res); c != nil {
+			if c := res.Cost; c != nil {
 				cost += *c
 			}
 			var out struct {

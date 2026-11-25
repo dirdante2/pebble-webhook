@@ -5,11 +5,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
+	"strings"
 	"sync"
 	"time"
 
 	webpush "github.com/SherClockHolmes/webpush-go"
 
+	"pebble-webhook/internal/schluessel"
 	"pebble-webhook/internal/store"
 )
 
@@ -84,6 +87,9 @@ func (a *System) initPush() error {
 		return err
 	}
 	priv, _ := a.DB.Get("vapid_private")
+	if schluessel.Sealed(priv) {
+		return nil // aus einem Backup, Systemschlüssel fehlt noch: Push ruht bis zum Wiederherstellen
+	}
 	if pub == "" || priv == "" {
 		priv, pub, err = webpush.GenerateVAPIDKeys()
 		if err != nil {
@@ -100,10 +106,32 @@ func (a *System) initPush() error {
 	return nil
 }
 
+// pushHTTP: Web-Push nur an öffentliche Adressen (Port 443, keine Weiterleitungen ins eigene Netz).
+var pushHTTP webpush.HTTPClient = publicHTTP
+
+// pushHosts: Push-Dienste der Browser. Ein Abo an eine andere Adresse nimmt der Server nicht an – sonst schickte er
+// auf Zuruf jedes Nutzers Anfragen an beliebige Ziele.
+var pushHosts = []string{"fcm.googleapis.com", "android.googleapis.com", ".push.apple.com", "push.services.mozilla.com",
+	".push.services.mozilla.com", ".notify.windows.com"}
+
+func pushEndpointOK(endpoint string) bool {
+	u, err := url.Parse(endpoint)
+	if err != nil || u.Scheme != "https" || u.User != nil || (u.Port() != "" && u.Port() != "443") || len(endpoint) > 1000 {
+		return false
+	}
+	h := strings.ToLower(u.Hostname())
+	for _, p := range pushHosts {
+		if h == p || (strings.HasPrefix(p, ".") && strings.HasSuffix(h, p)) {
+			return true
+		}
+	}
+	return false
+}
+
 // notify schickt eine Benachrichtigung an alle angemeldeten Geräte (im Hintergrund), wenn der Nutzer den Kanal
 // (config.Notify…) eingeschaltet hat; channel "" = immer (Test-Push).
 func (a *App) notify(channel, title, body, path string) {
-	if channel != "" && !a.Cfg.Notify[channel] {
+	if a.vapidPriv == "" || (channel != "" && !a.Cfg.Notify[channel]) {
 		return
 	}
 	subs, err := a.DB.PushSubs()
@@ -120,7 +148,7 @@ func (a *App) notify(channel, title, body, path string) {
 			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 			resp, err := webpush.SendNotificationWithContext(ctx, msg, &webpush.Subscription{Endpoint: s.Endpoint,
 				Keys: webpush.Keys{P256dh: s.P256dh, Auth: s.Auth}}, &webpush.Options{Subscriber: subject,
-				VAPIDPublicKey: a.vapidPub, VAPIDPrivateKey: a.vapidPriv, TTL: 86400, Urgency: webpush.UrgencyNormal})
+				VAPIDPublicKey: a.vapidPub, VAPIDPrivateKey: a.vapidPriv, TTL: 86400, Urgency: webpush.UrgencyNormal, HTTPClient: pushHTTP})
 			cancel()
 			if err != nil {
 				logf("Push: %v", err)
@@ -151,6 +179,14 @@ func (a *App) handlePushSubscribe(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := readJSON(r, &in); err != nil || in.Endpoint == "" || in.Keys.P256dh == "" || in.Keys.Auth == "" {
 		writeErr(w, 400, "ungueltig", "Abo unvollständig")
+		return
+	}
+	if !pushEndpointOK(in.Endpoint) {
+		writeErr(w, 400, "ungueltig", "Unbekannter Push-Dienst")
+		return
+	}
+	if subs, _ := a.DB.PushSubs(); len(subs) >= 50 {
+		writeErr(w, http.StatusConflict, "voll", "Zu viele Geräte mit Benachrichtigungen")
 		return
 	}
 	if err := a.DB.AddPushSub(store.PushSub{Endpoint: in.Endpoint, P256dh: in.Keys.P256dh, Auth: in.Keys.Auth}); err != nil {

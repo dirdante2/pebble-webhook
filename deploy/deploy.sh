@@ -26,13 +26,16 @@ LOKAL="$SEMVER.$A"
 grep -q "^## \[$SEMVER\]" CHANGELOG.md || { echo "CHANGELOG.md: Abschnitt „## [$SEMVER]“ fehlt" >&2; exit 1; }
 VERSION="$LOKAL (Build $(date +%Y%m%d-%H%M), $(git describe --always --dirty 2>/dev/null || echo unbekannt))"
 
+deploy/whisper-engine.sh # lokale Transkription; baut nur, wenn sie fehlt oder veraltet ist
 go vet ./...
 go test ./...
 mkdir -p bin
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w -X 'main.version=$VERSION'" -o bin/pebble-webhook ./cmd/pebble-webhook
 
-scp -q bin/pebble-webhook install.sh "$ZIEL:/tmp/"
-ssh "$ZIEL" 'bash /tmp/install.sh --binary /tmp/pebble-webhook && rm -f /tmp/pebble-webhook /tmp/install.sh && curl -sf http://127.0.0.1:8080/healthz'
+# Eigener, nur für root lesbarer Ordner auf dem Ziel (kein festes /tmp/install.sh, das ein anderer vorher anlegen könnte).
+RDIR="$(ssh "$ZIEL" 'mktemp -d')"
+scp -q bin/pebble-webhook install.sh "$ZIEL:$RDIR/"
+ssh "$ZIEL" "bash $RDIR/install.sh --binary $RDIR/pebble-webhook; rc=\$?; rm -rf $RDIR; [ \$rc = 0 ] && curl -sf http://127.0.0.1:8080/healthz"
 echo "$SEMVER" > VERSION
 echo "$LOKAL" > lokal/BUILD
 echo "Ausgerollt: $VERSION"

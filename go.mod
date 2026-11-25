@@ -6,6 +6,7 @@ require (
 	github.com/SherClockHolmes/webpush-go v1.4.0
 	github.com/go-webauthn/webauthn v0.18.2
 	github.com/ncruces/go-sqlite3 v0.38.0
+	golang.org/x/sys v0.50.0
 )
 
 require (
@@ -21,6 +22,5 @@ require (
 	github.com/tinylib/msgp v1.6.4 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
 	golang.org/x/crypto v0.59.0 // indirect
-	golang.org/x/sys v0.50.0 // indirect
 	lukechampine.com/adiantum v1.1.1 // indirect
 )

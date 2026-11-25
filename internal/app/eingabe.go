@@ -15,13 +15,6 @@ func (a *App) transcribeUpload(ctx context.Context, j *store.Job, f multipart.Fi
 	if err != nil {
 		return "", err
 	}
-	text, seconds, err := a.AI.Transcribe(ctx, a.Cfg.TranscribeModel, "eingabe"+audioExt(mimeType), audio, mimeType, a.Cfg.Language)
-	if err != nil {
-		return "", err
-	}
-	if seconds >= 0 && a.Cfg.PriceTranscribeMin != nil {
-		c := seconds / 60 * *a.Cfg.PriceTranscribeMin
-		addCost(&j.CostTranscribe, &c)
-	}
-	return text, nil
+	text, _, _, err := a.transcribeAudio(ctx, "eingabe"+audioExt(mimeType), audio, mimeType, &j.CostTranscribe)
+	return text, err
 }

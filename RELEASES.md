@@ -4,6 +4,20 @@ Summarised notes for **beta** and **stable** releases. Each section lists only w
 
 A tag `vX.Y.Z-stable` (stable; before 1.33.5 `vX.Y.Z`) or `vX.Y.Z-beta` (beta) needs a section `## [X.Y.Z]` or `## [X.Y.Z-beta]` here; the release workflow uses it as the release notes.
 
+## [4.4.0] - 2026-11-25
+
+### AI providers
+- Providers as a list (OpenAI, OpenAI-compatible services, local models, SearXNG), each with its own name.
+- Per area an ordered list with fallback and monthly cost limit; drag to reorder or to "Inactive".
+- Web search per entry (provider's search, SearXNG); OpenAI model choice with approximate prices.
+- Changes apply without restart.
+- Local transcription with Whisper, optional cloud fallback.
+
+### Security and setup
+- New address: new passkeys via recovery code or admin code.
+- Setup from a backup with recovery codes.
+- API keys in backups encrypted with a server-only system key; signed releases.
+
 ## [4.3.0] - 2026-11-25
 
 ### Ring usage

@@ -73,6 +73,9 @@ func (a *App) Run(ctx context.Context) {
 // process führt die offenen Schritte eines Auftrags aus, bis er fertig ist oder ein Schritt scheitert.
 // Wird der Auftrag währenddessen gelöscht, bricht halt die Verarbeitung ab; nichts wird mehr gespeichert.
 func (a *App) process(ctx context.Context, j *store.Job) {
+	if a.overDailyLimit(j) || a.waitForWhisper(j) {
+		return
+	}
 	jobCtx, stop := context.WithCancel(ctx)
 	done := make(chan struct{})
 	a.runMu.Lock()
@@ -210,9 +213,10 @@ func (a *App) transcribe(ctx context.Context, j *store.Job) error {
 		if j.TranscriptSource == "" {
 			j.TranscriptSource = "text"
 		}
-	case a.Cfg.Transcription == "pebble" && j.Source == "pebble":
+	case a.KI().AI.PebbleText() && j.Source == "pebble" && (j.PebbleText != "" || a.KI().AI.OnlyPebble()):
+		// Text der Pebble-App; fehlt er, übernehmen die übrigen Einträge der Transkription.
 		if j.PebbleText == "" {
-			return emptyError{a.T("Pebble hat kein Transkript mitgeschickt (TRANSCRIPTION=pebble)")}
+			return emptyError{a.T("Pebble hat kein Transkript mitgeschickt")}
 		}
 		j.Transcript, j.TranscriptSource = j.PebbleText, "pebble"
 	default:
@@ -229,26 +233,25 @@ func (a *App) transcribe(ctx context.Context, j *store.Job) error {
 			return a.Errorf("Audio nicht lesbar: %w", err)
 		}
 		name := strings.TrimSuffix(filepath.Base(j.AudioPath), schluessel.AudioExt)
-		text, seconds, err := a.AI.Transcribe(ctx, a.Cfg.TranscribeModel, name, audio, j.AudioMime, a.Cfg.Language)
+		text, seconds, source, err := a.transcribeAudio(ctx, name, audio, j.AudioMime, &j.CostTranscribe)
 		if err != nil {
 			return err
 		}
 		a.ringSeconds(j.ID, seconds)
-		if seconds >= 0 && a.Cfg.PriceTranscribeMin != nil {
-			c := seconds / 60 * *a.Cfg.PriceTranscribeMin
-			addCost(&j.CostTranscribe, &c)
-		}
 		switch {
 		case text != "":
-			j.Transcript, j.TranscriptSource = text, "openai"
+			j.Transcript, j.TranscriptSource = text, source
 		case j.PebbleText != "":
-			// OpenAI hört nichts, die Pebble-App hat aber Text erkannt: den nehmen.
+			// Die Transkription hört nichts, die Pebble-App hat aber Text erkannt: den nehmen.
 			j.Transcript, j.TranscriptSource = j.PebbleText, "pebble"
 		default:
 			return emptyError{a.T("Die Transkription ist leer – keine Sprache erkannt")}
 		}
 	}
 	j.State = store.StateTranscribed
+	if j.Mode == "planung" && j.PlanningID != "" {
+		j.State = store.StateAssigned // neu transkribierte Runde: Zuordnung steht schon
+	}
 	return nil
 }
 
@@ -448,7 +451,7 @@ func (a *App) AutoClose() {
 			logf("Automatisches Schließen: %v", err)
 			continue
 		}
-		logf("Planung %s („%s“) nach %d Tagen ohne neue Runde geschlossen", p.ID, store.Preview(p.Title, 60), a.Cfg.AutoCloseDays)
+		logf("Planung %s nach %d Tagen ohne neue Runde geschlossen", p.ID, a.Cfg.AutoCloseDays)
 		a.hub.send("planung:" + p.ID)
 	}
 }
@@ -464,4 +467,54 @@ func (a *App) Cleanup() {
 	a.removeEmptyDirs(a.audioRoot())
 	a.cleanImages()
 	a.removeEmptyDirs(a.imageRoot())
+}
+
+// waitForWhisper: Lädt das Whisper-Modell gerade (neu gewählt unter KI), wartet die Transkription ohne Fehlversuch;
+// angenommen ist die Aufnahme längst (Webhook und Web-App speichern sie unabhängig davon).
+func (a *App) waitForWhisper(j *store.Job) bool {
+	if j.State != store.StateNew || j.Transcript != "" || !a.whisperLoading() {
+		return false
+	}
+	j.Error = a.T("Whisper-Modell wird geladen – Transkription wartet")
+	j.NextTryAt = time.Now().Add(30 * time.Second).UnixMilli()
+	if err := a.DB.SaveJob(j); err != nil {
+		logf("worker: speichern: %v", err)
+	}
+	a.changed(j.ID)
+	return true
+}
+
+// overDailyLimit: Hat der Nutzer (kein Admin) heute schon das Tageslimit an KI-Kosten erreicht, wartet der Auftrag bis
+// zum nächsten Tag – sichtbar im Eintrag. So leert kein einzelner Nutzer das gemeinsame Guthaben.
+func (a *App) overDailyLimit(j *store.Job) bool {
+	limit := a.Cfg.UserDailyLimitUSD
+	if limit <= 0 || j.State == store.StateDone || a.isAdmin() {
+		return false
+	}
+	now := time.Now()
+	midnight := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	jobs, err := a.DB.Since(midnight.UnixMilli())
+	if err != nil {
+		return false
+	}
+	val := func(p *float64) float64 {
+		if p == nil {
+			return 0
+		}
+		return *p
+	}
+	var sum float64
+	for _, o := range jobs {
+		sum += val(o.CostTranscribe) + val(o.CostAux) + val(o.CostUSD)
+	}
+	if sum < limit {
+		return false
+	}
+	j.Error = a.Tf("Tageslimit KI-Kosten erreicht (%.2f $) – geht morgen weiter", limit)
+	j.NextTryAt = midnight.AddDate(0, 0, 1).Add(time.Minute).UnixMilli()
+	if err := a.DB.SaveJob(j); err != nil {
+		logf("worker: speichern: %v", err)
+	}
+	a.changed(j.ID)
+	return true
 }

@@ -187,16 +187,14 @@ func (a *App) analyseDictation(ctx context.Context, j *store.Job) error {
 		input += fmt.Sprintf("\n\nAufgenommen in der Web-App, während offen war: %s. Gehört die Notiz erkennbar dazu, dorthin einsortieren.", k)
 	}
 	req := openai.Request{
-		Model: a.Cfg.DictationModel, Instructions: dictationInstructions, MaxOutputTokens: 3000,
+		Area: openai.AreaDictation, Instructions: dictationInstructions, MaxOutputTokens: 3000,
 		ReasoningEffort: a.Cfg.PlanReasoningEffort, SchemaName: "diktat", Schema: dictationSchema,
 		Input: fmt.Sprintf("Heute ist der %s. %s\n%s\n%s\n%s\n%s\nDiktat (#%d):\n%s", time.Now().Format("02.01.2006"), appointmentHint(j.RecordedAt), a.tagHint(), known, a.memoryHint(), a.noteContextHint(j), j.Nr, input),
 		// Eigene Suche in früheren Notizen, wenn Kontext fehlt.
 		Functions: []openai.Function{noteSearchTool}, Call: a.noteSearchCall(j.ID), MaxFunctionRounds: searchRoundsMax,
 	}
-	// Ohne Preise wäre das Kostenlimit nicht prüfbar: dann ohne Websuche.
-	if c := a.Cfg; c.PricePlanIn != nil && c.PricePlanOut != nil && c.PriceSearchCall != nil {
-		req.WebSearch, req.SearchContext, req.MaxToolCalls = true, "low", 1
-	}
+	// Kurze Websuche, wenn der Eintrag der Auswertung eine hat (sonst antwortet die KI aus ihrem Wissen).
+	req.WebSearch, req.SearchContext, req.MaxToolCalls = true, "low", 1
 	var full struct {
 		Dictation
 		RawTermin rawAppointment `json:"termin"`
@@ -206,7 +204,7 @@ func (a *App) analyseDictation(ctx context.Context, j *store.Job) error {
 	}
 	res, err := a.respond(ctx, req)
 	if err == nil {
-		addCost(&j.CostUSD, a.cost(res))
+		addCost(&j.CostUSD, res.Cost)
 		if err = json.Unmarshal([]byte(res.Text), &full); err != nil {
 			err = fmt.Errorf("Auswertung nicht lesbar: %w", err)
 		}
@@ -238,6 +236,7 @@ func (a *App) analyseDictation(ctx context.Context, j *store.Job) error {
 			d.Quellen = append(d.Quellen, Source{Titel: c.Title, URL: c.URL})
 		}
 	}
+	restrictExternalImages(d.Medien, res.Citations)
 	title := strings.Trim(store.Preview(d.Titel, 80), "\"„“. ")
 	if title == "" {
 		words := strings.Fields(j.Transcript)

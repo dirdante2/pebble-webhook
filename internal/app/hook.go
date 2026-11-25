@@ -217,8 +217,9 @@ func parseMultipart(contentType string, body []byte) (fields map[string]string, 
 		}
 		if part.FormName() == "audio" {
 			audio = data
-			audioMime = part.Header.Get("Content-Type")
-			if audioMime == "" {
+			// Nur Audio-Typen: der Typ wird beim Abspielen wieder ausgeliefert (nie text/html o. ä.).
+			audioMime = strings.ToLower(strings.TrimSpace(strings.Split(part.Header.Get("Content-Type"), ";")[0]))
+			if !strings.HasPrefix(audioMime, "audio/") && audioMime != "video/mp4" && audioMime != "video/webm" {
 				audioMime = "audio/mp4"
 			}
 		} else if len(data) <= 1<<20 {

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"pebble-webhook/internal/i18n"
+	"pebble-webhook/internal/whisper"
 )
 
 type Config struct {
@@ -37,25 +38,14 @@ type Config struct {
 	RingIDHeader      string // eigener Header der Pebble-App mit der Ring-ID
 	RingCapacityHours int    // Akku eines neuen Rings in Stunden Aufnahme
 
-	Transcription        string // openai | pebble
-	OpenAIKey            string
-	OpenAIBaseURL        string
-	TranscribeModel      string
-	TitleModel           string
-	PlanModel            string
-	DictationModel       string // Auswertung der Diktate; Preise wie PlanModel
+	WhisperModel         string // Modell der lokalen Transkription (whisper.Models)
+	WhisperKeepMinutes   int    // Modell so lange nach der letzten Aufnahme im RAM halten; 0 = dauerhaft
+	AI                   AI     // Zugänge und je Bereich die Reihenfolge der Anbieter (KI_ZUGAENGE, KI_BEREICHE)
+	ImagesEnabled        bool   // KI darf Bilder erzeugen (Bereich Bilder hat Einträge)
 	PlanReasoningEffort  string
-	PricePlanIn          *float64 // USD je 1 Mio. Tokens; nil = unbekannt
-	PricePlanOut         *float64
-	PriceSearchCall      *float64 // USD je Websuch-Aufruf
-	PriceTitleIn         *float64 // Kurztitel/Zuordnung, USD je 1 Mio. Tokens
-	PriceTitleOut        *float64
-	PriceTranscribeMin   *float64 // Transkription, USD je Minute
-	PriceImage           *float64 // erzeugtes Bild, USD je Bild
-	ImageModel           string   // Bilderzeugung (Images-API)
-	ImagesEnabled        bool     // KI darf Bilder erzeugen
-	YouTubeKey           string   // YouTube Data API v3 (Trailer); leer = Suche über die KI-Websuche
+	YouTubeKey           string // YouTube Data API v3 (Trailer); leer = Suche über die KI-Websuche
 	ResearchLimitUSD     float64
+	UserDailyLimitUSD    float64 // KI-Kosten je Nutzer und Tag (0 = kein Limit; Admins ausgenommen)
 	ResearchMaxOutTokens int
 
 	TrashRetentionDays  int // Papierkorb: so viele Tage nach dem Löschen endgültig entfernen
@@ -190,6 +180,13 @@ func FromValues(boot Bootstrap, lookup func(string) string) (*Config, error) {
 			}
 		case f.Kind == "choice" && !slices.Contains(f.Choices, v):
 			errs = append(errs, i18n.T(f.Label)+i18n.T(": unbekannter Wert"))
+		case f.Kind == "multi" && v != "keine":
+			for _, x := range strings.Split(v, ",") {
+				if !slices.Contains(f.Choices, x) {
+					errs = append(errs, i18n.T(f.Label)+i18n.T(": unbekannter Wert"))
+					break
+				}
+			}
 		}
 	}
 	str := func(k, def string) string {
@@ -220,17 +217,6 @@ func FromValues(boot Bootstrap, lookup func(string) string) (*Config, error) {
 		}
 		return n
 	}
-	price := func(k string) *float64 {
-		v := str(k, "")
-		if v == "" {
-			return nil
-		}
-		f, err := strconv.ParseFloat(v, 64)
-		if err != nil || f < 0 {
-			return nil // gemeldet von der Prüfung der Felder
-		}
-		return &f
-	}
 	mode := func(k, def string) string {
 		v := str(k, def)
 		if v != "diktat" && v != "planung" {
@@ -258,23 +244,10 @@ func FromValues(boot Bootstrap, lookup func(string) string) (*Config, error) {
 		RingIDHeader:      str("RING_ID_HEADER", "X-Ring-ID"),
 		RingCapacityHours: num("RING_CAPACITY_HOURS", 12),
 
-		Transcription:        str("TRANSCRIPTION", "openai"),
+		WhisperModel:         str("WHISPER_MODEL", whisper.DefaultModel),
+		WhisperKeepMinutes:   num("WHISPER_KEEP_MINUTES", 0),
 		Language:             i18n.Norm(str("LANGUAGE", "de")),
-		OpenAIKey:            need("OPENAI_API_KEY"),
-		OpenAIBaseURL:        strings.TrimRight(str("OPENAI_BASE_URL", "https://api.openai.com/v1"), "/"),
-		TranscribeModel:      str("OPENAI_TRANSCRIBE_MODEL", "gpt-4o-transcribe"),
-		TitleModel:           need("OPENAI_TITLE_MODEL"),
-		PlanModel:            need("OPENAI_PLAN_MODEL"),
 		PlanReasoningEffort:  strings.TrimPrefix(str("OPENAI_PLAN_REASONING_EFFORT", ""), "standard"),
-		PricePlanIn:          price("PRICE_PLAN_INPUT_PER_MTOK"),
-		PricePlanOut:         price("PRICE_PLAN_OUTPUT_PER_MTOK"),
-		PriceSearchCall:      price("PRICE_SEARCH_PER_CALL"),
-		PriceTitleIn:         price("PRICE_TITLE_INPUT_PER_MTOK"),
-		PriceTitleOut:        price("PRICE_TITLE_OUTPUT_PER_MTOK"),
-		PriceTranscribeMin:   price("PRICE_TRANSCRIBE_PER_MIN"),
-		PriceImage:           price("PRICE_IMAGE_PER_PICTURE"),
-		ImageModel:           str("OPENAI_IMAGE_MODEL", "gpt-image-1-mini"),
-		ImagesEnabled:        str("IMAGES_GENERATE", "aktiv") == "aktiv",
 		YouTubeKey:           str("YOUTUBE_API_KEY", ""),
 		ResearchMaxOutTokens: num("RESEARCH_MAX_OUTPUT_TOKENS", 6000),
 
@@ -314,9 +287,13 @@ func FromValues(boot Bootstrap, lookup func(string) string) (*Config, error) {
 	for _, k := range NotifyChannels {
 		c.Notify[k] = lookup(k) != "inaktiv"
 	}
-	c.DictationModel = str("OPENAI_DICTATION_MODEL", c.PlanModel)
-	if c.Transcription != "openai" && c.Transcription != "pebble" {
-		errs = append(errs, i18n.T("TRANSCRIPTION muss openai oder pebble sein"))
+	ai, aiErrs := parseAI(str)
+	errs = append(errs, aiErrs...)
+	ai.normalize()
+	errs = append(errs, ai.check()...)
+	c.AI, c.ImagesEnabled = ai, len(ai.Active(AreaImage)) > 0
+	if _, ok := whisper.ByID(c.WhisperModel); !ok {
+		errs = append(errs, i18n.T("WHISPER_MODEL ist kein bekanntes Modell"))
 	}
 	limit := str("RESEARCH_LIMIT_USD", "0.50")
 	f, err := strconv.ParseFloat(limit, 64)
@@ -324,6 +301,11 @@ func FromValues(boot Bootstrap, lookup func(string) string) (*Config, error) {
 		errs = append(errs, i18n.T("RESEARCH_LIMIT_USD ist keine positive Zahl"))
 	}
 	c.ResearchLimitUSD = f
+	if v, err := strconv.ParseFloat(str("USER_DAILY_LIMIT_USD", "2"), 64); err != nil || v < 0 {
+		errs = append(errs, i18n.T("USER_DAILY_LIMIT_USD ist keine Zahl ab 0"))
+	} else {
+		c.UserDailyLimitUSD = v
+	}
 	if c.PublicURL != "" {
 		u, err := url.Parse(c.PublicURL)
 		switch {
@@ -346,12 +328,6 @@ func FromValues(boot Bootstrap, lookup func(string) string) (*Config, error) {
 	}
 	if !headerRe.MatchString(c.HookTokenHeader) {
 		errs = append(errs, i18n.T("Header für den Token: nur Buchstaben, Ziffern und Bindestriche"))
-	}
-	for _, k := range []string{"OPENAI_TRANSCRIBE_MODEL", "OPENAI_TITLE_MODEL", "OPENAI_PLAN_MODEL", "OPENAI_DICTATION_MODEL"} {
-		if v := str(k, ""); v != "" && !modelRe.MatchString(v) {
-			f, _ := FieldByKey(k)
-			errs = append(errs, i18n.T(f.Label)+i18n.T(": ungültiger Modellname"))
-		}
 	}
 	if c.VAPIDSubject != "" && !strings.HasPrefix(c.VAPIDSubject, "mailto:") && !strings.HasPrefix(c.VAPIDSubject, "https://") {
 		errs = append(errs, i18n.T("Kontakt für Web-Push: mailto:… oder https://…"))
