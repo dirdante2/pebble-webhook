@@ -911,13 +911,8 @@ func (a *App) handleStatus(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, "speicher", "Datenbankfehler")
 		return
 	}
-	words, err := a.DB.TranscriptWords(store.Now() - wordDays*86_400_000)
-	if err != nil {
-		writeErr(w, 500, "speicher", "Datenbankfehler")
-		return
-	}
 	out := map[string]any{
-		"version": a.Version, "audio_unbekannt": a.scanAudio(), "auftraege": counts.Total, "audio_dateien": a.audioStats(), "auftraege_teile": map[string]int{"audio": counts.Audio, "web": counts.Web, "nur_text": counts.TextOnly, "notizen": counts.Notes, "runden": counts.Rounds, "termine": counts.Appointments, "planungen": counts.Plannings}, "warteschlange": counts.Open, "fehlgeschlagen": counts.Failed,
+		"version": a.Version, "audio_unbekannt": a.scanAudio(), "warteschlange": counts.Open, "fehlgeschlagen": counts.Failed,
 		"einstellungen": map[string]any{
 			"halten": a.Cfg.TriggerSingle, "doppelklick_halten": a.Cfg.TriggerDouble, "transkription": a.Cfg.Transcription,
 			"transkriptions_modell": a.Cfg.TranscribeModel, "recherche_modell": a.Cfg.PlanModel,
@@ -1012,6 +1007,32 @@ func (a *App) handleStatus(w http.ResponseWriter, r *http.Request) {
 	out["probleme"] = list
 	subs, _ := a.DB.PushSubs()
 	out["push_abos"] = len(subs)
+	writeJSON(w, 200, out)
+}
+
+// handleIntake: „Meine Daten“ auf der Ringnutzung – nur aktive Einträge, die der Ring über den Webhook geschickt hat.
+func (a *App) handleIntake(w http.ResponseWriter, r *http.Request) {
+	c, err := a.DB.RingIntake()
+	if err != nil {
+		writeErr(w, 500, "speicher", "Datenbankfehler")
+		return
+	}
+	words, err := a.DB.TranscriptWords(store.Now() - wordDays*86_400_000)
+	if err != nil {
+		writeErr(w, 500, "speicher", "Datenbankfehler")
+		return
+	}
+	files := a.audioStats(c.AudioPaths)
+	rec := map[string]any{"anzahl": c.Audio}
+	if g, ok := files["schnitt_groesse"]; ok {
+		rec["schnitt_groesse"] = g
+	}
+	if c.WithSeconds > 0 {
+		rec["schnitt_sekunden"], rec["gesamt_sekunden"] = c.Seconds/float64(c.WithSeconds), c.Seconds
+	}
+	out := map[string]any{"auftraege": c.Total, "audio_dateien": rec, "warteschlange": c.Open, "fehlgeschlagen": c.Failed,
+		"auftraege_teile": map[string]int{"audio": c.Audio, "nur_text": c.TextOnly, "notizen": c.Notes, "termine": c.Appointments,
+			"runden": c.Rounds, "planungen": c.Plannings}}
 	if len(words) > 0 {
 		lo, hi, sum := words[0], words[0], 0
 		for _, n := range words {

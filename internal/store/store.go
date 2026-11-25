@@ -1156,9 +1156,73 @@ func (s *Store) Counts() (c Counts, err error) {
 	return
 }
 
+// RingIntake: „Meine Daten“ – aktive Einträge, die der Ring über den Webhook geschickt hat (ring_recordings, alle Ringe),
+// ohne Fehlaufnahmen und Gelöschte; die Ringdaten zählen dagegen jede Aufnahme.
+type RingIntake struct {
+	Total, Open, Failed int
+	Audio, TextOnly     int // vorhandene Einträge mit Aufnahme bzw. nur Pebble-Text
+	Notes, Appointments int // Notizen ohne Termin; Notizen mit Termin
+	Rounds, Plannings   int // Planungsrunden; Planungen mit Ring-Runde
+	WithSeconds         int // aktive Aufnahmen mit bekannter Länge
+	Seconds             float64
+	AudioPaths          []string
+}
+
+func (s *Store) RingIntake() (c RingIntake, err error) {
+	rows, err := s.DB.Query(`SELECT r.mode, r.empty, r.deleted_at, r.seconds, j.id IS NOT NULL, COALESCE(j.state, ''), COALESCE(j.failed, 0),
+		COALESCE(j.audio_path, ''), COALESCE(j.termin_at, 0), COALESCE(j.planning_id, '')
+		FROM ring_recordings r LEFT JOIN jobs j ON j.id = r.job_id`)
+	if err != nil {
+		return c, err
+	}
+	defer rows.Close()
+	plannings := map[string]bool{}
+	for rows.Next() {
+		var mode, state, audio, planning string
+		var empty, failed, exists bool
+		var deleted, termin int64
+		var secs float64
+		if err := rows.Scan(&mode, &empty, &deleted, &secs, &exists, &state, &failed, &audio, &termin, &planning); err != nil {
+			return c, err
+		}
+		if empty || deleted > 0 || !exists {
+			continue
+		}
+		c.Total++
+		if failed {
+			c.Failed++
+		} else if state != StateDone {
+			c.Open++
+		}
+		if audio != "" {
+			c.Audio++
+			c.AudioPaths = append(c.AudioPaths, audio)
+			if secs >= 0 {
+				c.WithSeconds++
+				c.Seconds += secs
+			}
+		} else {
+			c.TextOnly++
+		}
+		switch {
+		case mode == "planung":
+			c.Rounds++
+			if planning != "" {
+				plannings[planning] = true
+			}
+		case termin > 0:
+			c.Appointments++
+		default:
+			c.Notes++
+		}
+	}
+	c.Plannings = len(plannings)
+	return c, rows.Err()
+}
+
 // TranscriptWords: Wortzahl je Ring-Aufnahme mit Transkript ab since (ohne Web-App-Aufnahmen, Fehlaufnahmen, Tests und Gelöschte).
 func (s *Store) TranscriptWords(since int64) ([]int, error) {
-	rows, err := s.DB.Query(`SELECT transcript FROM jobs WHERE deleted_at = 0 AND audio_path != '' AND source != 'web' AND is_test = 0 AND empty = 0 AND transcript != '' AND received_at >= ?`, since)
+	rows, err := s.DB.Query(`SELECT transcript FROM jobs WHERE deleted_at = 0 AND audio_path != '' AND source = 'pebble' AND is_test = 0 AND empty = 0 AND transcript != '' AND received_at >= ?`, since)
 	if err != nil {
 		return nil, err
 	}

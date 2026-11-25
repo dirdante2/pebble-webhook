@@ -349,7 +349,8 @@ Token-Routen (alles andere bleibt bei der Passkey-Sitzung, kein Löschen): `GET 
 4. Erste Ring-ID für einen Ring ohne ID → übernommen. Andere ID als der aktive Ring → Hinweis auf allen Seiten, „Ring tauschen anwenden“ (`POST /api/ring/tauschen` mit `uebernehmen`) → neuer Ring ab der ersten Aufnahme mit der neuen ID.
 5. Verbrauch erreicht 60/80/95/100 % der Kapazität → Push, Hinweis auf allen Seiten bis „Bestätigen“ (`POST /api/ring/bestaetigt`); bei 100 % „+30 min“ (`plus`) erhöht die Kapazität dauerhaft.
 6. Von Hand: `/status/ring/tauschen` (Anleitung, ID, Kapazität) → bisheriger Ring endet jetzt. Ring bearbeiten: `PUT /api/ring/{nr}`.
-7. Auswertung `GET /api/ring[?ring=N]`: Summen, Notizen/Planungen, Tastendrücke, Monate, Vorhersage 80/100 % (Mittel der letzten 30 Tage), Vergleich aller Ringe. Erster Start: Ring 1 aus dem Bestand (Einträge samt Papierkorb, Audiodateien ohne Eintrag).
+7. Auswertung `GET /api/ring[?ring=N]`: Summen, Notizen/Planungen, Tastendrücke, Tage (Oberfläche fasst zu Woche/Monat zusammen), Vorhersage 80/100 % (Mittel der letzten 30 Tage), Vergleich aller Ringe. Erster Start: Ring 1 aus dem Bestand (Einträge samt Papierkorb, Audiodateien ohne Eintrag).
+8. „Meine Daten“ auf `/status/ring`: `GET /api/eingaenge` → `ring_recordings` (alle Ringe) mit `jobs` verbunden, nur aktive Einträge (ohne Fehlaufnahmen, Gelöschte, Entfernte) → Zahl, Aufnahmen (Länge aus `ring_recordings`, Größe aus Dateien), Notizen/Termine/Planungsrunden, Wörter je Aufnahme (30 Tage).
 
 ## Notizen aus fremden Quellen: Joplin-Rückmeldungen (seit 23.11.2026)
 
@@ -373,12 +374,6 @@ Token-Routen (alles andere bleibt bei der Passkey-Sitzung, kein Löschen): `GET 
 6. Joplin: Marker entfernt, Trailer als Links unter „## Trailer“; Bilder/Diagramme nur in der Web-App. Suche ignoriert Medienfelder.
 7. Aufräumen (`Cleanup`, täglich): Bilder, auf die keine Auswertung/kein Planungsstand mehr zeigt (auch Papierkorb), älter als 24 h → gelöscht.
 8. Backup mit Aufnahmen (Format 3): `medien/<id>/audio/…` und `medien/<id>/bilder/…`. Format 2 (`audio/<id>/…`) wird beim Wiederherstellen nach `MEDIA_DIR/<id>/audio/` gelegt.
-
-## Trailer nachtragen (seit 24.11.2026)
-
-1. Status → Trailer → „5 nachtragen“ → `POST /api/medien/trailer-nachtragen?max=5`.
-2. Kandidaten: fertige Notizen (neueste zuerst) ohne Trailer, deren Punkte bzw. Eckdaten Regie/Idee/Schauspieler/Staffeln tragen → Suchbegriff „Titel Jahr“.
-3. Antwort sofort `{gestartet, offen}`; im Hintergrund je Notiz Trailer suchen (wie oben), Auswertung frisch lesen, Medien anhängen, Joplin-Merker setzen, Live-Meldung. Läuft schon ein Durchgang → 409.
 
 ## Umzug MEDIA_DIR (4.0)
 

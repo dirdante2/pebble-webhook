@@ -9,6 +9,20 @@ Version numbers X.Y.Z:
 
 Own builds show X.Y.Z.A: **A** is a local build counter (one per deployed change, starting at 1 for every new X.Y.Z); it never appears in Git or releases, so one version can collect several changes.
 
+## [4.3.0] - 2026-11-25
+
+### New
+- Status → Connected apps: button "Connect an app" with address and steps for Claude, ChatGPT and Claude Code.
+- Ring usage: recording time per day, week or month.
+
+### Changed
+- Ring page renamed to "Ring usage"; card "My data" on top (only active entries sent by the ring).
+- Ring usage: misfires and deleted as small tiles; "Swap ring" always at the bottom of the screen.
+- Status: "Received" card moved to Ring usage.
+
+### Removed
+- Status: adding trailers to older film and series notes.
+
 ## [4.2.0] - 2026-11-24
 
 ### New

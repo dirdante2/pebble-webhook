@@ -328,24 +328,21 @@ var (
 	secondsCache = map[string]float64{} // Pfad+Größe → Länge; einmal gelesen, im Speicher gehalten
 )
 
-// audioStats: Zahl, Durchschnittsgröße und -länge der Aufnahmen des Nutzers (Länge nur m4a/mp4).
-func (a *App) audioStats() map[string]any {
+// audioStats: Zahl, Durchschnittsgröße und -länge der genannten Aufnahmen (Länge nur m4a/mp4; fehlende Dateien zählen nicht).
+func (a *App) audioStats(paths []string) map[string]any {
 	var n, withLen int
 	var bytes int64
 	var secs float64
-	filepath.WalkDir(a.audioRoot(), func(p string, d fs.DirEntry, err error) error {
-		if err != nil || !d.Type().IsRegular() || audioMimeOf(p) == "" {
-			return nil
-		}
-		fi, err := d.Info()
-		if err != nil {
-			return nil
+	for _, p := range paths {
+		fi, err := os.Stat(p)
+		if err != nil || !fi.Mode().IsRegular() || audioMimeOf(p) == "" {
+			continue
 		}
 		n++
 		bytes += fi.Size()
 		ext := strings.ToLower(filepath.Ext(plainName(p)))
 		if ext != ".m4a" && ext != ".mp4" {
-			return nil
+			continue
 		}
 		key := p + "|" + strconv.FormatInt(fi.Size(), 10)
 		secondsMu.Lock()
@@ -361,8 +358,7 @@ func (a *App) audioStats() map[string]any {
 			withLen++
 			secs += s
 		}
-		return nil
-	})
+	}
 	out := map[string]any{"anzahl": n}
 	if n > 0 {
 		out["schnitt_groesse"] = bytes / int64(n)

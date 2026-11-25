@@ -341,48 +341,49 @@ func (a *App) ringForecast(g *store.Ring, used float64) (map[string]any, error) 
 	return out, nil
 }
 
-type ringMonth struct {
-	Month   string  `json:"monat"` // JJJJ-MM
+type ringDay struct {
+	Day     string  `json:"tag"` // JJJJ-MM-TT
 	Diktat  float64 `json:"diktat"`
 	Planung float64 `json:"planung"`
 	Count   int     `json:"anzahl"`
 }
 
-// ringMonths: Aufnahmezeit je Monat (Ortszeit) eines Rings, lückenlos vom ersten bis zum letzten Monat.
-func (a *App) ringMonths(nr int64, until int64) ([]ringMonth, error) {
+// ringDays: Aufnahmezeit je Tag (Ortszeit) eines Rings, lückenlos vom ersten Aufnahmetag bis until.
+// Wochen und Monate fasst die Oberfläche daraus zusammen.
+func (a *App) ringDays(nr int64, until int64) ([]ringDay, error) {
 	rows, err := a.DB.RingRecordings(nr)
 	if err != nil || len(rows) == 0 {
-		return []ringMonth{}, err
+		return []ringDay{}, err
 	}
-	by := map[string]*ringMonth{}
+	by := map[string]*ringDay{}
 	for _, r := range rows {
-		k := time.UnixMilli(r.ReceivedAt).Format("2006-01")
-		m := by[k]
-		if m == nil {
-			m = &ringMonth{Month: k}
-			by[k] = m
+		k := time.UnixMilli(r.ReceivedAt).Format("2006-01-02")
+		d := by[k]
+		if d == nil {
+			d = &ringDay{Day: k}
+			by[k] = d
 		}
-		m.Count++
+		d.Count++
 		if r.Seconds > 0 {
 			if r.Mode == "planung" {
-				m.Planung += r.Seconds
+				d.Planung += r.Seconds
 			} else {
-				m.Diktat += r.Seconds
+				d.Diktat += r.Seconds
 			}
 		}
 	}
 	first := time.UnixMilli(rows[0].ReceivedAt)
-	cur := time.Date(first.Year(), first.Month(), 1, 0, 0, 0, 0, time.Local)
+	cur := time.Date(first.Year(), first.Month(), first.Day(), 0, 0, 0, 0, time.Local)
 	end := time.UnixMilli(until)
-	out := []ringMonth{}
+	out := []ringDay{}
 	for !cur.After(end) {
-		k := cur.Format("2006-01")
-		if m := by[k]; m != nil {
-			out = append(out, *m)
+		k := cur.Format("2006-01-02")
+		if d := by[k]; d != nil {
+			out = append(out, *d)
 		} else {
-			out = append(out, ringMonth{Month: k})
+			out = append(out, ringDay{Day: k})
 		}
-		cur = cur.AddDate(0, 1, 0)
+		cur = cur.AddDate(0, 0, 1)
 	}
 	return out, nil
 }
@@ -406,7 +407,7 @@ func (a *App) ringView(g *store.Ring) (map[string]any, error) {
 	return v, nil
 }
 
-// handleRing: Auswertung – aktiver bzw. gewählter Ring (?ring=Nr) mit Monaten und Vorhersage, alle Ringe zum Vergleich.
+// handleRing: Auswertung – aktiver bzw. gewählter Ring (?ring=Nr) mit Tagesverlauf und Vorhersage, alle Ringe zum Vergleich.
 func (a *App) handleRing(w http.ResponseWriter, r *http.Request) {
 	ringMu.Lock()
 	_, err := a.ensureRingLocked()
@@ -448,12 +449,12 @@ func (a *App) handleRing(w http.ResponseWriter, r *http.Request) {
 	if sel.EndedAt > 0 {
 		until = sel.EndedAt
 	}
-	months, err := a.ringMonths(sel.Nr, until)
+	days, err := a.ringDays(sel.Nr, until)
 	if err != nil {
 		writeErr(w, 500, "speicher", "Datenbankfehler")
 		return
 	}
-	out := map[string]any{"ring": selView, "monate": months, "ringe": all, "aktiv": a.ringSummary(),
+	out := map[string]any{"ring": selView, "verlauf": days, "ringe": all, "aktiv": a.ringSummary(),
 		"vorgabe_stunden": a.Cfg.RingCapacityHours, "header": a.Cfg.RingIDHeader, "plus_minuten": ringExtraSeconds / 60}
 	if sel.EndedAt == 0 {
 		f, err := a.ringForecast(sel, selView["sekunden"].(float64))

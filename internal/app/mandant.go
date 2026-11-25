@@ -77,7 +77,6 @@ type App struct {
 	stopped chan struct{}
 
 	trainNow  atomic.Bool    // Lernlauf von Hand angefordert
-	mediaBusy atomic.Bool    // Trailer werden gerade nachgetragen
 	sortFails map[string]int // Planung → gescheiterte Versuche beim Einsortieren (nur im Worker)
 	joplinErr string
 	joplinAt  int64

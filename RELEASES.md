@@ -4,6 +4,17 @@ Summarised notes for **beta** and **stable** releases. Each section lists only w
 
 A tag `vX.Y.Z-stable` (stable; before 1.33.5 `vX.Y.Z`) or `vX.Y.Z-beta` (beta) needs a section `## [X.Y.Z]` or `## [X.Y.Z-beta]` here; the release workflow uses it as the release notes.
 
+## [4.3.0] - 2026-11-25
+
+### Ring usage
+- Renamed from Ring; card "My data" on top with only the active entries sent by the ring.
+- Recording time per day, week or month; misfires and deleted as small tiles.
+- "Swap ring" always at the bottom of the screen.
+
+### Status
+- "Connect an app": MCP address and steps for Claude, ChatGPT and Claude Code.
+- Removed: adding trailers to older notes.
+
 ## [4.2.0] - 2026-11-24
 
 First stable release since 2.3.0 – everything below lasts since then.

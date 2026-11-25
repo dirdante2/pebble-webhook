@@ -153,6 +153,10 @@ textarea { min-height: 9rem; resize: vertical; }
 .kachel:first-child { grid-column: 1 / -1; }
 .kachel { background: var(--flaeche); border: 1px solid var(--linie); border-radius: var(--radius); padding: .75rem .9rem; }
 .kachel .zahl { font-size: 1.55rem; font-weight: 700; line-height: 1.3; font-variant-numeric: tabular-nums; }
+.kacheln.paar { margin-top: .6rem; }
+.kacheln.paar .kachel:first-child { grid-column: auto; }
+.kachel.klein { padding: .55rem .8rem; }
+.kachel.klein .zahl { font-size: 1.2rem; }
 .diagramm { display: block; width: 100%; height: auto; margin-top: .4rem; }
 .diagramm .s1, .legende .s1 { fill: var(--s1); background: var(--s1); }
 .diagramm .s2, .legende .s2 { fill: var(--s2); background: var(--s2); }
@@ -313,6 +317,7 @@ dialog.drawer[open] { animation: hoch .18s ease-out; }
 }
 .wahlleiste[hidden], .werkzeug[hidden], .btn-group[hidden] { display: none; }
 .wahlleiste .btn { flex: 1 1 auto; max-width: 14rem; }
+.wahlplatz { height: 4.5rem; } /* Platz unter dem Inhalt, damit die feste Leiste nichts verdeckt */
 
 /* Gedächtnis */
 .gedkarte { overflow-wrap: anywhere; }
@@ -556,6 +561,7 @@ a.tagchip { text-decoration: none; }
 .themeknopf { display: inline-flex; align-items: center; justify-content: center; width: 2.2rem; height: 2.2rem; border-radius: 50%; color: var(--leise); }
 .themeknopf:hover, .themeknopf:focus-visible { color: var(--akzent); background: var(--bg); }
 .themeknopf svg { width: 1.3rem; height: 1.3rem; }
+.menueunter.mehr { width: 100%; border: 0; background: none; font: inherit; font-size: .95rem; color: var(--akzent); cursor: pointer; text-align: left; }
 .menueunter.abmelden { width: 100%; border: 0; background: none; font: inherit; font-size: .95rem; color: var(--schlecht); cursor: pointer; text-align: left; padding-left: 1.1rem; }
 .lpende { margin-left: auto; flex: none; display: inline-flex; align-items: center; gap: .4rem; }
 .neupunkt { width: .6rem; height: .6rem; border-radius: 50%; background: #d9c36a; flex: none; }
@@ -655,10 +661,7 @@ dialog.logblatt h2 { margin-top: 0; }
 .speicherkarte .eingangszahl { font-size: 1.5rem; font-weight: 700; line-height: 1; }
 .speicherdetails { display: flex; flex-direction: column; gap: .6rem; margin-top: .8rem; padding-top: .6rem; border-top: 1px solid var(--linie); }
 .speicherdetails .pfadzeile { margin-top: .1rem; }
-.eingangskarte summary { list-style: none; cursor: pointer; color: var(--text); display: flex; flex-direction: column; gap: .15rem; }
-.eingangskarte summary::-webkit-details-marker { display: none; }
-.eingangskarte summary .zeile strong::after { content: " ▸"; color: var(--leise); font-weight: 400; }
-.eingangskarte[open] summary .zeile strong::after { content: " ▾"; }
+.eingangskopf { display: flex; flex-direction: column; gap: .15rem; }
 .zahlkacheln { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .4rem; margin-top: .5rem; }
 .zahlkachel { display: flex; align-items: baseline; gap: .5rem; padding: .45rem .65rem; border-radius: .5rem; background: var(--bg); border: 1px solid var(--linie); min-width: 0; }
 .zahlkachel strong { font-size: 1.15rem; line-height: 1.2; }

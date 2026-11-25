@@ -502,6 +502,7 @@ const routen = [
   [/^\/status\/joplin$/, 'joplin', zeigeJoplin],
   [/^\/status\/benachrichtigungen$/, 'benachrichtigungen', zeigeBenachrichtigungen],
   [/^\/status\/kalender$/, 'kalender', zeigeKalender],
+  [/^\/status\/mcp$/, 'mcp', zeigeMcpAnleitung],
   [/^\/anmelden$/, 'anmelden', zeigeAnmelden],
   [/^\/verbinden$/, 'verbinden', zeigeVerbinden],
   [/^\/ersteinrichtung$/, 'ersteinrichtung', zeigeErsteinrichtung],
@@ -2741,40 +2742,6 @@ async function zeigeStatus() {
     if (aktuell?.name !== 'status') return;
     const abo = await pushAbo().catch(() => null);
     const pushDa = 'PushManager' in window;
-    // Eingänge: zugeklappt Zahl, Aufnahmen und nur Auffälliges (in Arbeit, Fehler); aufgeklappt Kreis nach Art.
-    const eingaenge = (s) => {
-      const t = s.auftraege_teile || {}, d = s.audio_dateien || {};
-      const kachel = (n, name, art) => T`<div class="zahlkachel ${art}"><strong>${n}</strong><span>${esc(name)}</span></div>`;
-      const auffaellig = [s.warteschlange ? kachel(s.warteschlange, tx('in Arbeit'), 'warn') : '', s.fehlgeschlagen ? kachel(s.fehlgeschlagen, tx('fehlgeschlagen'), 'schlecht') : ''].join('');
-      const teile = [[t.notizen - t.termine, tx('Notizen'), 'diktat'], [t.termine, tx('Termine'), 'termin'], [t.runden, tx('Planungsrunden'), 'planung']].filter(([n]) => n > 0);
-      const summe = teile.reduce((a, [n]) => a + n, 0);
-      // Ring aus Kreisbögen (SVG-Attribute statt Inline-Styles: die CSP erlaubt keine style-Attribute).
-      let start = 0;
-      const ring = summe ? teile.map(([n, , art]) => {
-        const anteil = (n / summe) * 100, bogen = T`<circle class="ring ${art}" r="15.9155" cx="18" cy="18" stroke-dasharray="${anteil} ${100 - anteil}" stroke-dashoffset="${25 - start}"/>`;
-        start += anteil;
-        return bogen;
-      }).join('') : '';
-      return T`<details${aufAttr('eingaenge')} class="karte eingangskarte"><summary><span class="zeile kartentitel"><strong>Eingänge</strong><span class="eingangszahl">${s.auftraege}</span></span>
-          ${d.anzahl ? T`<span class="leise">${d.anzahl} Aufnahmen${d.schnitt_groesse ? T` · Ø ${groesse(d.schnitt_groesse)}` : ''}${d.schnitt_sekunden ? T` · Ø ${dauer(d.schnitt_sekunden)} · zusammen ${dauer(d.gesamt_sekunden)}` : ''}</span>` : ''}
-          ${auffaellig ? T`<span class="zahlkacheln">${auffaellig}</span>` : ''}</summary>
-        <div class="eingangsdetail">${summe ? T`<svg class="ringdiagramm" viewBox="-2 -2 40 40" role="img" aria-label="${esc(teile.map(([n, name]) => `${n} ${name}`).join(', '))}">${ring}</svg>` : ''}
-          <ul class="legende">${teile.map(([n, name, art]) => T`<li><span class="punkt-farbe ${art}"></span>${esc(name)}<strong>${n}</strong></li>`).join('')}</ul></div>
-        ${woerter(s.woerter)}
-        <p class="leise">Planungen: ${t.planungen} (${t.runden} Runden) · ${t.audio} mit Aufnahme · ${t.web} Web-Antworten${t.nur_text ? T` · ${t.nur_text} nur Pebble-Text` : ''}</p></details>`;
-    };
-    // Wörter je Aufnahme (letzte Tage): Balken über die volle Breite von Min bis Max, Strich bei Ø.
-    // Lage als data-pos; setzeWortlage setzt sie per JS (die CSP erlaubt keine style-Attribute).
-    const woerter = (w) => {
-      if (!w) return '';
-      const zahl = (v) => Math.round(v).toLocaleString(LOCALE), span = w.max - w.min;
-      const pos = span ? ((w.schnitt - w.min) / span) * 100 : 50;
-      return T`<div class="wortblock"><div class="zeile"><strong>${esc(tx('Wörter je Aufnahme'))}</strong><span class="leise">${esc(tx('{0} Tage · {1} Transkripte', w.tage, w.anzahl))}</span></div>
-        <div class="wortskala" role="img" aria-label="${esc(tx('Wörter je Aufnahme: Min {0}, Ø {1}, Max {2}', zahl(w.min), zahl(w.schnitt), zahl(w.max)))}">
-          <span class="wortschnitt" data-pos="${pos}">${esc(tx('Ø {0}', zahl(w.schnitt)))}</span>
-          <span class="wortbalken"><i data-pos="${pos}"></i></span>
-          <span class="wortgrenzen"><span>${esc(tx('Min {0}', zahl(w.min)))}</span><span>${esc(tx('Max {0}', zahl(w.max)))}</span></span></div></div>`;
-    };
     // Speicher: zugeklappt je Ablage Name, belegt und Balken; aufgeklappt Pfad und frei/gesamt.
     const balken = (p) => T`<meter class="balken${p.knapp ? ' knapp' : ''}" min="0" max="${p.gesamt}" value="${p.gesamt - p.frei}" aria-label="${esc(tx('{0} von {1} belegt', groesse(p.gesamt - p.frei), groesse(p.gesamt)))}"></meter>`;
     // Eigene Ablage: ein Balken über den ganzen Mount – Akzent = eigener Anteil, grau = übrige Nutzer und Sonstiges,
@@ -2858,7 +2825,6 @@ async function zeigeStatus() {
         ${s.audio_unbekannt.length > 1 ? T('<div class="leiste"><button class="btn haupt" data-import-alle="1">Alle importieren</button></div>') : ''}` : ''}
       ${s.joplin.aktiv ? T`<dl><dt>Joplin</dt><dd>${joplin}</dd></dl>` : ''}
       ${s.joplin.aktiv ? T('<div class="leiste"><button class="btn klein" data-a="pruefen">Joplin jetzt prüfen</button></div>') : ''}
-      ${eingaenge(s)}
       ${(s.speicher || []).length ? speicher(s.speicher, s.aufraeumen, s.speicher_nutzer) : ''}
       ${system(sy)}
       ${s.probleme.length ? T`<h2>Aufträge mit Fehlern</h2>${s.fehlgeschlagen ? T('<div class="leiste"><button class="btn gefahr" data-a="fehler-weg">Alle fehlerhaften löschen</button></div>') : ''}${s.probleme.map(karte).join('')}` : ''}
@@ -2874,10 +2840,9 @@ async function zeigeStatus() {
       <h2>Verbundene Apps (MCP)</h2>
       ${o.apps.length ? o.apps.map((x) => T`<div class="karte"><div class="zeile"><span><strong>${esc(x.name)}</strong></span><button class="btn klein gefahr" data-app="${esc(x.id)}">Trennen</button></div>
         <div class="leise">verbunden ${zeit(x.angelegt)}${x.zuletzt ? T` · zuletzt genutzt ${zeit(x.zuletzt)}` : ''}</div></div>`).join('') : T('<p class="leise">Keine. Claude, ChatGPT & Co. verbinden sich über die Adresse <code>/mcp</code> dieses Dienstes und fragen hier nach Freigabe.</p>')}
+      <div class="leiste"><a class="btn" href="/status/mcp">${esc(tx('App verbinden (MCP-Server hinzufügen)'))}</a></div>
       <h2>${esc(tx('Kalender-Abo'))}</h2>
       <a class="karte" href="/status/kalender"><strong>${esc(tx('Termine in Google, Apple oder Outlook abonnieren'))}</strong><br><span class="leise">${esc(tx('Link und Anleitung'))}</span></a>
-      <h2>Trailer</h2>
-      <div class="karte"><div class="zeile"><span>${esc(tx('Trailer für ältere Film- und Serien-Notizen suchen'))}</span><button class="btn klein" data-a="trailer">${esc(tx('5 nachtragen'))}</button></div></div>
       <h2>Zugang und Sicherheit</h2>
       <a class="karte" href="/status/zugang"><strong>API-Token und Wiederherstellungscode</strong><br><span class="leise">Maschinenzugang für Skripte, Code für deine verschlüsselten Daten</span></a>
       <div class="leiste"><button class="btn gefahr" data-a="abmelden">Abmelden</button></div>
@@ -2918,13 +2883,6 @@ async function zeigeStatus() {
         return laden();
       }
       switch (b.dataset.a) {
-        case 'trailer': {
-          b.disabled = true;
-          const d = await api('/api/medien/trailer-nachtragen?max=5', { method: 'POST' });
-          melde(d.gestartet ? tx('{0} Notizen bekommen Trailer, {1} noch ohne', d.gestartet, d.offen) : tx('Keine Film- oder Serien-Notiz ohne Trailer'));
-          b.disabled = false;
-          return;
-        }
         case 'fehler-weg': {
           if (!confirm(tx('Alle dauerhaft fehlgeschlagenen und leeren Einträge in den Papierkorb legen?'))) return;
           b.disabled = true;
@@ -3171,25 +3129,150 @@ const setzeWortlage = (wurzel) => wurzel.querySelectorAll('.wortskala [data-pos]
 });
 const setzeBalken = (wurzel) => wurzel.querySelectorAll('.balken i[data-anteil]').forEach((el) => { el.style.width = `${Math.max(0, Math.min(100, Number(el.dataset.anteil)))}%`; });
 
+// Ring-Verlauf: Aufnahmezeit je Monat, Woche oder Tag als Liniendiagramm (Notizen, Planungen).
+const RING_ZEITRAEUME = [['tag', 'Tag'], ['woche', 'Woche'], ['monat', 'Monat']];
+// ISO-Kalenderwoche und Montag einer Woche zu „JJJJ-MM-TT“ (Ortszeit, mittags gegen Zeitumstellung).
+function isoWoche(iso) {
+  const d = new Date(`${iso}T12:00:00`), wt = (d.getDay() + 6) % 7;
+  const montag = new Date(d); montag.setDate(d.getDate() - wt);
+  const donnerstag = new Date(montag); donnerstag.setDate(montag.getDate() + 3);
+  const jan4 = new Date(donnerstag.getFullYear(), 0, 4, 12);
+  const kw = 1 + Math.round((donnerstag - jan4) / 604800000 + ((jan4.getDay() + 6) % 7) / 7 - 3 / 7);
+  const z = (n) => String(n).padStart(2, '0');
+  return { kw, montag: `${montag.getFullYear()}-${z(montag.getMonth() + 1)}-${z(montag.getDate())}` };
+}
+// Tage zu Zeitraum zusammenfassen; Tage sind lückenlos, daher auch Wochen und Monate.
+function ringZeitraum(tage, art) {
+  if (art === 'tag') return tage.map((t) => ({ ...t, name: kurzTag(t.tag, false), lang: kurzTag(t.tag, true) }));
+  const out = [], by = new Map();
+  for (const t of tage) {
+    let k, name, lang;
+    if (art === 'woche') {
+      const w = isoWoche(t.tag);
+      k = w.montag; name = tx('KW {0}', w.kw);
+      const so = new Date(`${w.montag}T12:00:00`); so.setDate(so.getDate() + 6);
+      lang = tx('KW {0} ({1} – {2})', w.kw, kurzTag(w.montag, false), so.toLocaleDateString(LOCALE, { day: '2-digit', month: '2-digit' }));
+    } else { k = t.tag.slice(0, 7); name = monatName(k); lang = new Date(`${k}-15T12:00:00`).toLocaleDateString(LOCALE, { month: 'long', year: 'numeric' }); }
+    let e = by.get(k);
+    if (!e) { e = { tag: k, name, lang, diktat: 0, planung: 0, anzahl: 0 }; by.set(k, e); out.push(e); }
+    e.diktat += t.diktat; e.planung += t.planung; e.anzahl += t.anzahl;
+  }
+  return out;
+}
+// Liniendiagramm mit zwei Reihen (Notizen s1, Planungen s2); Trefferflächen je Punkt zum Ablesen.
+function ringLinien(punkte, id, titel) {
+  const B = 340, H = 170, links = 46, unten = 22, oben = 8, rechts = 8;
+  const plotB = B - links - rechts, plotH = H - unten - oben, n = punkte.length;
+  const { oben: max, schritte } = achseZeit(Math.max(...punkte.map((t) => Math.max(t.diktat, t.planung))));
+  const x = (i) => links + (n === 1 ? plotB / 2 : (i * plotB) / (n - 1));
+  const y = (v) => oben + plotH - (v / max) * plotH;
+  const schrittX = n === 1 ? plotB : plotB / (n - 1);
+  const linie = (feld, k) => {
+    const pkt = punkte.map((t, i) => `${x(i).toFixed(1)},${y(t[feld]).toFixed(1)}`);
+    const kreise = n <= 40 ? punkte.map((t, i) => `<circle class="s${k}" cx="${x(i).toFixed(1)}" cy="${y(t[feld]).toFixed(1)}" r="2.6"/>`).join('') : '';
+    return `<polyline class="linie l${k}" points="${pkt.join(' ')}"/>${kreise}`;
+  };
+  const jede = Math.max(1, Math.ceil(n / 6));
+  let achseX = '', treffer = '';
+  punkte.forEach((t, i) => {
+    const x0 = Math.max(links, x(i) - schrittX / 2), x1 = Math.min(B - rechts, x(i) + schrittX / 2);
+    treffer += T`<rect class="treffer" data-i="${i}" x="${x0.toFixed(1)}" y="${oben}" width="${Math.max(1, x1 - x0).toFixed(1)}" height="${plotH + unten}" tabindex="0" role="img" aria-label="${esc(tx('{0}: Notizen {1}, Planungen {2}', t.lang, stunden(t.diktat), stunden(t.planung)))}"/>`;
+    if ((n - 1 - i) % jede === 0) {
+      const anker = n > 1 && i === n - 1 ? 'end' : n > 1 && i === 0 ? 'start' : 'middle';
+      achseX += T`<text class="achse" x="${x(i).toFixed(1)}" y="${H - 6}" text-anchor="${anker}">${esc(t.name)}</text>`;
+    }
+  });
+  const gitter = schritte.map((s) => T`<line class="gitter" x1="${links}" x2="${B - rechts}" y1="${y(s)}" y2="${y(s)}"/><text class="achse" x="${links - 6}" y="${y(s) + 4}" text-anchor="end">${esc(stunden(s))}</text>`).join('');
+  return T`<svg class="diagramm" id="${id}" viewBox="0 0 ${B} ${H}" role="group" aria-label="${esc(titel)}">${gitter}${linie('diktat', 1)}${linie('planung', 2)}${achseX}${treffer}</svg>`;
+}
+function zeigeRingVerlauf(tage) {
+  const karte = document.getElementById('rverlauf');
+  if (!karte) return;
+  let art = 'monat';
+  try { art = localStorage.getItem('ring-zeitraum') || 'monat'; } catch { /* nur Komfort */ }
+  if (!RING_ZEITRAEUME.some(([k]) => k === art)) art = 'monat';
+  const punkte = ringZeitraum(tage, art);
+  const titel = { monat: tx('Aufnahmezeit je Monat'), woche: tx('Aufnahmezeit je Woche'), tag: tx('Aufnahmezeit je Tag') }[art];
+  karte.innerHTML = T`<div class="btn-group unter" role="group" aria-label="${esc(tx('Zeitraum'))}">${RING_ZEITRAEUME.map(([k, name]) => T`<button type="button" class="btn${k === art ? ' aktiv' : ''}" data-zeitraum="${k}"${k === art ? ' aria-pressed="true"' : ' aria-pressed="false"'}>${esc(tx(name))}</button>`).join('')}</div>
+    ${T('<div class="legende"><span><i class="s1"></i>Notizen</span><span><i class="s2"></i>Planungen</span></div>')}
+    ${punkte.length ? ringLinien(punkte, 'rverlauf-svg', titel) : T`<p class="leise">${esc(tx('Noch keine Aufnahmen.'))}</p>`}
+    <div class="ablesen" id="rverlauf-wert">${esc(tx('Punkt antippen für die Werte.'))}</div>`;
+  karte.querySelectorAll('[data-zeitraum]').forEach((b) => {
+    b.onclick = () => {
+      try { localStorage.setItem('ring-zeitraum', b.dataset.zeitraum); } catch { /* nur Komfort */ }
+      zeigeRingVerlauf(tage);
+    };
+  });
+  const svg = document.getElementById('rverlauf-svg'), wert = document.getElementById('rverlauf-wert');
+  if (!svg) return;
+  const zeige = (ev) => {
+    const r = ev.target.closest('.treffer');
+    if (!r) return;
+    const t = punkte[Number(r.dataset.i)];
+    svg.querySelectorAll('.treffer.an').forEach((e) => e.classList.remove('an'));
+    r.classList.add('an');
+    wert.textContent = tx('{0}: Notizen {1} · Planungen {2} · {3} Aufnahmen', t.lang, stunden(t.diktat), stunden(t.planung), t.anzahl);
+  };
+  svg.addEventListener('pointerover', zeige);
+  svg.addEventListener('click', zeige);
+  svg.addEventListener('focusin', zeige);
+}
+
+// Meine Daten (immer offen, nur aktive Einträge vom Ring über den Webhook): Zahl, Aufnahmen, Auffälliges (in Arbeit, Fehler), Kreis nach Art.
+function eingangsKarte(s) {
+  const t = s.auftraege_teile || {}, d = s.audio_dateien || {};
+  const kachel = (n, name, art) => T`<div class="zahlkachel ${art}"><strong>${n}</strong><span>${esc(name)}</span></div>`;
+  const auffaellig = [s.warteschlange ? kachel(s.warteschlange, tx('in Arbeit'), 'warn') : '', s.fehlgeschlagen ? kachel(s.fehlgeschlagen, tx('fehlgeschlagen'), 'schlecht') : ''].join('');
+  const teile = [[t.notizen, tx('Notizen'), 'diktat'], [t.termine, tx('Termine'), 'termin'], [t.runden, tx('Planungsrunden'), 'planung']].filter(([n]) => n > 0);
+  const summe = teile.reduce((a, [n]) => a + n, 0);
+  // Ring aus Kreisbögen (SVG-Attribute statt Inline-Styles: die CSP erlaubt keine style-Attribute).
+  let start = 0;
+  const ring = summe ? teile.map(([n, , art]) => {
+    const anteil = (n / summe) * 100, bogen = T`<circle class="ring ${art}" r="15.9155" cx="18" cy="18" stroke-dasharray="${anteil} ${100 - anteil}" stroke-dashoffset="${25 - start}"/>`;
+    start += anteil;
+    return bogen;
+  }).join('') : '';
+  return T`<div class="karte eingangskarte"><div class="eingangskopf"><span class="zeile kartentitel"><strong>${esc(tx('Meine Daten'))}</strong><span class="eingangszahl">${s.auftraege}</span></span>
+      ${d.anzahl ? T`<span class="leise">${d.anzahl} Aufnahmen${d.schnitt_groesse ? T` · Ø ${groesse(d.schnitt_groesse)}` : ''}${d.schnitt_sekunden ? T` · Ø ${dauer(d.schnitt_sekunden)} · zusammen ${dauer(d.gesamt_sekunden)}` : ''}</span>` : ''}
+      ${auffaellig ? T`<span class="zahlkacheln">${auffaellig}</span>` : ''}</div>
+    <div class="eingangsdetail">${summe ? T`<svg class="ringdiagramm" viewBox="-2 -2 40 40" role="img" aria-label="${esc(teile.map(([n, name]) => `${n} ${name}`).join(', '))}">${ring}</svg>` : ''}
+      <ul class="legende">${teile.map(([n, name, art]) => T`<li><span class="punkt-farbe ${art}"></span>${esc(name)}<strong>${n}</strong></li>`).join('')}</ul></div>
+    ${wortBlock(s.woerter)}
+    <p class="leise">Planungen: ${t.planungen} (${t.runden} Runden) · ${t.audio} mit Aufnahme${t.nur_text ? T` · ${t.nur_text} nur Pebble-Text` : ''}</p></div>`;
+}
+// Wörter je Aufnahme (letzte Tage): Balken über die volle Breite von Min bis Max, Strich bei Ø.
+// Lage als data-pos; setzeWortlage setzt sie per JS (die CSP erlaubt keine style-Attribute).
+function wortBlock(w) {
+  if (!w) return '';
+  const zahl = (v) => Math.round(v).toLocaleString(LOCALE), span = w.max - w.min;
+  const pos = span ? ((w.schnitt - w.min) / span) * 100 : 50;
+  return T`<div class="wortblock"><div class="zeile"><strong>${esc(tx('Wörter je Aufnahme'))}</strong><span class="leise">${esc(tx('{0} Tage · {1} Transkripte', w.tage, w.anzahl))}</span></div>
+    <div class="wortskala" role="img" aria-label="${esc(tx('Wörter je Aufnahme: Min {0}, Ø {1}, Max {2}', zahl(w.min), zahl(w.schnitt), zahl(w.max)))}">
+      <span class="wortschnitt" data-pos="${pos}">${esc(tx('Ø {0}', zahl(w.schnitt)))}</span>
+      <span class="wortbalken"><i data-pos="${pos}"></i></span>
+      <span class="wortgrenzen"><span>${esc(tx('Min {0}', zahl(w.min)))}</span><span>${esc(tx('Max {0}', zahl(w.max)))}</span></span></div></div>`;
+}
+
 async function zeigeRing() {
   seite.innerHTML = T`<p class="leer">${esc(tx('Lädt …'))}</p>`;
   const wahl = new URLSearchParams(location.search).get('ring') || '';
   const laden = async () => {
-    const d = await api(`/api/ring${wahl ? `?ring=${encodeURIComponent(wahl)}` : ''}`);
+    const [d, st] = await Promise.all([api(`/api/ring${wahl ? `?ring=${encodeURIComponent(wahl)}` : ''}`), api('/api/eingaenge')]);
     if (aktuell?.name !== 'ring') return;
     const g = d.ring, aktiv = !g.ende, p = g.prozent;
-    const anteil = (n, gesamt) => (gesamt ? `${n} (${Math.round((n / gesamt) * 100)} %)` : String(n));
+    // Kleine Kachel mit Zahl und Anteil an allen Aufnahmen des Rings (Fehlaufnahmen, Gelöschte).
+    const klein = (titel, hinweis, n, gesamt) => T`<div class="kachel klein"><div class="leise">${esc(titel)}</div><div class="zahl">${n}</div><div class="leise">${gesamt ? `${Math.round((n / gesamt) * 100)} % · ` : ''}${esc(hinweis)}</div></div>`;
     const kachel = (titel, sek, n) => T`<div class="kachel"><div class="leise">${esc(titel)}</div><div class="zahl">${esc(stunden(sek))}</div><div class="leise">${esc(tx('{0} Aufnahmen', n))}${n ? ` · Ø ${esc(stunden(sek / n))}` : ''}</div></div>`;
     const prog = d.prognose;
     const wann = (v) => (v === 0 ? tx('erreicht') : v == null ? tx('keine Nutzung') : datumKurz(v));
-    const monate = d.monate.map((m) => ({ tag: m.monat, diktat: m.diktat, planung: m.planung, anzahl: m.anzahl }));
-    const opt = { wert: stunden, achse: achseZeit, name: (t) => monatName(t.tag), titel: tx('Aufnahmezeit je Monat') };
+    const verlauf = d.verlauf || [];
     // Vergleich als kompakte Zeilen (mobil ohne breite Tabelle): ID, Zeit, Anteil; darunter Zeitraum, Aufnahmen, Ø je Tag.
     const vergleich = d.ringe.map((r) => T`<a class="karte ringzeile${r.nr === g.nr ? ' aktiv' : ''}" href="/status/ring?ring=${r.nr}">
       <span class="zeile"><strong>${esc(r.hardware_id || tx('Ring {0}', r.nr))}</strong><span>${esc(stunden(r.sekunden))} · ${Math.floor(r.prozent)} %</span></span>
       <span class="balken ${stufeKlasse(r.prozent)}"><i data-anteil="${Math.min(100, r.prozent)}"></i></span>
       <span class="leise">${esc(datumKurz(r.start))} – ${r.ende ? esc(datumKurz(r.ende)) : esc(tx('heute'))} · ${esc(tx('{0} Aufnahmen', r.anzahl))} · ${esc(tx('Ø {0} je Tag', stunden(r.sekunden / r.tage)))}</span></a>`).join('');
-    seite.innerHTML = T`<h1>${esc(tx('Ring'))}</h1>
+    seite.innerHTML = T`<h1>${esc(tx('Ringnutzung'))}</h1>
+      ${eingangsKarte(st)}
       ${d.ringe.length > 1 ? T`<nav class="btn-group" aria-label="${esc(tx('Ring wählen'))}">${d.ringe.slice().reverse().map((r) => T`<a class="btn${r.nr === g.nr ? ' aktiv' : ''}" href="/status/ring?ring=${r.nr}"${r.nr === g.nr ? ' aria-current="page"' : ''}>${esc(r.hardware_id || tx('Ring {0}', r.nr))}</a>`).join('')}</nav>` : ''}
       <div class="karte">
         <div class="zeile kartentitel"><strong>${esc(ringName(g))}</strong><a class="konfedit" href="/status/ring/${g.nr}/bearbeiten" aria-label="${esc(tx('Ring bearbeiten'))}">${STIFT}</a></div>
@@ -3200,26 +3283,14 @@ async function zeigeRing() {
       </div>
       <div class="kacheln">${kachel(tx('Gesamt'), g.sekunden, g.anzahl)}${kachel(tx('Notizen'), g.diktat.sekunden, g.diktat.anzahl)}${kachel(tx('Planungen'), g.planung.sekunden, g.planung.anzahl)}</div>
       <p class="leise">${esc(tx('Tastendrücke: Halten {0} · Klick + Halten {1}', g.halten, g.klick_halten))}</p>
-      <p class="leise">${esc(tx('Fehlaufnahmen (keine Sprache): {0}', anteil(g.fehlaufnahmen, g.anzahl)))} · ${esc(tx('Gelöscht: {0}', anteil(g.geloescht, g.anzahl)))}</p>
-      <h2>${esc(tx('Aufnahmezeit je Monat'))}</h2>
-      <div class="karte">${T('<div class="legende"><span><i class="s1"></i>Notizen</span><span><i class="s2"></i>Planungen</span></div>')}${monate.length ? saeulen(monate, 'rmon', false, opt) : T`<p class="leise">${esc(tx('Noch keine Aufnahmen.'))}</p>`}<div class="ablesen" id="rmon-wert">${esc(tx('Säule antippen für die Werte des Monats.'))}</div></div>
+      <div class="kacheln paar">${klein(tx('Fehlaufnahmen'), tx('keine Sprache'), g.fehlaufnahmen, g.anzahl)}${klein(tx('Gelöscht'), tx('im Papierkorb oder entfernt'), g.geloescht, g.anzahl)}</div>
+      <h2>${esc(tx('Aufnahmezeit'))}</h2>
+      <div class="karte" id="rverlauf"></div>
       ${d.ringe.length > 1 ? T`<h2>${esc(tx('Ringe im Vergleich'))}</h2>${vergleich}` : ''}
-      ${aktiv ? T`<div class="leiste"><a class="btn" href="/status/ring/tauschen">${esc(tx('Ring tauschen'))}</a></div>` : ''}`;
+      <div class="wahlplatz"></div><div class="wahlleiste"><a class="btn" href="/status/ring/tauschen">${esc(tx('Ring tauschen'))}</a></div>`;
     setzeBalken(seite);
-    const svg = document.getElementById('rmon'), wert = document.getElementById('rmon-wert');
-    if (svg) {
-      const zeigeMonat = (ev) => {
-        const r = ev.target.closest('.treffer');
-        if (!r) return;
-        const t = monate[Number(r.dataset.i)];
-        svg.querySelectorAll('.treffer.an').forEach((e) => e.classList.remove('an'));
-        r.classList.add('an');
-        wert.textContent = tx('{0}: Notizen {1} · Planungen {2} · {3} Aufnahmen', monatName(t.tag), stunden(t.diktat), stunden(t.planung), t.anzahl);
-      };
-      svg.addEventListener('pointerover', zeigeMonat);
-      svg.addEventListener('click', zeigeMonat);
-      svg.addEventListener('focusin', zeigeMonat);
-    }
+    setzeWortlage(seite);
+    zeigeRingVerlauf(verlauf);
   };
   aktuell.neuLaden = laden;
   await laden();
@@ -3569,6 +3640,38 @@ async function zeigeKalender() {
       b.disabled = true;
       try { await api('/api/kalender/neu', { method: 'POST' }); melde(tx('Neuer Link erzeugt')); await laden(); } catch (f) { b.disabled = false; melde(f.message); }
     }
+  };
+  aufraeumen = () => { seite.onclick = null; };
+}
+
+// Anleitung: diesen Dienst als MCP-Server in Claude, ChatGPT oder Claude Code eintragen.
+function zeigeMcpAnleitung() {
+  const url = `${location.origin}/mcp`;
+  const befehl = `claude mcp add --transport http sprachnotizen ${url}`;
+  const befehlToken = `${befehl} --header "Authorization: Bearer <API-Token>"`;
+  const code = (id, text) => T`<div class="karte"><code class="kopierbar" id="${id}">${esc(text)}</code><div class="leiste"><button class="btn klein" data-kopieren="${id}">${esc(tx('Kopieren'))}</button></div></div>`;
+  seite.innerHTML = T`<p><a class="btn klein" href="/status">← ${esc(tx('Status'))}</a></p><h1>${esc(tx('App verbinden'))}</h1>
+    <p class="leise">${esc(tx('KI-Apps lesen über MCP deine Listen, Notizen und Termine und haken Punkte ab – nur deine Daten. Freigabe per Passkey, trennen jederzeit unter Status.'))}</p>
+    <div class="leise">${esc(tx('Adresse des MCP-Servers'))}</div>${code('mcpurl', url)}
+    <h2>${esc(tx('Claude (Web, Desktop, Handy)'))}</h2><ol class="anleitung">
+      <li>${esc(tx('Auf claude.ai Einstellungen → Konnektoren öffnen.'))}</li>
+      <li>${esc(tx('„Benutzerdefinierten Konnektor hinzufügen“, Name frei wählen, Adresse oben einfügen. Client-ID und Secret leer lassen.'))}</li>
+      <li>${esc(tx('„Verbinden“: Diese App öffnet sich – mit Passkey anmelden und „Erlauben“ tippen.'))}</li>
+      <li>${esc(tx('Der Konnektor gilt danach auch in der Desktop- und Handy-App; im Chat über das Werkzeug-Menü einschalten.'))}</li></ol>
+    <h2>${esc(tx('ChatGPT'))}</h2><ol class="anleitung">
+      <li>${esc(tx('Einstellungen → Apps & Konnektoren → Erweitert: Entwicklermodus einschalten.'))}</li>
+      <li>${esc(tx('„Erstellen“, Adresse oben einfügen, Authentifizierung OAuth.'))}</li>
+      <li>${esc(tx('Mit Passkey anmelden und „Erlauben“ tippen.'))}</li></ol>
+    <h2>${esc(tx('Claude Code'))}</h2>
+    <p>${esc(tx('Im Terminal ausführen; beim ersten Aufruf von /mcp öffnet sich die Freigabe im Browser:'))}</p>${code('mcpbefehl', befehl)}
+    <p class="leise">${esc(tx('Ohne Browser, mit API-Token (erzeugen unter Zugang und Sicherheit):'))}</p>${code('mcptoken', befehlToken)}
+    <h2>${esc(tx('Andere Apps'))}</h2>
+    <p class="leise">${esc(tx('Jede App mit MCP über Streamable HTTP: Adresse oben, Anmeldung per OAuth oder Kopfzeile „Authorization: Bearer <API-Token>“.'))}</p>
+    <div class="leiste"><a class="btn" href="/status/zugang">${esc(tx('API-Token verwalten'))}</a></div>`;
+  seite.onclick = async (ev) => {
+    const b = ev.target.closest('[data-kopieren]');
+    if (!b) return;
+    try { await navigator.clipboard.writeText(document.getElementById(b.dataset.kopieren).textContent); melde(tx('Kopiert')); } catch { melde(tx('Kopieren nicht möglich – Text markieren und kopieren')); }
   };
   aufraeumen = () => { seite.onclick = null; };
 }
@@ -4420,8 +4523,9 @@ async function zeigeEinrichten() {
 // ---------- Menü (Hamburger links): drei Hauptseiten, darunter ihre Unterseiten ----------
 
 // Seite → Bereich im Menü.
-const BEREICH = { zugang: 'status', zugangCode: 'status', nutzer: 'system', nutzerNeu: 'system', nutzerBearbeiten: 'system', backupHochladen: 'system', kalender: 'status', ring: 'status', ringTauschen: 'status', ringBearbeiten: 'status', joplin: 'status', einstellungBearbeiten: 'status', darstellung: 'status', geraetNeu: 'status', tagsVerwalten: 'status', kosten: 'status', papierkorb: 'status', update: 'system', backups: 'system', einstellungen: 'status', einstellungenBearbeiten: 'status', pebble: 'status', gedaechtnis: 'status', gedaechtnisBearbeiten: 'status', liste: 'listen', verschieben: 'listen', listeBearbeiten: 'listen', gruppeBearbeiten: 'listen', eintrag: 'verlauf', planung: 'verlauf', tags: 'verlauf', antwort: 'verlauf', umhaengen: 'verlauf', wortlaut: 'verlauf', einsortieren: 'verlauf', suche: 'verlauf' };
+const BEREICH = { zugang: 'status', zugangCode: 'status', nutzer: 'system', nutzerNeu: 'system', nutzerBearbeiten: 'system', backupHochladen: 'system', kalender: 'status', mcp: 'status', ring: 'status', ringTauschen: 'status', ringBearbeiten: 'status', joplin: 'status', einstellungBearbeiten: 'status', darstellung: 'status', geraetNeu: 'status', tagsVerwalten: 'status', kosten: 'status', papierkorb: 'status', update: 'system', backups: 'system', einstellungen: 'status', einstellungenBearbeiten: 'status', pebble: 'status', gedaechtnis: 'status', gedaechtnisBearbeiten: 'status', liste: 'listen', verschieben: 'listen', listeBearbeiten: 'listen', gruppeBearbeiten: 'listen', eintrag: 'verlauf', planung: 'verlauf', tags: 'verlauf', antwort: 'verlauf', umhaengen: 'verlauf', wortlaut: 'verlauf', einsortieren: 'verlauf', suche: 'verlauf' };
 const lokal = (k, v = '') => { try { return localStorage.getItem(k) ?? v; } catch { return v; } };
+let alleGruppenZeigen = false;
 function maleMenue() {
   const name = aktuell?.name || '';
   // Notiz oder Planung aus einer Liste geöffnet: Bereich Listen.
@@ -4433,7 +4537,13 @@ function maleMenue() {
   try { zahlen = JSON.parse(lokal('verlauf-zahlen', 'null')) || {}; neuZahlen = JSON.parse(lokal('verlauf-neu', 'null')) || {}; } catch { /* noch nie geladen */ }
   // Gelb (gedimmt): neu seit zuletzt gesehen, wie im Verlauf markiert.
   const neuZahl = (n) => (n > 0 ? T` <span class="zaehler neu" title="${tx('{0} neu', n)}">${n}</span>` : '');
-  gruppen = [...gruppen.filter(([g]) => g !== '-').slice(0, 5), ...gruppen.filter(([g]) => g === '-')];
+  // Gruppen ohne offene Punkte rutschen nach unten (je Stufe „Ohne Gruppe“ zuletzt).
+  const leer = ([, offen]) => !(offen > 0);
+  // Mehr als 5 Gruppen: am Ende „Weitere anzeigen“ klappt die übrigen im Menü auf.
+  const benannt = gruppen.filter(([g]) => g !== '-').sort((a, b) => leer(a) - leer(b));
+  const weitere = benannt.length - 5;
+  gruppen = [...(alleGruppenZeigen ? benannt : benannt.slice(0, 5)), ...gruppen.filter(([g]) => g === '-')]
+    .sort((a, b) => leer(a) - leer(b));
   let tagZahl;
   try { tagZahl = JSON.parse(lokal('tag-vorrat', 'null'))?.length; } catch { /* noch nie geladen */ }
   const art = lokal('verlauf-art', 'alles'), gruppe = name === 'listen' && aktuell.arg ? decodeURIComponent(aktuell.arg) : '';
@@ -4441,9 +4551,9 @@ function maleMenue() {
   const zahl = (n, still) => (typeof n === 'number' ? T` <span class="zaehler${still || !n ? ' still' : ''}">${n}</span>` : '');
   const teile = [
     { id: 'verlauf', name: tx('Verlauf'), href: '/', setze: ['verlauf-art', 'alles'], unter: ARTEN.map(([a, n]) => ({ name: a === 'termin' ? tx('Termine') : n, href: '/', setze: ['verlauf-art', a], an: name === 'verlauf' && art === a, extra: (a === 'fragen' ? '' : neuZahl(neuZahlen[a])) + zahl(zahlen[a] ?? 0, a !== 'fragen') })) },
-    { id: 'listen', name: tx('Listen'), href: '/listen', unter: gruppen.map(([g, offen, neu]) => ({ name: gruppenTitel(g), href: gruppenPfad(g), an: !!gruppe && gruppe.toLowerCase() === g.toLowerCase(), extra: neuZahl(neu) + zahl(offen, true) })) },
+    { id: 'listen', name: tx('Listen'), href: '/listen', unter: gruppen.map(([g, offen, neu]) => ({ name: gruppenTitel(g), href: gruppenPfad(g), an: !!gruppe && gruppe.toLowerCase() === g.toLowerCase(), extra: neuZahl(neu) + zahl(offen, true) })).concat(weitere > 0 ? [{ knopf: 'data-menue-gruppen', name: alleGruppenZeigen ? tx('Weniger anzeigen') : tx('Weitere anzeigen ({0})', weitere) }] : []) },
     { id: 'status', name: tx('Einstellungen'), href: '/status', unter: [
-      { name: tx('Status'), href: '/status', an: ['status', 'pebble', 'joplin', 'kalender', 'einstellungen', 'einstellungBearbeiten', 'geraetNeu', 'darstellung', 'zugang', 'zugangCode'].includes(name), extra: audioFehler ? T` <span class="zaehler fehler" title="${tx('{0} Aufnahmen ohne Eintrag', audioFehler)}">${audioFehler}</span>` : '' },
+      { name: tx('Status'), href: '/status', an: ['status', 'pebble', 'joplin', 'kalender', 'mcp', 'einstellungen', 'einstellungBearbeiten', 'geraetNeu', 'darstellung', 'zugang', 'zugangCode'].includes(name), extra: audioFehler ? T` <span class="zaehler fehler" title="${tx('{0} Aufnahmen ohne Eintrag', audioFehler)}">${audioFehler}</span>` : '' },
       { name: tx('Gedächtnis'), href: '/status/gedaechtnis', an: name === 'gedaechtnis' || name === 'gedaechtnisBearbeiten', extra: zahl(offeneVorschlaege) },
       { name: tx('Tags'), href: '/status/tags', an: name === 'tagsVerwalten', extra: zahl(tagZahl, true) },
       { name: tx('KI-Kosten'), href: '/status/kosten', an: name === 'kosten' },
@@ -4457,7 +4567,7 @@ function maleMenue() {
     ] }] : []),
   ];
   // Verlauf-Filter ohne Einträge (Zähler 0) sind nicht anklickbar: der Verlauf fiele sonst auf „Alles“ zurück.
-  const link = (k, x) => (x.leer && !x.an ? T`<span class="${k} gesperrt" aria-disabled="true"><span>${esc(x.name)}</span>${x.extra || ''}</span>` : linkAktiv(k, x));
+  const link = (k, x) => (x.knopf ? T`<button type="button" class="${k} mehr" ${x.knopf}><span>${esc(x.name)}</span></button>` : x.leer && !x.an ? T`<span class="${k} gesperrt" aria-disabled="true"><span>${esc(x.name)}</span>${x.extra || ''}</span>` : linkAktiv(k, x));
   const linkAktiv = (k, x) => T`<a class="${k}${x.an ? ' aktiv' : ''}" href="${x.href}"${x.setze ? T` data-setze="${x.setze[0]}" data-wert="${esc(x.setze[1])}"` : ''}${x.an ? ' aria-current="page"' : ''}><span>${esc(x.name)}</span>${x.extra || ''}</a>`;
   nav.innerHTML = T`<div class="menuekopf"><span class="marke">${ich.name ? esc(tx('Hallo {0}', ich.name)) : 'Sprachnotizen'}</span><button type="button" class="btn klein rund" data-menue-zu aria-label="Menü schließen">×</button></div>
     ${teile.map((t) => T`<div class="menuegruppe">${link('menuehaupt', { ...t, an: bereich === t.id })}${t.unter.map((u) => link('menueunter', u)).join('')}</div>`).join('')}
@@ -4483,6 +4593,7 @@ function menueModus() {
 breit.addEventListener('change', menueModus);
 // Schließen: ×, Klick neben das Menü (auf den Hintergrund), Esc (Dialog selbst).
 menue.addEventListener('click', (e) => { if (menue.matches(':modal') && (e.target === menue || e.target.closest('[data-menue-zu]'))) menue.close(); });
+menue.addEventListener('click', (e) => { if (e.target.closest('[data-menue-gruppen]')) { alleGruppenZeigen = !alleGruppenZeigen; maleMenue(); } });
 menue.addEventListener('click', async (e) => {
   const b = e.target.closest('[data-menue-abmelden]');
   if (!b || !confirm(tx('Auf diesem Gerät abmelden?'))) return;
