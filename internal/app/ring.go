@@ -22,7 +22,8 @@ import (
 // Ring-Lebensdauer: der Pebble Index 01 hat einen fest verbauten Akku (Pebble: 12–15 h Aufnahme). Jede Aufnahme
 // wird beim Eingang mit Länge, Art und Geste in ring_recordings protokolliert und bleibt dort, auch wenn Eintrag
 // oder Audiodatei gelöscht werden. Schwellen 60/80/95/100 % zeigen einen Hinweis auf allen Seiten, bis er
-// bestätigt ist; bei 100 % lässt sich die Kapazität um 30 min erhöhen. Ringwechsel: neuer Ring, alte bleiben.
+// bestätigt ist; bei 100 % lässt sich die Kapazität um 30 min erhöhen. Jeder Ring wird an seiner Kennung aus der
+// Zustellungs-ID erkannt und für sich gezählt; mehrere Ringe laufen nebeneinander, einen Tausch gibt es nicht.
 
 var ringMu sync.Mutex
 
@@ -32,11 +33,36 @@ var ringLevels = []int{60, 80, 95, 100}
 // ringForecastDays: Zeitraum für die Vorhersage bei gleichbleibender Nutzung.
 const ringForecastDays = 30
 
-// ringIDRe: Ring-IDs haben immer die Form „#12345“ (Raute und Ziffern).
-var ringIDRe = regexp.MustCompile(`^#[0-9]{1,12}$`)
+// ringIDRe: Ring-IDs haben die Form „#449“ (Raute, dann Ziffern und A–F): das Kürzel eines Rings sind die letzten
+// drei Zeichen seiner Kennung. Ringe aus der Zeit des eigenen Headers (bis 4.4.1) tragen bis zu 12 Zeichen.
+var ringIDRe = regexp.MustCompile(`^#[0-9A-Fa-f]{1,12}$`)
 
-// ringIDErrorKey: zuletzt mit ungültiger Ring-ID empfangener Header {wert, zeit}; leer = kein Fehler.
-const ringIDErrorKey = "ring-id-ungueltig"
+// ringKennungRe: die Pebble-App nennt den Ring in der Zustellungs-ID: ring_<12 Hex>-<Zähler>-<uuid>
+// (gemessen 26.11.2026; vermutlich die Bluetooth-Adresse). Die Kennung identifiziert den Ring.
+var ringKennungRe = regexp.MustCompile(`^ring_([0-9A-Fa-f]{12})-`)
+
+// ringKennung: Kennung des Rings aus der Zustellungs-ID ("" = keine).
+func ringKennung(delivery string) string {
+	if m := ringKennungRe.FindStringSubmatch(delivery); m != nil {
+		return strings.ToUpper(m[1])
+	}
+	return ""
+}
+
+// ringShort: Kürzel eines Rings = Raute und die letzten drei Zeichen der Kennung (z. B. #449).
+func ringShort(kennung string) string {
+	if len(kennung) < 3 {
+		return ""
+	}
+	return "#" + kennung[len(kennung)-3:]
+}
+
+// appUpdateKey: die Pebble-App meldet sich mit einem anderen User-Agent {alt, neu, zeit}; bleibt bis zur Bestätigung.
+// appAgentKey: zuletzt gesehener User-Agent über alle Ringe – ein Update meldet sich einmal, nicht je Ring.
+const (
+	appUpdateKey = "pebble-app-update"
+	appAgentKey  = "pebble-app-agent"
+)
 
 // ringExtraSeconds: „+30 min“ bei 100 %.
 const ringExtraSeconds = 30 * 60
@@ -130,6 +156,13 @@ func (a *App) ensureRingLocked() (*store.Ring, error) {
 	if err == nil || !errors.Is(err, store.ErrNotFound) {
 		return g, err
 	}
+	// Kein aktiver Ring: gibt es Ringe (alle deaktiviert), gilt der neueste.
+	if rings, err := a.DB.Rings(); err != nil || len(rings) > 0 {
+		if err != nil {
+			return nil, err
+		}
+		return rings[0], nil
+	}
 	jobs, err := a.DB.RingJobs()
 	if err != nil {
 		return nil, err
@@ -192,74 +225,208 @@ func (a *App) activeRingID() string {
 	return g.HardwareID
 }
 
-// initRing: beim Start Ring 1 samt Nachtrag anlegen, falls es noch keinen gibt.
+// initRing: beim Start Ring 1 samt Nachtrag anlegen, falls es noch keinen gibt, und den Bestand nach der Kennung ordnen.
 func (a *App) initRing() {
 	ringMu.Lock()
 	defer ringMu.Unlock()
 	if _, err := a.ensureRingLocked(); err != nil {
 		logf("Ring anlegen: %v", err)
+		return
+	}
+	if err := a.ringBackfillLocked(); err != nil {
+		logf("Ring: Bestand ordnen: %v", err)
 	}
 }
 
-// recordRecording protokolliert eine eingegangene Aufnahme (Webhook, kein Test-Event) und meldet neu erreichte
-// Schwellen per Push. hw ist die Ring-ID aus dem eigenen Header (Pflicht). Fehlt sie oder hat sie nicht die Form
-// „#12345“, ist das ein Fehler: die Aufnahme zählt beim aktiven Ring ohne ID (Pebble wiederholt abgewiesene
-// Zustellungen nur zehnmal – die Aufnahme ginge sonst verloren), der Fehler steht auf allen Seiten (false).
-func (a *App) recordRecording(j *store.Job, hw string) bool {
-	if j.IsTest {
-		return true
+// ringBackfillLocked ordnet den Bestand: jede Aufnahme gehört zum Ring ihrer Kennung (aus der Zustellungs-ID ihres
+// Eintrags) und trägt die volle Kennung (ring_recordings.hardware_id). Einträge ohne Kennung kommen nicht vom Ring
+// (Web-App, Import, alte Daten) und zählen nicht. Das Kürzel am Ring (rings.hardware_id, „#449“) ist nur die lesbare
+// Bezeichnung. Läuft bei jedem Start und ändert nur, was abweicht. ringMu ist gehalten.
+func (a *App) ringBackfillLocked() error {
+	rows, err := a.DB.RingDeliveries()
+	if err != nil {
+		return err
 	}
-	valid := true
-	if !ringIDRe.MatchString(hw) {
-		valid = false
-		logf("Ring: ungültige Ring-ID %q (Eintrag %s) – erwartet #12345", store.Preview(hw, 40), j.ID)
-		b, _ := json.Marshal(map[string]any{"wert": store.Preview(hw, 40), "zeit": j.ReceivedAt})
-		if err := a.DB.Set(ringIDErrorKey, string(b)); err != nil {
-			logf("Ring: %v", err)
+	moved, dropped := 0, 0
+	for _, d := range rows {
+		k := ringKennung(d.DeliveryID)
+		if k == "" {
+			if err := a.DB.DeleteRecording(d.JobID); err != nil {
+				return err
+			}
+			dropped++
+			continue
 		}
-		hw = ""
-		a.hub.send("ring")
-	} else {
-		if err := a.DB.Set(ringIDErrorKey, ""); err != nil {
-			logf("Ring: %v", err)
+		g, err := a.ringOfLocked(k, d.ReceivedAt)
+		if err != nil {
+			return err
 		}
+		if d.RingNr != g.Nr || d.HardwareID != k {
+			if err := a.DB.MoveRecording(d.JobID, g.Nr, k); err != nil {
+				return err
+			}
+			moved++
+		}
+	}
+	rings, err := a.DB.Rings()
+	if err != nil {
+		return err
+	}
+	for _, g := range rings {
+		if g.Kennung == "" {
+			continue
+		}
+		if hw := ringShort(g.Kennung); g.HardwareID != hw {
+			if err := a.DB.UpdateRingID(g.Nr, hw); err != nil {
+				return err
+			}
+			logf("Ring %d: ID %q → %s (Kürzel der Kennung)", g.Nr, g.HardwareID, hw)
+			g.HardwareID = hw
+		}
+		// Zeilen ohne Eintrag (endgültig gelöscht, Nachtrag aus Dateien) tragen die Kennung ihres Rings.
+		if err := a.DB.SetRecordingsHW(g.Nr, g.Kennung); err != nil {
+			return err
+		}
+	}
+	if moved > 0 {
+		logf("Ring: %d Aufnahmen nach ihrer Kennung zugeordnet", moved)
+	}
+	if dropped > 0 {
+		logf("Ring: %d Einträge ohne Ring-Kennung aus der Ring-Nutzung entfernt", dropped)
+	}
+	return nil
+}
+
+// recordRecording protokolliert eine eingegangene Aufnahme (Webhook, kein Test-Event) bei ihrem Ring und meldet neu
+// erreichte Schwellen per Push. Der Ring ergibt sich aus der Kennung in der Zustellungs-ID (kennung); eine neue
+// Kennung legt einen weiteren Ring an. Der Ring schickt immer eine Kennung – eine Zustellung ohne kommt nicht von
+// ihm und zählt nicht. agent ist der User-Agent der Pebble-App.
+func (a *App) recordRecording(j *store.Job, kennung, agent string) {
+	if j.IsTest || kennung == "" {
+		return
 	}
 	ringMu.Lock()
 	defer ringMu.Unlock()
-	g, err := a.ensureRingLocked()
+	_, err := a.ensureRingLocked()
+	var g *store.Ring
+	if err == nil {
+		g, err = a.ringOfLocked(kennung, j.ReceivedAt)
+	}
 	if err != nil {
 		logf("Ring: %v", err)
-		return valid
+		return
 	}
 	before, err := a.DB.RingTotals(g.Nr)
 	if err != nil {
 		logf("Ring: %v", err)
-		return valid
+		return
 	}
-	if _, err := a.DB.AddRecording(a.recordingOf(j, g.Nr, hw, "eingang")); err != nil {
+	if _, err := a.DB.AddRecording(a.recordingOf(j, g.Nr, kennung, "eingang")); err != nil {
 		logf("Ring: Aufnahme %s protokollieren: %v", j.ID, err)
-		return valid
-	}
-	// Erste Ring-ID für einen Ring ohne ID: übernehmen, ohne Hinweis.
-	if hw != "" && g.HardwareID == "" {
-		if err := a.DB.UpdateRingID(g.Nr, hw); err != nil {
-			logf("Ring: ID übernehmen: %v", err)
-		} else {
-			g.HardwareID = hw
-		}
+		return
 	}
 	after, err := a.DB.RingTotals(g.Nr)
 	if err != nil {
 		logf("Ring: %v", err)
-		return valid
+		return
 	}
 	if l := ringLevel(after.Seconds, g.CapacitySeconds); l > ringLevel(before.Seconds, g.CapacitySeconds) && l > g.WarnedLevel {
-		a.notify(config.NotifyRing, a.T("Ring-Nutzung"), a.Tf("Der Ring hat %d %% seiner Aufnahmezeit erreicht.", l), "/status/ring")
+		a.notify(config.NotifyRing, a.T("Ring-Nutzung"), a.Tf("Der Ring hat %d %% seiner Aufnahmezeit erreicht.", l), "/status/ring?ring="+strconv.FormatInt(g.Nr, 10))
 	}
-	if hw != "" && g.HardwareID != "" && hw != g.HardwareID {
+	a.ringAgent(g, agent, j.ReceivedAt)
+}
+
+// ringOfLocked: der Ring zu einer Kennung. Unbekannte Kennung: sie geht an einen Ring ohne Kennung (Bestand bis
+// 4.4.1) – zuerst einen mit demselben Kürzel, dann den, in dessen Laufzeit der Zeitpunkt at fällt, dann einen ganz
+// ohne ID (Ring 1 aus dem Nachtrag); sonst entsteht ein neuer Ring. ringMu ist gehalten.
+func (a *App) ringOfLocked(kennung string, at int64) (*store.Ring, error) {
+	hw := ringShort(kennung)
+	g, err := a.DB.RingByKennung(kennung)
+	if err == nil && g.HardwareID != hw {
+		// ID aus der Zeit der Eingabe von Hand: das Kürzel der Kennung gilt.
+		if err = a.DB.UpdateRingID(g.Nr, hw); err == nil {
+			logf("Ring %d: ID %q → %s (Kürzel der Kennung)", g.Nr, g.HardwareID, hw)
+			g.HardwareID = hw
+		}
+	}
+	if err == nil || !errors.Is(err, store.ErrNotFound) {
+		return g, err
+	}
+	rings, err := a.DB.Rings()
+	if err != nil {
+		return nil, err
+	}
+	var take *store.Ring
+	for _, r := range rings {
+		if r.Kennung != "" {
+			continue
+		}
+		if strings.EqualFold(r.HardwareID, hw) {
+			take = r
+			break
+		}
+		covers := r.StartedAt <= at && (r.EndedAt == 0 || at < r.EndedAt)
+		if take == nil && (covers || r.HardwareID == "") {
+			take = r
+		}
+	}
+	if take == nil {
+		g, err := a.DB.AddRing(hw, kennung, at, int64(a.Cfg.RingCapacityHours)*3600)
+		if err == nil {
+			logf("Ring %d (%s, Kennung %s) angelegt", g.Nr, hw, kennung)
+		}
+		return g, err
+	}
+	if err := a.DB.SetRingKennung(take.Nr, kennung); err != nil {
+		return nil, err
+	}
+	if err := a.DB.UpdateRingID(take.Nr, hw); err != nil {
+		return nil, err
+	}
+	take.Kennung, take.HardwareID = kennung, hw
+	return take, nil
+}
+
+// ringAgent hält die Pebble-App am Ring fest (bei Änderung überschrieben) und meldet ein Update der App einmal.
+func (a *App) ringAgent(g *store.Ring, agent string, at int64) {
+	if agent == "" {
+		return
+	}
+	agent = store.Preview(agent, 200)
+	if agent != g.AppAgent {
+		if err := a.DB.SetRingAgent(g.Nr, agent); err != nil {
+			logf("Ring: Pebble-App festhalten: %v", err)
+			return
+		}
+		g.AppAgent = agent
+	}
+	last, err := a.DB.Get(appAgentKey)
+	if err != nil || last == agent {
+		return
+	}
+	if err := a.DB.Set(appAgentKey, agent); err != nil {
+		logf("Ring: %v", err)
+		return
+	}
+	if last != "" {
+		logf("Ring: Pebble-App %q → %q", last, agent)
+		b, _ := json.Marshal(map[string]any{"alt": last, "neu": agent, "zeit": at})
+		if err := a.DB.Set(appUpdateKey, string(b)); err != nil {
+			logf("Ring: %v", err)
+		}
 		a.hub.send("ring")
 	}
-	return valid
+}
+
+// kvJSON: Hinweis aus kv als Objekt (nil = keiner).
+func (a *App) kvJSON(key string) (map[string]any, error) {
+	v, err := a.DB.Get(key)
+	if err != nil || v == "" {
+		return nil, err
+	}
+	var m map[string]any
+	json.Unmarshal([]byte(v), &m)
+	return m, nil
 }
 
 // ringSeconds trägt die von der Transkription gemeldete Länge nach, wenn die Datei keine lieferte.
@@ -272,42 +439,45 @@ func (a *App) ringSeconds(jobID string, seconds float64) {
 	}
 }
 
-// ringMismatch: die letzte Aufnahme mit Ring-ID trägt eine andere ID als der aktive Ring (seit dessen Start).
-func (a *App) ringMismatch(g *store.Ring) map[string]any {
-	hw, at, err := a.DB.LastRecordingHW()
-	if err != nil {
-		logf("Ring: %v", err)
-		return nil
-	}
-	if hw == "" || g.HardwareID == "" || hw == g.HardwareID || at < g.StartedAt {
-		return nil
-	}
-	return map[string]any{"alt": g.HardwareID, "neu": hw, "seit": at}
-}
-
-// ringSummary: aktiver Ring kurz (Menü, Hinweis auf allen Seiten).
+// ringSummary: Ringe kurz für alle Seiten – „balken“ ist der aktive Ring mit der höchsten Nutzung (Seitenleiste;
+// fehlt, wenn keiner aktiv ist), „hinweise“ sind alle Ringe mit einer erreichten, noch nicht bestätigten Schwelle
+// (auch inaktive), dazu ein Update der Pebble-App. nil = es gibt noch keinen Ring.
 func (a *App) ringSummary() map[string]any {
-	g, err := a.DB.ActiveRing()
+	rings, err := a.DB.Rings()
 	if err != nil {
-		if !errors.Is(err, store.ErrNotFound) {
+		return map[string]any{"fehler": err.Error()}
+	}
+	if len(rings) == 0 {
+		return nil
+	}
+	appUpdate, err := a.kvJSON(appUpdateKey)
+	if err != nil {
+		return map[string]any{"fehler": err.Error()}
+	}
+	out := map[string]any{"app_update": appUpdate}
+	hints := []map[string]any{}
+	var bar map[string]any
+	for i := len(rings) - 1; i >= 0; i-- { // älteste zuerst
+		g := rings[i]
+		t, err := a.DB.RingTotals(g.Nr)
+		if err != nil {
 			return map[string]any{"fehler": err.Error()}
 		}
-		return nil
+		percent := t.Seconds / float64(g.CapacitySeconds) * 100
+		v := map[string]any{"nr": g.Nr, "hardware_id": g.HardwareID, "beschreibung": g.Description, "sekunden": t.Seconds,
+			"kapazitaet_sekunden": g.CapacitySeconds, "prozent": percent, "stufe": ringLevel(t.Seconds, g.CapacitySeconds)}
+		if l := v["stufe"].(int); l > g.WarnedLevel && l > 0 {
+			hints = append(hints, v)
+		}
+		if g.EndedAt == 0 && (bar == nil || percent >= bar["prozent"].(float64)) {
+			bar = v
+		}
 	}
-	t, err := a.DB.RingTotals(g.Nr)
-	if err != nil {
-		return map[string]any{"fehler": err.Error()}
+	out["hinweise"] = hints
+	if bar != nil {
+		out["balken"] = bar
 	}
-	level := ringLevel(t.Seconds, g.CapacitySeconds)
-	var idErr map[string]any
-	if v, err := a.DB.Get(ringIDErrorKey); err != nil {
-		return map[string]any{"fehler": err.Error()}
-	} else if v != "" {
-		json.Unmarshal([]byte(v), &idErr)
-	}
-	return map[string]any{"id_fehler": idErr, "header": a.Cfg.RingIDHeader, "nr": g.Nr, "hardware_id": g.HardwareID, "sekunden": t.Seconds, "kapazitaet_sekunden": g.CapacitySeconds,
-		"prozent": t.Seconds / float64(g.CapacitySeconds) * 100, "stufe": level, "bestaetigt": g.WarnedLevel,
-		"hinweis": level > g.WarnedLevel, "abweichung": a.ringMismatch(g)}
+	return out
 }
 
 // ringForecast: Datum, an dem bei gleichbleibender Nutzung (Mittel der letzten 30 Tage, bei jüngerem Ring seit
@@ -399,7 +569,8 @@ func (a *App) ringView(g *store.Ring) (map[string]any, error) {
 	if g.EndedAt > 0 {
 		until = g.EndedAt
 	}
-	v := map[string]any{"nr": g.Nr, "hardware_id": g.HardwareID, "start": g.StartedAt, "ende": g.EndedAt,
+	v := map[string]any{"nr": g.Nr, "hardware_id": g.HardwareID, "kennung": g.Kennung, "app_agent": g.AppAgent, "beschreibung": g.Description,
+		"start": g.StartedAt, "ende": g.EndedAt,
 		"kapazitaet_sekunden": g.CapacitySeconds, "sekunden": t.Seconds, "prozent": t.Seconds / float64(g.CapacitySeconds) * 100,
 		"anzahl": t.Count, "fehlaufnahmen": t.Empty, "geloescht": t.Deleted,
 		"diktat":  map[string]any{"sekunden": t.SecondsByMode["diktat"], "anzahl": t.CountByMode["diktat"]},
@@ -409,10 +580,10 @@ func (a *App) ringView(g *store.Ring) (map[string]any, error) {
 	return v, nil
 }
 
-// handleRing: Auswertung – aktiver bzw. gewählter Ring (?ring=Nr) mit Tagesverlauf und Vorhersage, alle Ringe zum Vergleich.
+// handleRing: Auswertung – zuletzt benutzter bzw. gewählter Ring (?ring=Nr) mit Tagesverlauf und Vorhersage, alle Ringe zum Vergleich.
 func (a *App) handleRing(w http.ResponseWriter, r *http.Request) {
 	ringMu.Lock()
-	_, err := a.ensureRingLocked()
+	sel, err := a.ensureRingLocked()
 	ringMu.Unlock()
 	if err == nil {
 		err = a.DB.SyncRecordingFlags()
@@ -426,7 +597,6 @@ func (a *App) handleRing(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, "speicher", "Datenbankfehler")
 		return
 	}
-	sel := rings[0]
 	if s := r.URL.Query().Get("ring"); s != "" {
 		nr, _ := strconv.ParseInt(s, 10, 64)
 		if sel, err = a.DB.RingByNr(nr); err != nil {
@@ -457,7 +627,7 @@ func (a *App) handleRing(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out := map[string]any{"ring": selView, "verlauf": days, "ringe": all, "aktiv": a.ringSummary(),
-		"vorgabe_stunden": a.Cfg.RingCapacityHours, "header": a.Cfg.RingIDHeader, "plus_minuten": ringExtraSeconds / 60}
+		"vorgabe_stunden": a.Cfg.RingCapacityHours, "plus_minuten": ringExtraSeconds / 60}
 	if sel.EndedAt == 0 {
 		f, err := a.ringForecast(sel, selView["sekunden"].(float64))
 		if err != nil {
@@ -469,74 +639,32 @@ func (a *App) handleRing(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, out)
 }
 
-// handleRingSwap: Ring tauschen. Mit „uebernehmen“ gilt die abweichende ID aus dem Header ab ihrer ersten
-// Aufnahme; sonst beginnt der neue Ring jetzt.
-func (a *App) handleRingSwap(w http.ResponseWriter, r *http.Request) {
-	var in struct {
-		HardwareID string `json:"hardware_id"`
-		Hours      int    `json:"kapazitaet_stunden"`
-		Take       bool   `json:"uebernehmen"`
-	}
-	if readJSON(r, &in) != nil {
-		writeErr(w, 400, "ungueltig", "Eingabe nicht lesbar")
-		return
-	}
-	in.HardwareID = strings.TrimSpace(in.HardwareID)
-	if !ringIDRe.MatchString(in.HardwareID) {
-		writeErr(w, 400, "ungueltig", "Ring-ID in der Form #12345")
-		return
-	}
-	if in.Hours == 0 {
-		in.Hours = a.Cfg.RingCapacityHours
-	}
-	if in.Hours < 1 || in.Hours > 1000 {
-		writeErr(w, 400, "ungueltig", "Kapazität 1–1000 Stunden")
-		return
-	}
-	ringMu.Lock()
-	defer ringMu.Unlock()
-	g, err := a.ensureRingLocked()
-	if err != nil {
-		writeErr(w, 500, "speicher", "Datenbankfehler")
-		return
-	}
-	at, move := store.Now(), ""
-	if in.Take {
-		m := a.ringMismatch(g)
-		if m == nil || m["neu"] != in.HardwareID {
-			writeErr(w, 409, "keine_abweichung", "Keine abweichende Ring-ID mehr – Seite neu laden")
-			return
-		}
-		if at, err = a.DB.FirstRecordingWithHW(in.HardwareID, g.StartedAt); err != nil || at == 0 {
-			writeErr(w, 500, "speicher", "Datenbankfehler")
-			return
-		}
-		move = in.HardwareID
-	}
-	n, err := a.DB.StartRing(in.HardwareID, at, int64(in.Hours)*3600, move)
-	if err != nil {
-		writeErr(w, 500, "speicher", "Datenbankfehler")
-		return
-	}
-	logf("Ring %d (%q) gestartet, Ring %d beendet", n.Nr, n.HardwareID, g.Nr)
-	a.hub.send("ring")
-	writeJSON(w, 200, map[string]any{"nr": n.Nr})
-}
-
-// handleRingEdit: Ring-ID und Kapazität eines Rings ändern.
+// handleRingEdit: Kapazität und Beschreibung eines Rings ändern (die ID kommt aus der Kennung).
 func (a *App) handleRingEdit(w http.ResponseWriter, r *http.Request) {
 	nr, _ := strconv.ParseInt(r.PathValue("nr"), 10, 64)
 	var in struct {
-		HardwareID string  `json:"hardware_id"`
-		Hours      float64 `json:"kapazitaet_stunden"`
+		Hours       float64 `json:"kapazitaet_stunden"`
+		Description *string `json:"beschreibung"` // fehlt = unverändert
+		Active      *bool   `json:"aktiv"`        // fehlt = unverändert
 	}
-	if readJSON(r, &in) != nil || in.Hours < 1 || in.Hours > 1000 || !ringIDRe.MatchString(strings.TrimSpace(in.HardwareID)) {
-		writeErr(w, 400, "ungueltig", "Kapazität 1–1000 Stunden, Ring-ID in der Form #12345")
+	if readJSON(r, &in) != nil || in.Hours < 1 || in.Hours > 1000 {
+		writeErr(w, 400, "ungueltig", "Kapazität 1–1000 Stunden")
 		return
+	}
+	if in.Description != nil {
+		*in.Description = strings.TrimSpace(*in.Description)
+		if len([]rune(*in.Description)) > 60 {
+			writeErr(w, 400, "ungueltig", "Beschreibung höchstens 60 Zeichen")
+			return
+		}
 	}
 	ringMu.Lock()
 	defer ringMu.Unlock()
-	if err := a.DB.UpdateRing(nr, strings.TrimSpace(in.HardwareID), int64(math.Round(in.Hours*3600))); err != nil {
+	g, err := a.DB.RingByNr(nr)
+	if err == nil {
+		err = a.DB.UpdateRing(nr, g.HardwareID, int64(math.Round(in.Hours*3600)))
+	}
+	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			writeErr(w, 404, "fehlt", "Ring nicht gefunden")
 			return
@@ -544,20 +672,38 @@ func (a *App) handleRingEdit(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, "speicher", "Datenbankfehler")
 		return
 	}
+	if in.Description != nil {
+		if err := a.DB.SetRingDescription(nr, *in.Description); err != nil {
+			writeErr(w, 500, "speicher", "Datenbankfehler")
+			return
+		}
+	}
+	// Inaktiv: der Ring fehlt nur in der Seitenleiste; er zählt, warnt und meldet wie jeder andere.
+	if in.Active != nil && *in.Active != (g.EndedAt == 0) {
+		at := int64(0)
+		if !*in.Active {
+			at = store.Now()
+		}
+		if err := a.DB.SetRingEnded(nr, at); err != nil {
+			writeErr(w, 500, "speicher", "Datenbankfehler")
+			return
+		}
+	}
 	a.hub.send("ring")
 	writeJSON(w, 200, map[string]any{"ok": true})
 }
 
-// handleRingConfirm: Hinweis zur erreichten Schwelle bestätigen; „plus“ erhöht die Kapazität dauerhaft um 30 min
+// handleRingConfirm: Hinweis zur erreichten Schwelle eines Rings (ring, sonst der zuletzt benutzte) bestätigen; „plus“ erhöht die Kapazität dauerhaft um 30 min
 // (bei 100 %), danach meldet sich der Hinweis beim nächsten Erreichen von 100 % wieder.
 func (a *App) handleRingConfirm(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		Plus    bool `json:"plus"`
-		IDError bool `json:"id_fehler"`
+		Plus      bool  `json:"plus"`
+		AppUpdate bool  `json:"app_update"`
+		Ring      int64 `json:"ring"` // 0 = zuletzt benutzter Ring
 	}
 	readJSON(r, &in)
-	if in.IDError {
-		if err := a.DB.Set(ringIDErrorKey, ""); err != nil {
+	if in.AppUpdate {
+		if err := a.DB.Set(appUpdateKey, ""); err != nil {
 			writeErr(w, 500, "speicher", "Datenbankfehler")
 			return
 		}
@@ -568,8 +714,11 @@ func (a *App) handleRingConfirm(w http.ResponseWriter, r *http.Request) {
 	ringMu.Lock()
 	defer ringMu.Unlock()
 	g, err := a.DB.ActiveRing()
+	if in.Ring > 0 {
+		g, err = a.DB.RingByNr(in.Ring)
+	}
 	if err != nil {
-		writeErr(w, 404, "fehlt", "Kein aktiver Ring")
+		writeErr(w, 404, "fehlt", "Ring nicht gefunden")
 		return
 	}
 	t, err := a.DB.RingTotals(g.Nr)

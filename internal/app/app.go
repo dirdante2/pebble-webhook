@@ -19,7 +19,7 @@ import (
 
 // AI ist die Schnittstelle zu OpenAI (in Tests ersetzt).
 type AI interface {
-	TranscribeStep(ctx context.Context, id, name string, audio []byte, mime, language string) (text string, seconds float64, cost *float64, err error)
+	TranscribeStep(ctx context.Context, id, name string, audio []byte, mime, language, prompt string) (text string, seconds float64, cost *float64, err error)
 	Respond(ctx context.Context, r openai.Request) (*openai.Result, error)
 	First(area string) *openai.Step
 }
@@ -129,5 +129,10 @@ func (a *App) respond(ctx context.Context, r openai.Request) (*openai.Result, er
 	if rule := i18n.LanguageRuleIn(a.Cfg.Language); rule != "" {
 		r.Instructions = strings.ReplaceAll(r.Instructions, "Antworte auf Deutsch", "Antworte auf Englisch") + "\n\n" + rule
 	}
-	return a.AI.Respond(ctx, r)
+	return a.AI.Respond(a.tagged(ctx), r)
+}
+
+// tagged vermerkt den Nutzer im Context, damit das Protokoll der KI-Anfragen (ai_requests) weiß, wessen Anfrage es ist.
+func (a *App) tagged(ctx context.Context) context.Context {
+	return openai.WithTag(ctx, openai.Tag{UserID: a.UserID})
 }

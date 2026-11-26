@@ -102,7 +102,7 @@ CREATE TABLE IF NOT EXISTS list_items (
   list_id TEXT NOT NULL,
   job_id TEXT NOT NULL DEFAULT '',
   text TEXT NOT NULL,
-  facts TEXT NOT NULL DEFAULT '[]',
+  facts TEXT NOT NULL DEFAULT '[]', -- Stand 1; fällt mit Stand 3 weg
   done_at INTEGER NOT NULL DEFAULT 0,
   created_at INTEGER NOT NULL
 );
@@ -268,6 +268,10 @@ func OpenUser(path string, key []byte, uid int64) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
+	if err := addRingDeviceCols(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("rings: %w", err)
+	}
 	for _, t := range userTables {
 		var x int
 		err := db.QueryRow(`SELECT 1 FROM `+t+` WHERE user_id != ? LIMIT 1`, uid).Scan(&x)
@@ -303,8 +307,9 @@ var SchemaVersion = len(migrations)
 // migrations: Eintrag i hebt die Datenbank eines Nutzers von Stand i auf i+1 und läuft samt neuem Stand in einer
 // Transaktion (scheitert er, bleibt die Datenbank auf Stand i). Eintrag 0 bleibt leer: Stand 1 ist migrateBase.
 var migrations = []func(tx *sql.Tx, uid int64) error{
-	nil,         // Stand 1: migrateBase (Endstand bis 2.x)
-	splitByUser, // Stand 2 (3.0.0): Daten eines Nutzers – Anmeldung und Systemwerte liegen in system.db
+	nil,              // Stand 1: migrateBase (Endstand bis 2.x)
+	splitByUser,      // Stand 2 (3.0.0): Daten eines Nutzers – Anmeldung und Systemwerte liegen in system.db
+	itemFactsToNotes, // Stand 3 (4.5.0): Eckdaten nur an der Notiz, Spalte list_items.facts fällt weg
 }
 
 // userTables: Tabellen einer daten.db, alle mit Spalte user_id (= Besitzer der Datei).
@@ -1483,6 +1488,12 @@ const (
 	// MemoryRaw: Beobachtung (Korrektur, Antwort auf eine Rückfrage), noch kein Vorschlag. Nur der Lernlauf liest sie
 	// und leitet daraus allgemeine Vorschläge ab; danach werden sie entfernt. In der Web-App unsichtbar.
 	MemoryRaw = "roh"
+	// MemoryTerm: Begriff für die Spracherkennung (Name, Eigenbegriff) – geht als Prompt an die Transkription, nicht
+	// ans Gedächtnis der Auswertung. MemoryTermDeleted: gelöscht oder abgelehnt, kommt nicht wieder.
+	// MemoryTermFav: Favorit – steht im Prompt vorn und geht damit sicher mit.
+	MemoryTerm        = "begriff"
+	MemoryTermFav     = "begriff-fav"
+	MemoryTermDeleted = "begriff-geloescht"
 )
 
 type MemoryEntry struct {
@@ -1532,6 +1543,17 @@ func (s *Store) MemoryEntry(id string) (*MemoryEntry, error) {
 	return &e, err
 }
 
+// MemoryByText liefert den Eintrag mit genau diesem Text (ohne Groß-/Kleinschreibung), in welchem Zustand auch immer.
+func (s *Store) MemoryByText(text string) (*MemoryEntry, error) {
+	var e MemoryEntry
+	err := s.DB.QueryRow(`SELECT id, text, status, source, created_at, updated_at FROM memory WHERE text = ? COLLATE NOCASE LIMIT 1`, text).
+		Scan(&e.ID, &e.Text, &e.Status, &e.Source, &e.CreatedAt, &e.UpdatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	return &e, err
+}
+
 // AddMemory legt einen Eintrag an. added=false heißt: derselbe Text steht schon da – in welchem Zustand auch immer,
 // ein gelöschter kommt also nicht wieder.
 func (s *Store) AddMemory(text, status, source string) (added bool, err error) {
@@ -1545,7 +1567,7 @@ func (s *Store) AddMemory(text, status, source string) (added bool, err error) {
 	return err == nil, err
 }
 
-// ResetMemory entfernt alle Gedächtnis-Einträge (aktiv, Vorschläge, gelöscht/„nicht erwünscht“); Beobachtungen bleiben
+// ResetMemory entfernt alle Gedächtnis-Einträge (aktiv, Vorschläge, gelöscht/„nicht erwünscht“, Begriffe); Beobachtungen bleiben
 // als Lernstoff stehen.
 func (s *Store) ResetMemory() (int64, error) {
 	res, err := s.DB.Exec(`DELETE FROM memory WHERE status != ?`, MemoryRaw)
@@ -1895,8 +1917,7 @@ type ListItem struct {
 	JobID      string // Notiz, aus der der Punkt stammt
 	PlanningID string // oder Planung, die als Punkt einsortiert wurde
 	Text       string
-	Facts      string // JSON-Liste aus {name, wert}
-	DoneAt     int64  // 0 = offen
+	DoneAt     int64 // 0 = offen
 	CreatedAt  int64
 	Nr         int64 // Nummer der Notiz bzw. Planung, zu der der Punkt gehört (nur gelesen)
 }
@@ -1975,13 +1996,13 @@ func (s *Store) DeleteList(id string) error {
 	return err
 }
 
-const itemCols = `id, list_id, job_id, text, facts, done_at, created_at, planning_id`
+const itemCols = `id, list_id, job_id, text, done_at, created_at, planning_id`
 
 func (s *Store) queryItems(where string, args ...any) ([]*ListItem, error) {
 	// Die Nummer kommt von der Notiz bzw. Planung des Punkts; where spricht die Punkte als i an.
 	// Punkte im Papierkorb bleiben außen vor.
 	where = "WHERE i.deleted_at = 0 AND " + strings.TrimPrefix(where, "WHERE ")
-	rows, err := s.DB.Query(`SELECT i.id, i.list_id, i.job_id, i.text, i.facts, i.done_at, i.created_at, i.planning_id,
+	rows, err := s.DB.Query(`SELECT i.id, i.list_id, i.job_id, i.text, i.done_at, i.created_at, i.planning_id,
 		COALESCE(j.nr, p.nr, 0) FROM list_items i
 		LEFT JOIN jobs j ON i.job_id != '' AND j.id = i.job_id
 		LEFT JOIN plannings p ON i.planning_id != '' AND p.id = i.planning_id `+where, args...)
@@ -1992,7 +2013,7 @@ func (s *Store) queryItems(where string, args ...any) ([]*ListItem, error) {
 	var out []*ListItem
 	for rows.Next() {
 		var it ListItem
-		if err := rows.Scan(&it.ID, &it.ListID, &it.JobID, &it.Text, &it.Facts, &it.DoneAt, &it.CreatedAt, &it.PlanningID, &it.Nr); err != nil {
+		if err := rows.Scan(&it.ID, &it.ListID, &it.JobID, &it.Text, &it.DoneAt, &it.CreatedAt, &it.PlanningID, &it.Nr); err != nil {
 			return nil, err
 		}
 		out = append(out, &it)
@@ -2035,11 +2056,8 @@ func (s *Store) ListItem(id string) (*ListItem, error) {
 
 func (s *Store) AddListItem(it *ListItem) error {
 	it.ID, it.CreatedAt = NewID(), Now()
-	if it.Facts == "" {
-		it.Facts = "[]"
-	}
-	_, err := s.DB.Exec(`INSERT INTO list_items (`+itemCols+`) VALUES (?,?,?,?,?,?,?,?)`,
-		it.ID, it.ListID, it.JobID, it.Text, it.Facts, it.DoneAt, it.CreatedAt, it.PlanningID)
+	_, err := s.DB.Exec(`INSERT INTO list_items (`+itemCols+`) VALUES (?,?,?,?,?,?,?)`,
+		it.ID, it.ListID, it.JobID, it.Text, it.DoneAt, it.CreatedAt, it.PlanningID)
 	return err
 }
 

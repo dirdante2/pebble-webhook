@@ -173,7 +173,33 @@ func (a *App) handleTranscriptEdit(w http.ResponseWriter, r *http.Request) {
 	learned := len(lines)
 	a.changed(j.ID)
 	a.Wake()
-	writeJSON(w, 200, map[string]any{"ok": true, "geaendert": true, "gelernt": learned})
+	writeJSON(w, 200, map[string]any{"ok": true, "geaendert": true, "gelernt": learned, "begriffe_frage": a.termQuestions(fixes)})
+}
+
+// termQuestions: Wörter, nach denen die Web-App nach einer Korrektur fragt („in die Begriffsliste aufnehmen?“) –
+// nur wo genau ein Wort durch ein anderes ersetzt wurde. Neu ist ein Wort, das noch nirgends steht; steht es schon
+// als Begriff in der Liste (und wurde trotzdem wieder falsch erkannt), fragt die Seite, ob es Favorit werden soll.
+// Abgelehnte, gelöschte und Favoriten bleiben ohne Frage.
+func (a *App) termQuestions(fixes [][2]string) []map[string]any {
+	out := []map[string]any{}
+	for _, f := range fixes {
+		t := cleanTerm(f[1])
+		if strings.ContainsAny(f[0], " ") || strings.ContainsAny(f[1], " ") || len([]rune(t)) < 2 || len(out) == 5 {
+			continue
+		}
+		if strings.IndexFunc(t, unicode.IsLetter) < 0 {
+			continue // reine Zahl
+		}
+		known := false
+		if e, err := a.DB.MemoryByText(t); err == nil {
+			if e.Status != store.MemoryTerm {
+				continue
+			}
+			t, known = e.Text, true
+		}
+		out = append(out, map[string]any{"wort": t, "vorhanden": known})
+	}
+	return out
 }
 
 // handleCounters: GET /api/zaehler – Zahlen für die Navigation (offene Gedächtnis-Vorschläge).

@@ -31,10 +31,57 @@ type Step struct {
 	Limit       float64 // je Kalendermonat; 0 = ohne
 }
 
-// Ledger zählt die Kosten je Eintrag im laufenden Monat.
+// Usage: eine gelungene KI-Anfrage mit ihrem rohen Verbrauch und den Kosten nach den Preisen, die in dem Moment
+// galten (spätere Preisänderungen ändern alte Zeilen nicht). nil = für diese Art Anfrage nicht bekannt.
+type Usage struct {
+	UserID    int64
+	Area      string // Bereich (AreaTranscribe, AreaDictation …)
+	Purpose   string // wofür: Schema der Anfrage (z. B. „lernlauf“) oder vom Aufrufer gesetzt; leer = der Bereich selbst
+	EntryID   string // Eintrag der Reihenfolge des Bereichs
+	Provider  string
+	Model     string
+	TokensIn  *int
+	TokensOut *int
+	Searches  int
+	Seconds   *float64 // Länge der Aufnahme (Transkription)
+	Images    int
+	Cost      *float64 // USD
+	Ref       string   // Auftrag (Notiz, Planungsrunde), zu dem die Anfrage gehört; leer = keiner
+}
+
+// Ledger hält jede Anfrage fest; daraus ergeben sich die Kosten je Eintrag im laufenden Monat (Monatslimit).
 type Ledger interface {
 	Spent(id string) float64
-	Spend(id string, usd float64)
+	Record(u Usage)
+}
+
+// Tag: was der Aufrufer über eine Anfrage weiß (Nutzer, Auftrag, Zweck) – reist im Context mit bis ins Protokoll.
+type Tag struct {
+	UserID  int64
+	Ref     string
+	Purpose string
+}
+
+type tagKey struct{}
+
+// WithTag ergänzt den Context; leere Felder lassen stehen, was schon gesetzt ist.
+func WithTag(ctx context.Context, t Tag) context.Context {
+	old := TagOf(ctx)
+	if t.UserID == 0 {
+		t.UserID = old.UserID
+	}
+	if t.Ref == "" {
+		t.Ref = old.Ref
+	}
+	if t.Purpose == "" {
+		t.Purpose = old.Purpose
+	}
+	return context.WithValue(ctx, tagKey{}, t)
+}
+
+func TagOf(ctx context.Context) Tag {
+	t, _ := ctx.Value(tagKey{}).(Tag)
+	return t
 }
 
 // ErrLimit: das Monatslimit eines Eintrags ist erreicht.
@@ -75,10 +122,17 @@ func (r *Router) open(s *Step) bool {
 	return s.Limit <= 0 || r.Ledger == nil || r.Ledger.Spent(s.ID) < s.Limit
 }
 
-func (r *Router) spend(s *Step, usd float64) {
-	if r.Ledger != nil && usd > 0 {
-		r.Ledger.Spend(s.ID, usd)
+// record schreibt eine gelungene Anfrage ins Protokoll (auch ohne Kosten: die Tokens zählen trotzdem).
+func (r *Router) record(ctx context.Context, s *Step, u Usage) {
+	if r.Ledger == nil {
+		return
 	}
+	t := TagOf(ctx)
+	u.UserID, u.Ref, u.EntryID, u.Provider, u.Model = t.UserID, t.Ref, s.ID, s.Name, s.Model
+	if t.Purpose != "" {
+		u.Purpose = t.Purpose
+	}
+	r.Ledger.Record(u)
 }
 
 // First: der erste Eintrag eines Bereichs unter seinem Limit (für Vorab-Rechnungen wie das Suchbudget); nil = keiner.
@@ -128,8 +182,8 @@ func (r *Router) Respond(ctx context.Context, req Request) (*Result, error) {
 			return err
 		}
 		cost := (float64(out.InputTokens)*s.PriceIn+float64(out.OutputTokens)*s.PriceOut)/1e6 + float64(out.Searches)*s.PriceSearch
-		out.Cost, out.Provider = &cost, s.Name
-		r.spend(s, cost)
+		out.Cost, out.Provider, out.Model = &cost, s.Name, s.Model
+		r.record(ctx, s, Usage{Area: req.Area, Purpose: req.SchemaName, TokensIn: &out.InputTokens, TokensOut: &out.OutputTokens, Searches: out.Searches, Cost: &cost})
 		res = out
 		return nil
 	})
@@ -138,7 +192,7 @@ func (r *Router) Respond(ctx context.Context, req Request) (*Result, error) {
 
 // TranscribeStep: Transkription über einen bestimmten Eintrag (die Reihenfolge samt Whisper führt die App);
 // Kosten nach Minuten, nil bei unbekannter Länge.
-func (r *Router) TranscribeStep(ctx context.Context, id, name string, audio []byte, mime, language string) (string, float64, *float64, error) {
+func (r *Router) TranscribeStep(ctx context.Context, id, name string, audio []byte, mime, language, prompt string) (string, float64, *float64, error) {
 	var s *Step
 	for _, x := range r.steps(AreaTranscribe) {
 		if x.ID == id {
@@ -151,15 +205,16 @@ func (r *Router) TranscribeStep(ctx context.Context, id, name string, audio []by
 	if !r.open(s) {
 		return "", -1, nil, ErrLimit
 	}
-	text, seconds, err := s.Client.Transcribe(ctx, s.Model, name, audio, mime, language)
+	text, seconds, err := s.Client.Transcribe(ctx, s.Model, name, audio, mime, language, prompt)
 	if err != nil {
 		return "", -1, nil, err
 	}
 	if seconds < 0 {
+		r.record(ctx, s, Usage{Area: AreaTranscribe}) // Länge unbekannt: Kosten bleiben offen
 		return text, seconds, nil, nil
 	}
 	cost := seconds / 60 * s.PriceMinute
-	r.spend(s, cost)
+	r.record(ctx, s, Usage{Area: AreaTranscribe, Seconds: &seconds, Cost: &cost})
 	return text, seconds, &cost, nil
 }
 
@@ -173,7 +228,7 @@ func (r *Router) Image(ctx context.Context, prompt, size, quality string) ([]byt
 			return err
 		}
 		data, cost = d, s.PriceImage
-		r.spend(s, cost)
+		r.record(ctx, s, Usage{Area: AreaImage, Images: 1, Cost: &cost})
 		return nil
 	})
 	return data, cost, err

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"pebble-webhook/internal/openai"
 	"slices"
 	"strings"
 	"time"
@@ -23,8 +24,6 @@ func (a *App) Run(ctx context.Context) {
 	a.initRing() // vor sortAudio: die Pfade der Einträge stimmen noch
 	a.migrateMedia()
 	a.sortAudio()
-	a.fixItemYears()
-	a.fixNoteFilms()
 	a.Cleanup()
 	lastCleanup := time.Now()
 	for {
@@ -151,6 +150,8 @@ func (a *App) halt(ids ...string) {
 
 // step führt genau einen Schritt aus und setzt den neuen Stand im Auftrag (gespeichert wird außen).
 func (a *App) step(ctx context.Context, j *store.Job) error {
+	// Jede KI-Anfrage dieses Schritts gehört zu diesem Auftrag (Protokoll ai_requests).
+	ctx = openai.WithTag(ctx, openai.Tag{UserID: a.UserID, Ref: j.ID})
 	switch j.State {
 	case store.StateNew:
 		return a.transcribe(ctx, j)
@@ -161,6 +162,9 @@ func (a *App) step(ctx context.Context, j *store.Job) error {
 				return err
 			}
 			j.State = store.StateProcessed
+			if j.DeletedAt != 0 {
+				j.State = store.StateDone // aufgeteilt: liegt im Papierkorb, kein Joplin, keine Meldung
+			}
 			return nil
 		case "planung":
 			if err := a.assign(ctx, j); err != nil {
@@ -414,7 +418,7 @@ func (a *App) joplinState(err error) {
 }
 
 func (a *App) notifyDone(j *store.Job) {
-	if j.IsTest {
+	if j.IsTest || j.DeletedAt != 0 {
 		return
 	}
 	// Notizen: Kanal „Gespeicherte Einträge“ (Vorgabe aus); Planungen: Kanal „Rückfragen“.

@@ -510,12 +510,13 @@ const routen = [
   [/^\/status$/, 'status', zeigeStatus],
   [/^\/status\/kosten$/, 'kosten', zeigeKosten],
   [/^\/status\/ring$/, 'ring', zeigeRing],
-  [/^\/status\/ring\/tauschen$/, 'ringTauschen', zeigeRingTauschen],
   [/^\/status\/ring\/(\d+)\/bearbeiten$/, 'ringBearbeiten', zeigeRingBearbeiten],
   [/^\/status\/papierkorb$/, 'papierkorb', zeigePapierkorb],
   [/^\/status\/gedaechtnis$/, 'gedaechtnis', zeigeGedaechtnis],
   [/^\/status\/gedaechtnis\/neu$/, 'gedaechtnisBearbeiten', () => zeigeGedaechtnisBearbeiten('')],
   [/^\/status\/gedaechtnis\/([0-9a-f]+)\/bearbeiten$/, 'gedaechtnisBearbeiten', zeigeGedaechtnisBearbeiten],
+  [/^\/status\/gedaechtnis\/begriff\/neu$/, 'gedaechtnisBearbeiten', () => zeigeBegriffBearbeiten('')],
+  [/^\/status\/gedaechtnis\/begriff\/([0-9a-f]+)\/bearbeiten$/, 'gedaechtnisBearbeiten', zeigeBegriffBearbeiten],
   [/^\/pebble$/, 'pebble', zeigePebble],
   [/^\/status\/geraet$/, 'geraetNeu', zeigeGeraetNeu],
   [/^\/status\/tags$/, 'tagsVerwalten', zeigeTagsVerwalten],
@@ -884,6 +885,16 @@ const ICON_HAKEN = T('<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12
 const ICON_MUELL = T('<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9.5 7V4.5h5V7M6.5 7l1 13h9l1-13M10 11v5.5M14 11v5.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>');
 const ICON_NUR_OFFEN = T('<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 4l16 16" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>');
 const ICON_PFEIL_LINKS = T('<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 12H5M10 7l-5 5 5 5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>');
+const ICON_WEITER = T('<svg class="weiter" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>');
+// Herkunft eines Begriffs: von Hand (Person) oder von der KI (Funken; Lernlauf = Funken im Kreis).
+const ICON_QUELLE = {
+  nutzer: '<path d="M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM4.5 20a7.5 7.5 0 0 1 15 0" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>',
+  ki: '<path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8zM19 16l.8 2.2L22 19l-2.2.8L19 22l-.8-2.2L16 19l2.2-.8z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>',
+  lernlauf: '<path d="M20 12a8 8 0 1 1-2.6-5.9M20 4v4h-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M12 8.5l1 2.5 2.5 1-2.5 1-1 2.5-1-2.5-2.5-1 2.5-1z" fill="currentColor"/>',
+};
+ICON_QUELLE.korrektur = '<path d="M4 20h4L19 9l-4-4L4 16zM13.5 6.5l4 4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>';
+ICON_QUELLE.antwort = ICON_QUELLE.anweisung = '<path d="M5 5h14a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1h-7l-4.5 3.5V16H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>';
+const quelleIcon = (q) => `<svg class="quelle" viewBox="0 0 24 24" role="img" aria-label="${esc(GED_QUELLE[q] || q)}"><title>${esc(GED_QUELLE[q] || q)}</title>${ICON_QUELLE[q] || ICON_QUELLE.ki}</svg>`;
 const ICON_PFEIL_RECHTS = T('<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M14 7l5 5-5 5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>');
 const ICON_OEFFNEN = T('<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4.5 12a7.5 7.5 0 1 0 2.2-5.3M4.5 4v4h4" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>');
 // Rechts: offener Eintrag → Haken (erledigt), erledigter → Pfeil (wieder offen).
@@ -1686,10 +1697,9 @@ function analyseHtml(e, aufnahme = '') {
       <div class="leiste"><button class="btn haupt" data-fragen="${e.id}" data-ftyp="eintrag">${tx('{0} beantworten', fragenText(e.fragen))}</button></div></div>`;
   }
   if (an?.antworten?.length) html += T`<h2>Deine Antworten</h2><dl>${an.antworten.map((x) => T`<dt>${esc(x.frage)}</dt><dd><span class="leise">${x.zeit ? zeit(x.zeit) : tx('Zeit unbekannt')}</span> ${esc(x.antwort)}</dd>`).join('')}</dl>`;
-  // Eckdaten zuerst (bei mehreren Punkten je Punkt mit Namen), darunter getrennt der Listenbezug mit Erledigt-Haken.
+  // Eckdaten zuerst (nur die der Notiz, Listenpunkte tragen keine), darunter getrennt der Listenbezug mit Erledigt-Haken.
   const lp = e.liste?.punkte || [];
-  const mehrere = lp.length > 1;
-  html += block(tx('Eckdaten'), lp.map((p) => (p.eckdaten?.length ? `${mehrere ? `<h3>${esc(p.text)}</h3>` : ''}${eckdatenHtml(p.eckdaten)}` : '')).join('') + eckdatenHtml(an?.eckdaten));
+  html += block(tx('Eckdaten'), eckdatenHtml(an?.eckdaten));
   if (e.liste) {
     html += block(T`Liste <a href="/liste/${e.liste.id}">${esc(listenName(e.liste))}</a>`, lp.map((p) => T`<div class="lp${p.erledigt ? ' erledigt' : ''}"><button class="haken" data-haken="${p.id}" aria-pressed="${!!p.erledigt}" aria-label="${p.erledigt ? tx('Wieder öffnen') : tx('Abhaken')}: ${esc(p.text)}"><span class="hakenbild" aria-hidden="true"></span></button><div class="lptext"><div>${esc(p.text)}</div></div></div>`).join(''), 'listenbezug');
   }
@@ -1788,7 +1798,10 @@ function eintragHtml(e, offline) {
   const details = [];
   if (e.zuordnung) details.push([tx('Zuordnung'), ZUORDNUNG[e.zuordnung] || e.zuordnung]);
   if (e.transkript_quelle) details.push([tx('Transkript von'), { openai: tx('OpenAI'), lokal: tx('Whisper (lokal)'), 'openai-ausweich': tx('OpenAI (lokal gescheitert)'), pebble: tx('Pebble'), text: tx('getippt'), nutzer: tx('von Hand korrigiert') }[e.transkript_quelle] || e.transkript_quelle]);
-  if (e.kosten_usd != null) details.push([e.modus === 'diktat' ? tx('Kosten der Auswertung') : tx('Recherchekosten'), `${e.kosten_usd.toFixed(3)} $`]);
+  // KI-Anfragen dieses Auftrags aus dem Protokoll: je Schritt Anbieter, Modell, rohe Tokens und Kosten (0 $ bleibt weg).
+  // Ältere Aufträge haben kein Protokoll, dort steht nur der gespeicherte Betrag.
+  if (e.ki_anfragen?.length) for (const q of e.ki_anfragen) details.push([kiZweck(q), kiVerbrauch(q)]);
+  else if (e.kosten_usd > 0) details.push([e.modus === 'diktat' ? tx('Kosten der KI-Auswertung') : tx('Recherchekosten'), `${e.kosten_usd.toFixed(3)} $`]);
   if (e.joplin?.aktiv) details.push([tx('Joplin'), e.joplin.fehler ? T`Übertragung fehlgeschlagen: ${e.joplin.fehler}` : e.joplin.offen ? tx('noch nicht übertragen') : T`übertragen ${zeit(e.joplin.uebertragen)}`]);
   const pebbleText = e.pebble_text && e.pebble_text !== e.transkript ? T`<h3>Transkript der Pebble-App</h3><blockquote>${esc(e.pebble_text)}</blockquote>` : '';
   if (details.length || pebbleText) html += T`<details class="einklapp technik"><summary>Technische Details</summary>${details.length ? T`<dl>${details.map(([k, v]) => T`<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}</dl>` : ''}${pebbleText}</details>`;
@@ -2135,6 +2148,34 @@ async function zeigeUmhaengen(id) {
 
 // ---------- Wortlaut korrigieren (eigene Bearbeiten-Seite) ----------
 
+// Nach dem Speichern: je einzeln berichtigtem Wort fragen, ob es in die Begriffsliste der Spracherkennung soll.
+// „Nein“ merkt ein neues Wort als nicht erwünscht vor, damit auch die KI es nicht einträgt. Steht das Wort schon in
+// der Liste (trotzdem wieder falsch erkannt), macht „Als Favorit“ es zum Favoriten: es geht dann vorn sicher mit.
+function frageBegriffe(fragen, zurueck) {
+  const offen = new Map(fragen.map((f) => [f.wort, f]));
+  const male = () => {
+    seite.innerHTML = T`<h1>In die Begriffsliste aufnehmen?</h1>
+      <p class="leise">Begriffe der Liste gehen als Hinweis an die Spracherkennung mit, damit sie das Wort künftig gleich richtig schreibt.</p>
+      ${[...offen.values()].map((f) => T`<div class="karte gedkarte"><div><span class="badge neutral">${esc(f.wort)}</span>${f.vorhanden ? T` <span class="leise">steht schon in der Liste</span>` : ''}</div><div class="leiste"><button class="btn klein haupt" data-wort="${esc(f.wort)}">${f.vorhanden ? tx('Als Favorit – immer mitsenden') : tx('Hinzufügen')}</button><button class="btn klein" data-wort="${esc(f.wort)}" data-nein="1">Nein</button></div></div>`).join('')}
+      <div class="leiste"><a class="btn" href="${zurueck}">Fertig</a></div>`;
+  };
+  male();
+  seite.onclick = async (ev) => {
+    const b = ev.target.closest('button[data-wort]');
+    if (!b) return;
+    const f = offen.get(b.dataset.wort);
+    b.disabled = true;
+    try {
+      // „Nein“ bei einem vorhandenen Begriff ändert nichts (er bleibt in der Liste).
+      if (!(b.dataset.nein && f.vorhanden)) await api('/api/gedaechtnis/begriffe', { method: 'POST', body: { begriffe: [f.wort], ablehnen: !!b.dataset.nein } });
+      melde(b.dataset.nein ? (f.vorhanden ? tx('Unverändert') : tx('Nicht aufgenommen')) : f.vorhanden ? tx('Favorit – geht immer mit') : tx('Aufgenommen'));
+      offen.delete(f.wort);
+      if (!offen.size) return geheZu(zurueck, true);
+      male();
+    } catch (x) { b.disabled = false; melde(x instanceof NetzFehler ? tx('Offline – nur mit Verbindung') : x.message); }
+  };
+}
+
 async function zeigeWortlaut(id) {
   const e = await api(T`/api/eintraege/${id}`);
   const zurueck = e.planung ? T`/planung/${e.planung}` : T`/eintrag/${id}`;
@@ -2155,6 +2196,7 @@ async function zeigeWortlaut(id) {
       const d = await api(T`/api/eintraege/${id}/wortlaut`, { method: 'PUT', body: { text } });
       melde(!d.geaendert ? tx('Nichts geändert') : T`Wird neu ausgewertet${d.gelernt ? tx(' · die KI prüft, ob die Berichtigung ins Gedächtnis gehört') : ''}`);
       ladeZaehler();
+      if (d.begriffe_frage?.length) return frageBegriffe(d.begriffe_frage, zurueck);
       geheZu(zurueck, true);
     } catch (f) {
       b.disabled = false;
@@ -2956,36 +2998,73 @@ async function zeigeStatus() {
 // ---------- KI-Kosten ----------
 
 
+// ---------- KI-Anfragen (Protokoll): Zweck und roher Verbrauch ----------
+
+const KI_ZWECK = { transkription: tx('Transkription'), diktat: tx('KI-Auswertung'), auswertung: tx('KI-Auswertung'), kurztitel: tx('Kurztitel'), recherche: tx('Recherche'), planung: tx('Recherche'),
+  bilder: tx('Bild'), zuordnung: tx('Zuordnung'), einsortieren: tx('Einsortieren'), termin: tx('Termin'), trailer: tx('Trailer'), beschreibungen: tx('Beschreibungen'),
+  lernlauf: tx('Lernlauf'), beobachtungen: tx('Beobachtungen auswerten'), uebertrag: tx('Übertrag (vor dem Protokoll)') };
+const kiZweck = (q) => KI_ZWECK[q.zweck] || KI_ZWECK[q.bereich] || q.zweck || q.bereich;
+const ganz = (n) => Math.round(n).toLocaleString(LOCALE);
+// „OpenAI · gpt-x · 4.210 ein / 380 aus · 2 Suchen · 0,023 $“ – nur was bekannt ist und nicht 0.
+function kiVerbrauch(q, ohneAnbieter) {
+  const t = ohneAnbieter ? [] : [q.anbieter, q.modell].filter(Boolean);
+  if (q.tokens_ein != null || q.tokens_aus != null) t.push(T`${ganz(q.tokens_ein || 0)} ein / ${ganz(q.tokens_aus || 0)} aus`);
+  if (q.sekunden != null) t.push(`${ganz(q.sekunden)} s`);
+  if (q.suchen) t.push(`${ganz(q.suchen)} ${q.suchen === 1 ? tx('Suche') : tx('Suchen')}`);
+  if (q.bilder) t.push(`${ganz(q.bilder)} ${q.bilder === 1 ? tx('Bild') : tx('Bilder')}`);
+  if (q.anzahl > 1) t.push(`${ganz(q.anzahl)} ${tx('Anfragen')}`);
+  if (q.kosten_usd > 0) t.push(`${q.kosten_usd.toFixed(3)} $`);
+  return t.join(' · ');
+}
+
 // ---------- Gedächtnis: was die KI über den Nutzer gelernt hat ----------
 
-const GED_REITER = [['vorschlaege', tx('Vorschläge')], ['aktiv', tx('Aktiv')], ['geloescht', tx('Gelöscht')]];
+const GED_REITER = [['vorschlaege', tx('Vorschläge')], ['aktiv', tx('Aktiv')], ['begriffe', tx('Begriffe')], ['geloescht', tx('Gelöscht')]];
 const GED_QUELLE = { ki: 'KI', lernlauf: tx('Lernlauf'), korrektur: tx('Korrektur'), antwort: tx('Antwort'), anweisung: tx('Anweisung'), nutzer: tx('von dir') };
 
 async function zeigeGedaechtnis() {
   seite.innerHTML = T`<p class="leer">Lädt …</p>`;
-  let wartet = false, g = null;
+  let wartet = false, g = null, sichtbar = [];
   let reiter = localStorage.getItem('gedaechtnis-reiter');
   const male = () => {
     if (!GED_REITER.some(([r]) => r === reiter)) reiter = g.vorschlaege.length ? 'vorschlaege' : 'aktiv';
     const l = g.lernlauf;
     const lauf = !l ? tx('Noch kein Lernlauf.') : l.fehler ? T`Letzter Lernlauf ${zeit(l.zeit)} fehlgeschlagen: ${esc(l.fehler)}`
       : T`Letzter Lernlauf ${zeit(l.zeit)}: ${l.notizen} Notizen und ${l.planungen} Planungen ausgewertet, ${l.neu} neue Vorschläge${l.kosten_usd != null ? `, ${usd(l.kosten_usd)}` : ''}.`;
-    const knoepfe = (e) => (reiter === 'vorschlaege'
-      ? T`<button class="btn klein haupt" data-g="uebernehmen" data-id="${e.id}">Übernehmen</button><button class="btn klein" data-g="verwerfen" data-id="${e.id}">Verwerfen</button><a class="btn klein" href="/status/gedaechtnis/${e.id}/bearbeiten">Ändern</a>`
-      : reiter === 'aktiv'
-        ? T`<a class="btn klein" href="/status/gedaechtnis/${e.id}/bearbeiten">Bearbeiten</a><button class="btn klein gefahr" data-g="loeschen" data-id="${e.id}">Löschen</button>`
-        : T`<button class="btn klein" data-g="wiederherstellen" data-id="${e.id}">Wiederherstellen</button>`);
-    const leer = { vorschlaege: tx('Keine offenen Vorschläge.'), aktiv: tx('Noch nichts bestätigt.'), geloescht: tx('Nichts gelöscht.') }[reiter];
+    const leer = { vorschlaege: tx('Keine offenen Vorschläge.'), aktiv: tx('Noch nichts bestätigt.'), begriffe: tx('Noch keine Begriffe.'), geloescht: tx('Nichts gelöscht.') }[reiter];
     const hinweis = { vorschlaege: tx('Neues von der KI, aus deinen Korrekturen und Antworten. Es wirkt erst, wenn du es übernimmst.'),
       aktiv: tx('Geht bei jeder Notiz und Planung an die KI mit.'),
+      begriffe: T`Namen und Eigenbegriffe, die die Spracherkennung richtig schreiben soll. Sie gehen in dieser Reihenfolge als Hinweis mit; Favoriten (★) stehen vorn. Belegt: ${g.begriffe_zeichen} von ${g.begriffe_zeichen_max} Zeichen.`,
       geloescht: T`Kommt nicht wieder. Die letzten ${g.unerwuenscht} gehen als „nicht erwünscht“ an die KI mit.` }[reiter];
+    // Gelöschte Begriffe stehen mit unter „Gelöscht“, erkennbar an der Marke.
+    const liste = reiter === 'geloescht' ? [...g.geloescht, ...g.begriffe_geloescht.map((e) => ({ ...e, begriff: true }))].sort((x, y) => y.geaendert - x.geaendert) : g[reiter];
+    const anzahl = (r) => (r === 'geloescht' ? g.geloescht.length + g.begriffe_geloescht.length : g[r].length);
+    sichtbar = liste;
+    // Alle Reiter: kompakte Zeilen (Herkunft als Symbol, Datum rechts), Optionen im Blatt von unten.
+    // Begriffe stehen in Sende-Reihenfolge; am Ende, was nicht mehr mitgeht.
+    const zeile = (e) => T`<button type="button" class="begriffzeile${e.im_prompt === false ? ' aus' : ''}" data-blatt="${e.id}" aria-haspopup="dialog"><span class="begrifftext"><span>${e.favorit ? T`<span class="stern" title="Favorit">★</span> ` : ''}${e.begriff ? T`<span class="badge neutral">${tx('Begriff')}</span> ` : ''}${esc(e.text)}</span></span><span class="begriffmeta">${quelleIcon(e.quelle)}<span class="begriffdatum">${kurzTag(new Date(e.geaendert).toLocaleDateString('sv'))}</span></span>${ICON_WEITER}</button>`;
+    const mit = liste.filter((e) => e.im_prompt !== false), ohne = liste.filter((e) => e.im_prompt === false);
+    // Begriffe stehen dicht als eine Liste, die Sätze der anderen Reiter mit etwas Abstand.
+    const art = reiter === 'begriffe' ? 'begriffliste' : 'begriffliste luft';
+    const zeilen = T`<div class="${art}">${mit.map(zeile).join('')}</div>
+      ${ohne.length ? T`<p class="leise begriffrest">Passt nicht mehr – wird nicht mitgesendet (${ohne.length})</p><div class="${art}">${ohne.map(zeile).join('')}</div>` : ''}
+      <dialog class="mehrblatt" id="gedblatt" aria-label="Optionen" tabindex="-1"></dialog>`;
     seite.innerHTML = T`<h1>Gedächtnis</h1>
       <p class="leise">Was die KI über dich weiß, damit sie kurze Notizen richtig versteht und einsortiert.</p>
-      <div class="leiste"><a class="btn" href="/status/gedaechtnis/neu">Neuer Eintrag</a><button class="btn" data-g="lernen"${wartet || g.lernlauf_laeuft ? ' disabled' : ''}>${wartet || g.lernlauf_laeuft ? tx('Lernlauf läuft …') : tx('Jetzt lernen')}</button></div>
-      <nav class="btn-group unter" aria-label="Gedächtnis">${GED_REITER.map(([r, n]) => T`<button class="btn${r === reiter ? ' aktiv' : ''}" data-reiter="${r}">${n} <span class="zaehler${r === 'vorschlaege' && g[r].length ? '' : ' still'}">${g[r].length}</span></button>`).join('')}</nav>
+      <div class="leiste"><a class="btn" href="/status/gedaechtnis/neu">Neuer Eintrag</a><a class="btn" href="/status/gedaechtnis/begriff/neu">Neuer Begriff</a><button class="btn" data-g="lernen"${wartet || g.lernlauf_laeuft ? ' disabled' : ''}>${wartet || g.lernlauf_laeuft ? tx('Lernlauf läuft …') : tx('Jetzt lernen')}</button></div>
+      <nav class="btn-group unter reiter4" aria-label="Gedächtnis">${GED_REITER.map(([r, n]) => T`<button class="btn${r === reiter ? ' aktiv' : ''}" data-reiter="${r}">${n} <span class="zaehler${r === 'vorschlaege' && g[r].length ? '' : ' still'}">${anzahl(r)}</span></button>`).join('')}</nav>
       <p class="leise">${hinweis}</p>
-      ${g[reiter].length ? g[reiter].map((e) => T`<div class="karte gedkarte"><div>${esc(e.text)}</div><div class="leise">${GED_QUELLE[e.quelle] || esc(e.quelle)} · ${zeit(e.geaendert)}</div><div class="leiste">${knoepfe(e)}</div></div>`).join('') : T`<p class="leer">${leer}</p>`}
-      <p class="leise">${lauf}${g.naechster_lernlauf ? T` Nächster ab ${zeit(g.naechster_lernlauf)}.` : ''} Ausgewertet werden die letzten ${g.lernlauf_eintraege} Einträge.</p>`;
+      ${liste.length ? zeilen : T`<p class="leer">${leer}</p>`}
+      <p class="leise">${lauf}${g.naechster_lernlauf ? T` Nächster ab ${zeit(g.naechster_lernlauf)}.` : ''} Ausgewertet werden die letzten ${g.lernlauf_eintraege} Einträge.</p>`;    stapeln();
+  };
+  // Symbol links vom Datum; bei mehrzeiligem Text oder einem, der bis ans Datum reicht, steht es über dem Datum.
+  const stapeln = () => {
+    for (const z of seite.querySelectorAll('.begriffzeile')) {
+      z.classList.remove('gestapelt');
+      const feld = z.querySelector('.begrifftext'), text = feld.firstElementChild;
+      const zeilenhoehe = parseFloat(getComputedStyle(feld).lineHeight) || 20;
+      if (text.getClientRects().length > 1 || feld.offsetHeight > zeilenhoehe * 1.5 || text.getBoundingClientRect().width >= feld.clientWidth - 6) z.classList.add('gestapelt');
+    }
   };
   const laden = async (vorab) => {
     try { g = await apiAbgelegt('/api/gedaechtnis', vorab); } catch (f) {
@@ -3004,6 +3083,20 @@ async function zeigeGedaechtnis() {
     const b = ev.target.closest('button');
     if (!b || !g) return;
     if (b.dataset.reiter) { reiter = b.dataset.reiter; localStorage.setItem('gedaechtnis-reiter', reiter); return male(); }
+    if (b.dataset.blatt) {
+      const e = sichtbar.find((x) => x.id === b.dataset.blatt), d = document.getElementById('gedblatt');
+      if (!e || !d) return;
+      const knopf = (aktion, text, klasse = '') => T`<button type="button" class="mehrpunkt${klasse}" data-g="${aktion}" data-id="${e.id}">${text}</button>`;
+      const link = (text) => T`<a class="mehrpunkt" href="/status/gedaechtnis/${reiter === 'begriffe' ? 'begriff/' : ''}${e.id}/bearbeiten">${text}</a>`;
+      const punkte = { vorschlaege: () => knopf('uebernehmen', tx('Übernehmen')) + link(tx('Ändern')) + knopf('verwerfen', tx('Verwerfen'), ' gefahr'),
+        aktiv: () => link(tx('Bearbeiten')) + knopf('loeschen', tx('Löschen'), ' gefahr'),
+        begriffe: () => knopf(e.favorit ? 'kein_favorit' : 'favorit', e.favorit ? tx('Favorit entfernen') : tx('Als Favorit – immer mitsenden')) + link(tx('Bearbeiten')) + knopf('loeschen', tx('Löschen'), ' gefahr'),
+        geloescht: () => knopf('wiederherstellen', tx('Wiederherstellen')) }[reiter]();
+      d.innerHTML = T`<div class="griff" aria-hidden="true"></div>
+        <div class="blattkopf"><strong>${esc(e.text)}</strong><div class="leise">${e.begriff ? T`Begriff · ` : ''}${GED_QUELLE[e.quelle] || esc(e.quelle)} · ${zeit(e.geaendert)}${e.im_prompt === false ? T` · wird nicht mitgesendet` : ''}</div></div>${punkte}`;
+      d.showModal(); d.focus();
+      return;
+    }
     if (!b.dataset.g) return;
     b.disabled = true;
     try {
@@ -3012,14 +3105,15 @@ async function zeigeGedaechtnis() {
         await api('/api/gedaechtnis/lernen', { method: 'POST' });
         melde(tx('Lernlauf gestartet'));
       } else {
-        if (b.dataset.g === 'loeschen' && !confirm(tx('Eintrag löschen? Die KI schlägt ihn nicht wieder vor.'))) { b.disabled = false; return; }
+        if (b.dataset.g === 'loeschen' && !confirm(reiter === 'begriffe' ? tx('Begriff löschen? Die KI trägt ihn nicht wieder ein.') : tx('Eintrag löschen? Die KI schlägt ihn nicht wieder vor.'))) { b.disabled = false; return; }
         await api(T`/api/gedaechtnis/${b.dataset.id}`, { method: 'POST', body: { aktion: b.dataset.g } });
-        melde({ uebernehmen: tx('Übernommen'), verwerfen: tx('Verworfen'), loeschen: tx('Gelöscht'), wiederherstellen: tx('Wiederhergestellt') }[b.dataset.g]);
+        melde({ uebernehmen: tx('Übernommen'), verwerfen: tx('Verworfen'), loeschen: tx('Gelöscht'), wiederherstellen: tx('Wiederhergestellt'), favorit: tx('Favorit – geht immer mit'), kein_favorit: tx('Kein Favorit mehr') }[b.dataset.g]);
       }
       await laden();
     } catch (f) { if (b.dataset.g === 'lernen') wartet = false; b.disabled = false; melde(f.message); }
   };
-  aufraeumen = () => { seite.onclick = null; };
+  addEventListener('resize', stapeln);
+  aufraeumen = () => { seite.onclick = null; removeEventListener('resize', stapeln); };
   await laden(true).catch(() => {});
   await laden();
 }
@@ -3043,6 +3137,32 @@ async function zeigeGedaechtnisBearbeiten(id) {
     try {
       await api(e ? T`/api/gedaechtnis/${e.id}` : '/api/gedaechtnis', { method: e ? 'PUT' : 'POST', body: { text } });
       localStorage.setItem('gedaechtnis-reiter', 'aktiv');
+      melde(tx('Gespeichert'));
+      geheZu('/status/gedaechtnis', true);
+    } catch (f) { ev.target.disabled = false; melde(f.message); }
+  };
+}
+
+// Eigene Seite zum Anlegen (id leer, mehrere auf einmal) oder Ändern eines Begriffs der Spracherkennung.
+async function zeigeBegriffBearbeiten(id) {
+  let e = null;
+  if (id) {
+    const g = await api('/api/gedaechtnis');
+    e = g.begriffe.find((x) => x.id === id);
+    if (!e) { seite.innerHTML = T('<p class="leer">Begriff nicht gefunden.</p><p class="mitte"><a class="btn" href="/status/gedaechtnis">Zum Gedächtnis</a></p>'); return; }
+  }
+  seite.innerHTML = T`<p><a class="btn klein" href="/status/gedaechtnis">← Gedächtnis</a></p><h1>${e ? tx('Begriff ändern') : tx('Neue Begriffe')}</h1>
+    <p class="leise">${e ? tx('So, wie die Spracherkennung ihn schreiben soll.') : tx('Namen und Eigenbegriffe, so wie die Spracherkennung sie schreiben soll – einer je Zeile oder mit Komma getrennt.')}</p>
+    ${e ? T`<input id="gtext" type="text" maxlength="60" value="${esc(e.text)}">` : T`<textarea id="gtext" rows="5"></textarea>`}
+    <div class="leiste"><button class="btn haupt" id="gsichern">Speichern</button><a class="btn" href="/status/gedaechtnis">Abbrechen</a></div>`;
+  document.getElementById('gsichern').onclick = async (ev) => {
+    const text = document.getElementById('gtext').value.trim();
+    if (!text) return melde(tx('Text fehlt'));
+    ev.target.disabled = true;
+    try {
+      if (e) await api(T`/api/gedaechtnis/${e.id}`, { method: 'PUT', body: { text } });
+      else await api('/api/gedaechtnis/begriffe', { method: 'POST', body: { begriffe: text.split(/[\n,;]+/).map((t) => t.trim()).filter(Boolean) } });
+      localStorage.setItem('gedaechtnis-reiter', 'begriffe');
       melde(tx('Gespeichert'));
       geheZu('/status/gedaechtnis', true);
     } catch (f) { ev.target.disabled = false; melde(f.message); }
@@ -3102,7 +3222,9 @@ const stunden = (s) => {
 };
 const datumKurz = (ms) => new Date(ms).toLocaleDateString(LOCALE, { day: '2-digit', month: '2-digit', year: 'numeric' });
 const monatName = (m) => new Date(`${m}-15T12:00:00`).toLocaleDateString(LOCALE, { month: 'short', year: '2-digit' });
-const ringName = (r) => (r.hardware_id ? tx('Ring {0} · {1}', r.nr, r.hardware_id) : tx('Ring {0}', r.nr));
+// Version der Pebble-App aus ihrem User-Agent („CoreApp/1.18.0.2-…“ → „1.18.0.2-…“).
+const pebbleVersion = (s) => String(s || '').replace(/^CoreApp\//i, '');
+const ringName = (r) => (r.hardware_id ? (r.beschreibung ? tx('Ring {0} · {1} · {2}', r.nr, r.hardware_id, r.beschreibung) : tx('Ring {0} · {1}', r.nr, r.hardware_id)) : tx('Ring {0}', r.nr));
 // Achse für Sekunden: runde Obergrenze in Minuten bzw. Stunden.
 function achseZeit(max) {
   const stufen = [60, 120, 300, 600, 900, 1800, 3600, 7200, 10800, 18000, 36000, 72000];
@@ -3111,7 +3233,7 @@ function achseZeit(max) {
 }
 const stufeKlasse = (p) => (p >= 95 ? 'stufe95' : p >= 80 ? 'stufe80' : p >= 60 ? 'stufe60' : '');
 
-// Hinweis auf allen Seiten: erreichte Schwelle (bis bestätigt) oder geänderte Ring-ID aus dem Header.
+// Hinweis auf allen Seiten: erreichte Schwelle des zuletzt benutzten Rings oder Update der Pebble-App (bis bestätigt).
 let ringInfo = null; // aus /api/zaehler; beim Start aus dem lokalen Speicher (siehe versionBestaetigt)
 // Speicher ab 90 % belegt: eine Karte auf jeder Seite für jeden Nutzer (nur die vollste Ablage).
 let speicherVoll = null;
@@ -3130,47 +3252,41 @@ function zeigeSpeicherkarte() {
 function zeigeRingkarte() {
   const karte = document.getElementById('ringkarte');
   const r = ringInfo;
-  const ab = r?.abweichung, hinweis = !!(r?.hinweis && r.stufe > 0), idf = r?.id_fehler;
-  karte.hidden = !r || (!r.fehler && !ab && !hinweis && !idf) || aktuell?.name === 'ringTauschen';
+  const hinweise = r?.hinweise || [], upd = r?.app_update;
+  karte.hidden = !r || (!r.fehler && !hinweise.length && !upd);
   if (karte.hidden) return;
   if (r.fehler) {
     karte.innerHTML = T`<div><strong>${esc(tx('Ring-Auswertung'))}</strong><p class="leise">${esc(tx('Fehler: {0}', r.fehler))}</p></div>`;
     return;
   }
   const teile = [];
-  if (idf) {
-    teile.push(T`<div class="ringfehler"><strong>${esc(tx('Ring-ID ungültig'))}</strong>
-      <p>${esc(tx('Die Pebble-App hat am {0} die Ring-ID „{1}“ geschickt. Erwartet wird die Form #12345 (Raute und Ziffern). Die Aufnahme ist ohne ID gezählt.', datumKurz(idf.zeit), idf.wert || tx('(keine)')))}</p>
-      <p class="leise">${esc(tx('Header {0} in der Pebble-App prüfen.', ringInfo.header || 'X-Ring-ID'))}</p></div>
-      <div class="leiste"><button type="button" class="btn" data-ring-idok>${esc(tx('Bestätigen'))}</button></div>`);
+  if (upd) {
+    teile.push(T`<div><strong>${esc(tx('Pebble-App aktualisiert'))}</strong>
+      <p class="umbruch">${esc(pebbleVersion(upd.alt))} → ${esc(pebbleVersion(upd.neu))}</p>
+      <p class="leise">${esc(tx('Seit {0} meldet sich die Pebble-App mit einer neuen Version.', datumKurz(upd.zeit)))}</p></div>
+      <div class="leiste"><button type="button" class="btn haupt" data-ring-appok>${esc(tx('OK'))}</button></div>`);
   }
-  if (ab) {
-    teile.push(T`<div><strong>${esc(tx('Ring-ID geändert'))}</strong>
-      <p>${esc(tx('Die Pebble-App schickt seit {0} die ID {1}, der aktive Ring hat {2}.', datumKurz(ab.seit), ab.neu, ab.alt))}</p>
-      <p class="leise">${esc(tx('„Ring tauschen anwenden“ beendet den bisherigen Ring und startet einen neuen ab der ersten Aufnahme mit der neuen ID. Die alten Daten bleiben.'))}</p></div>
-      <button type="button" class="btn haupt gross" data-ring-tauschen="${esc(ab.neu)}">${esc(tx('Ring tauschen anwenden'))}</button>`);
-  }
-  if (hinweis) {
-    const voll = r.stufe >= 100;
-    teile.push(T`<div><strong>${esc(tx('Ring-Nutzung: {0} % erreicht', r.stufe))}</strong>
-      <p>${esc(tx('{0} von {1} Aufnahmezeit verbraucht ({2} %).', stunden(r.sekunden), stunden(r.kapazitaet_sekunden), Math.floor(r.prozent)))}</p>
+  for (const h of hinweise) {
+    const voll = h.stufe >= 100;
+    teile.push(T`<div><strong>${esc(tx('Ring-Nutzung: {0} % erreicht', h.stufe))}</strong>
+      <p class="leise">${esc(ringName(h))}</p>
+      <p>${esc(tx('{0} von {1} Aufnahmezeit verbraucht ({2} %).', stunden(h.sekunden), stunden(h.kapazitaet_sekunden), Math.floor(h.prozent)))}</p>
       ${voll ? T`<p class="leise">${esc(tx('Der Akku kann länger halten als angegeben. „+30 min“ erhöht die Kapazität dieses Rings dauerhaft.'))}</p>` : ''}
-      <a href="/status/ring">${esc(tx('Auswertung ansehen'))}</a></div>
-      <div class="leiste">${voll ? T`<button type="button" class="btn" data-ring-plus>${esc(tx('+30 min'))}</button>` : ''}<button type="button" class="btn haupt" data-ring-ok>${esc(tx('Bestätigen'))}</button></div>`);
+      <a href="/status/ring?ring=${h.nr}">${esc(tx('Auswertung ansehen'))}</a></div>
+      <div class="leiste">${voll ? T`<button type="button" class="btn" data-ring-plus="${h.nr}">${esc(tx('+30 min'))}</button>` : ''}<button type="button" class="btn haupt" data-ring-ok="${h.nr}">${esc(tx('Bestätigen'))}</button></div>`);
   }
   karte.innerHTML = teile.join('');
   const knopf = (sel, fn) => karte.querySelectorAll(sel).forEach((b) => { b.onclick = async () => { b.disabled = true; try { await fn(b); await ladeZaehler(); if (aktuell?.neuLaden) aktuell.neuLaden(); } catch (f) { b.disabled = false; melde(f.message); } }; });
-  knopf('[data-ring-ok]', () => api('/api/ring/bestaetigt', { method: 'POST', body: {} }));
-  knopf('[data-ring-idok]', () => api('/api/ring/bestaetigt', { method: 'POST', body: { id_fehler: true } }));
-  knopf('[data-ring-plus]', () => api('/api/ring/bestaetigt', { method: 'POST', body: { plus: true } }));
-  knopf('[data-ring-tauschen]', (b) => api('/api/ring/tauschen', { method: 'POST', body: { hardware_id: b.dataset.ringTauschen, uebernehmen: true } }));
+  knopf('[data-ring-ok]', (b) => api('/api/ring/bestaetigt', { method: 'POST', body: { ring: Number(b.dataset.ringOk) } }));
+  knopf('[data-ring-appok]', () => api('/api/ring/bestaetigt', { method: 'POST', body: { app_update: true } }));
+  knopf('[data-ring-plus]', (b) => api('/api/ring/bestaetigt', { method: 'POST', body: { plus: true, ring: Number(b.dataset.ringPlus) } }));
 }
 
 // Balken ganz unten im Menü: Verbrauch des aktiven Rings.
 function ringBalkenHtml() {
-  const r = ringInfo;
-  if (!r || r.fehler) return '';
-  return T`<a class="ringbalken ${stufeKlasse(r.prozent)}" href="/status/ring"><span class="ringtext"><span>${esc(tx('Nutzung'))}</span><span>${esc(stunden(r.sekunden))}</span></span><span class="balken"><i data-anteil="${Math.min(100, r.prozent)}"></i></span></a>`;
+  const r = ringInfo?.balken; // aktiver Ring mit der höchsten Nutzung; inaktive stehen nicht in der Seitenleiste
+  if (!r) return '';
+  return T`<a class="ringbalken ${stufeKlasse(r.prozent)}" href="/status/ring?ring=${r.nr}"><span class="ringtext"><span>${esc(tx('Nutzung'))}</span><span>${esc(stunden(r.sekunden))}</span></span><span class="balken"><i data-anteil="${Math.min(100, r.prozent)}"></i></span></a>`;
 }
 // Strich und Beschriftung im Wortbalken an ihre Stelle (Prozent aus data-pos); Beschriftung bleibt im Rahmen.
 const setzeWortlage = (wurzel) => wurzel.querySelectorAll('.wortskala [data-pos]').forEach((el) => {
@@ -3319,15 +3435,15 @@ async function zeigeRing() {
     const verlauf = d.verlauf || [];
     // Vergleich als kompakte Zeilen (mobil ohne breite Tabelle): ID, Zeit, Anteil; darunter Zeitraum, Aufnahmen, Ø je Tag.
     const vergleich = d.ringe.map((r) => T`<a class="karte ringzeile${r.nr === g.nr ? ' aktiv' : ''}" href="/status/ring?ring=${r.nr}">
-      <span class="zeile"><strong>${esc(r.hardware_id || tx('Ring {0}', r.nr))}</strong><span>${esc(stunden(r.sekunden))} · ${Math.floor(r.prozent)} %</span></span>
+      <span class="zeile"><strong>${esc(r.hardware_id || tx('Ring {0}', r.nr))}${r.ende ? T` <span class="kimarke">${esc(tx('inaktiv'))}</span>` : ''}</strong><span>${esc(stunden(r.sekunden))} · ${Math.floor(r.prozent)} %</span></span>
       <span class="balken ${stufeKlasse(r.prozent)}"><i data-anteil="${Math.min(100, r.prozent)}"></i></span>
-      <span class="leise">${esc(datumKurz(r.start))} – ${r.ende ? esc(datumKurz(r.ende)) : esc(tx('heute'))} · ${esc(tx('{0} Aufnahmen', r.anzahl))} · ${esc(tx('Ø {0} je Tag', stunden(r.sekunden / r.tage)))}</span></a>`).join('');
+      <span class="leise">${esc(tx('seit: {0}', datumKurz(r.start)))} · ${esc(tx('{0} Aufnahmen', r.anzahl))} · ${esc(tx('Ø {0} je Tag', stunden(r.sekunden / r.tage)))}</span></a>`).join('');
     seite.innerHTML = T`<h1>${esc(tx('Ringnutzung'))}</h1>
       ${eingangsKarte(st)}
       ${d.ringe.length > 1 ? T`<nav class="btn-group" aria-label="${esc(tx('Ring wählen'))}">${d.ringe.slice().reverse().map((r) => T`<a class="btn${r.nr === g.nr ? ' aktiv' : ''}" href="/status/ring?ring=${r.nr}"${r.nr === g.nr ? ' aria-current="page"' : ''}>${esc(r.hardware_id || tx('Ring {0}', r.nr))}</a>`).join('')}</nav>` : ''}
       <div class="karte">
-        <div class="zeile kartentitel"><strong>${esc(ringName(g))}</strong><a class="konfedit" href="/status/ring/${g.nr}/bearbeiten" aria-label="${esc(tx('Ring bearbeiten'))}">${STIFT}</a></div>
-        <p class="leise">${esc(aktiv ? tx('Aktiv seit {0}', datumKurz(g.start)) : tx('{0} – {1}', datumKurz(g.start), datumKurz(g.ende)))}${g.hardware_id ? '' : ` · ${esc(tx('ohne ID'))}`}</p>
+        <a class="zeile kartentitel kartenlink" href="/status/ring/${g.nr}/bearbeiten" aria-label="${esc(tx('Ring bearbeiten'))}"><strong>${esc(ringName(g))}${aktiv ? '' : T` <span class="kimarke">${esc(tx('inaktiv'))}</span>`}</strong><span class="kipfeil" aria-hidden="true">›</span></a>
+        <p class="leise zeile ringmeta"><span class="umbruch">${g.app_agent ? esc(tx('App: {0}', pebbleVersion(g.app_agent))) : ''}</span><span>${esc(tx('seit: {0}', datumKurz(g.start)))}</span></p>
         <span class="balken ringgross ${stufeKlasse(p)}"><i data-anteil="${Math.min(100, p)}"></i></span>
         <p><strong>${esc(tx('{0} von {1}', stunden(g.sekunden), stunden(g.kapazitaet_sekunden)))}</strong> · ${Math.floor(p)} %</p>
         ${aktiv && prog ? T`<p class="leise">${esc(tx('Bei gleichbleibender Nutzung (Ø {0} je Tag, letzte {1} Tage): 80 % {2} · 100 % {3}', stunden(prog.sekunden_je_tag), Math.round(prog.basis_tage), wann(prog.datum80), wann(prog.datum100)))}</p>` : ''}
@@ -3338,7 +3454,7 @@ async function zeigeRing() {
       <h2>${esc(tx('Aufnahmezeit'))}</h2>
       <div class="karte" id="rverlauf"></div>
       ${d.ringe.length > 1 ? T`<h2>${esc(tx('Ringe im Vergleich'))}</h2>${vergleich}` : ''}
-      <div class="wahlplatz"></div><div class="wahlleiste"><a class="btn" href="/status/ring/tauschen">${esc(tx('Ring tauschen'))}</a></div>`;
+`;
     setzeBalken(seite);
     setzeWortlage(seite);
     zeigeRingVerlauf(verlauf);
@@ -3347,50 +3463,25 @@ async function zeigeRing() {
   await laden();
 }
 
-// Ring tauschen (von Hand): Anleitung, neue ID und Kapazität. Der bisherige Ring endet jetzt.
-async function zeigeRingTauschen() {
-  const d = await api('/api/ring');
-  const h = d.header;
-  seite.innerHTML = T`<p><a class="btn klein" href="/status/ring">← ${esc(tx('Ring'))}</a></p><h1>${esc(tx('Ring tauschen'))}</h1>
-    <ol class="anleitung">
-      <li>${esc(tx('Die ID des neuen Rings hat immer die Form #12345 (Raute und Ziffern).'))}</li>
-      <li>${esc(tx('In der Pebble-App beim Webhook den eigenen Header {0} anlegen bzw. ändern: Name {0}, Wert = diese ID mit Raute, z. B. #12345. Dann erkennt die App bei jeder Aufnahme, welcher Ring sie gemacht hat.', h))}</li>
-      <li>${esc(tx('Hier dieselbe ID eintragen und speichern. Der bisherige Ring ({0}) endet jetzt, seine Daten bleiben für Auswertung und Vergleich.', ringName(d.ring)))}</li>
-    </ol>
-    <label for="rid">${esc(tx('ID des neuen Rings'))}</label><div class="ringid"><span>#</span><input id="rid" inputmode="numeric" pattern="[0-9]*" maxlength="12" autocomplete="off" placeholder="12345"></div>
-    <label for="rkap">${esc(tx('Kapazität (Stunden Aufnahme)'))}</label><input id="rkap" type="number" min="1" max="1000" step="1" value="${d.vorgabe_stunden}">
-    <div class="leiste"><button class="btn haupt" id="rsichern">${esc(tx('Ring tauschen'))}</button><a class="btn" href="/status/ring">${esc(tx('Abbrechen'))}</a></div>`;
-  document.getElementById('rsichern').onclick = async (ev) => {
-    const ziffern = document.getElementById('rid').value.trim().replace(/^#/, ''), kap = Number(document.getElementById('rkap').value);
-    if (!/^[0-9]{1,12}$/.test(ziffern)) return melde(tx('Ring-ID: nur Ziffern, Form #12345'));
-    const id = `#${ziffern}`;
-    if (!(kap >= 1 && kap <= 1000)) return melde(tx('Kapazität 1–1000 Stunden'));
-    ev.target.disabled = true;
-    try {
-      await api('/api/ring/tauschen', { method: 'POST', body: { hardware_id: id, kapazitaet_stunden: Math.round(kap) } });
-      melde(tx('Neuer Ring gestartet'));
-      await ladeZaehler();
-      geheZu('/status/ring', true);
-    } catch (f) { ev.target.disabled = false; melde(f.message); }
-  };
-}
-
-// Ring bearbeiten: ID und Kapazität.
+// Ring bearbeiten: Beschreibung und Kapazität.
 async function zeigeRingBearbeiten(nr) {
   const d = await api(`/api/ring?ring=${encodeURIComponent(nr)}`);
   const g = d.ring;
   seite.innerHTML = T`<p><a class="btn klein" href="/status/ring?ring=${g.nr}">← ${esc(tx('Ring'))}</a></p><h1>${esc(tx('Ring {0} bearbeiten', g.nr))}</h1>
-    <label for="rid">${esc(tx('Ring-ID'))}</label><div class="ringid"><span>#</span><input id="rid" inputmode="numeric" pattern="[0-9]*" maxlength="12" autocomplete="off" placeholder="12345" value="${esc(g.hardware_id.replace(/^#/, ''))}"></div>
-    <p class="leise hilfe">${esc(tx('Muss dem Wert des Headers {0} in der Pebble-App entsprechen.', d.header))}</p>
+    <dl><dt>${esc(tx('Ring-ID'))}</dt><dd>${esc(g.hardware_id || tx('ohne ID'))}</dd><dt>${esc(tx('Kennung'))}</dt><dd class="umbruch">${esc(g.kennung || tx('noch keine Aufnahme mit Kennung'))}</dd></dl>
+    <p class="leise hilfe">${esc(tx('Die Ring-ID sind die letzten drei Zeichen der Kennung; beides kommt vom Ring und ist nicht änderbar.'))}</p>
+    <label for="rbeschr">${esc(tx('Beschreibung'))}</label><input id="rbeschr" maxlength="60" autocomplete="off" value="${esc(g.beschreibung || '')}">
+    <p class="leise hilfe">${esc(tx('Freier Text, z. B. die Farbe des Rings (höchstens 60 Zeichen).'))}</p>
     <label for="rkap">${esc(tx('Kapazität (Stunden Aufnahme)'))}</label><input id="rkap" type="number" min="1" max="1000" step="0.5" value="${Math.round((g.kapazitaet_sekunden / 3600) * 100) / 100}">
+    <label class="schalter"><input type="checkbox" id="raktiv"${g.ende ? '' : ' checked'}> ${esc(tx('Ring aktiv'))}</label>
+    <p class="leise hilfe">${esc(tx('Inaktive Ringe fehlen nur in der Seitenleiste. Sie zählen, warnen und melden sich wie jeder andere.'))}</p>
     <div class="leiste"><button class="btn haupt" id="rsichern">${esc(tx('Speichern'))}</button><a class="btn" href="/status/ring?ring=${g.nr}">${esc(tx('Abbrechen'))}</a></div>`;
   document.getElementById('rsichern').onclick = async (ev) => {
-    const kap = Number(document.getElementById('rkap').value), ziffern = document.getElementById('rid').value.trim().replace(/^#/, '');
-    if (!/^[0-9]{1,12}$/.test(ziffern)) return melde(tx('Ring-ID: nur Ziffern, Form #12345'));
+    const kap = Number(document.getElementById('rkap').value);
     if (!(kap >= 1 && kap <= 1000)) return melde(tx('Kapazität 1–1000 Stunden'));
     ev.target.disabled = true;
     try {
-      await api(`/api/ring/${g.nr}`, { method: 'PUT', body: { hardware_id: `#${ziffern}`, kapazitaet_stunden: kap } });
+      await api(`/api/ring/${g.nr}`, { method: 'PUT', body: { kapazitaet_stunden: kap, beschreibung: document.getElementById('rbeschr').value.trim(), aktiv: document.getElementById('raktiv').checked } });
       melde(tx('Gespeichert'));
       await ladeZaehler();
       geheZu(`/status/ring?ring=${g.nr}`, true);
@@ -4841,6 +4932,28 @@ async function zeigePapierkorb() {
   await laden();
 }
 
+// Protokoll je Anbieter und Modell zusammengefasst, darunter je Zweck.
+function anbieterHtml(anfragen) {
+  if (!anfragen.length) return T`<p class="leer">Noch keine Anfragen im Protokoll.</p>`;
+  const gruppen = new Map();
+  for (const q of anfragen) {
+    const name = [q.anbieter, q.modell].filter(Boolean).join(' · ') || kiZweck(q);
+    if (!gruppen.has(name)) gruppen.set(name, []);
+    gruppen.get(name).push(q);
+  }
+  const summe = (liste) => {
+    const s = { anzahl: 0, suchen: 0, bilder: 0 };
+    for (const q of liste) {
+      s.anzahl += q.anzahl; s.suchen += q.suchen || 0; s.bilder += q.bilder || 0;
+      for (const f of ['tokens_ein', 'tokens_aus', 'sekunden', 'kosten_usd']) if (q[f] != null) s[f] = (s[f] || 0) + q[f];
+    }
+    return s;
+  };
+  return [...gruppen].map(([name, liste]) => T`<div class="karte anbieterkarte"><div class="zeile"><strong>${esc(name)}</strong>${summe(liste).kosten_usd > 0 ? T`<span>${usd(summe(liste).kosten_usd)}</span>` : ''}</div>
+    <div class="leise">${esc(kiVerbrauch(summe(liste), true).replace(/ · [^·]*\$$/, ''))}</div>
+    <details><summary>Wofür</summary><table class="werte"><tbody>${liste.map((q) => T`<tr><td>${esc(kiZweck(q))}</td><td>${esc(kiVerbrauch(q, true))}</td></tr>`).join('')}</tbody></table></details></div>`).join('');
+}
+
 async function zeigeKosten() {
   seite.innerHTML = T`<p class="leer">Lädt …</p>`;
   const laden = async (vorab) => {
@@ -4871,7 +4984,10 @@ async function zeigeKosten() {
       <div class="karte">${legende}${saeulen(k.tage, 'd30', false)}<div class="ablesen" id="d30-wert">Säule antippen für die Werte des Tages.</div>${tabelle(k.tage.filter((t) => t.diktat + t.planung > 0))}</div>
       <h2>Wofür – 30 Tage</h2>
       <div class="karte">${arten.map(([name, v]) => T`<div class="balkenzeile"><span>${esc(name)}</span><span class="balken"><i class="${v > 0 ? '' : 'leer'}" data-anteil="${Math.round((v / artMax) * 100)}"></i></span><span class="wert">${usd(v)}</span></div>`).join('')}
-        <p class="leise">Kostenlimit je Rechercheauftrag: ${usd(k.limit_usd)}.</p></div>`;
+        <p class="leise">Kostenlimit je Rechercheauftrag: ${usd(k.limit_usd)}.</p></div>
+      <h2>Je Anbieter – 30 Tage</h2>
+      <p class="leise">Alle KI-Anfragen aus dem Protokoll, auch Lernlauf und Einsortieren: rohe Tokens und Kosten nach den Preisen, die bei der Anfrage galten.</p>
+      ${anbieterHtml(k.anfragen || [])}`;
     seite.querySelectorAll('.balken i').forEach((el) => { el.style.width = `${Math.max(Number(el.dataset.anteil), el.classList.contains('leer') ? 0 : 1)}%`; });
     for (const [id, tage] of [['d7', t7], ['d30', k.tage]]) {
       const svg = document.getElementById(id), wert = document.getElementById(T`${id}-wert`);
@@ -4921,13 +5037,11 @@ function pebbleSeite(d) {
     <dl><dt>Payload-Modus</dt><dd><strong>Both</strong> (Aufnahme und Transkript)</dd><dt>Größe</dt><dd>bis ${d.max_mb} MB je Aufnahme</dd></dl>
     <p class="leise">Unter „Headers“ ein Paar aus Name und Wert anlegen:</p>
     ${wert(tx('Header-Name'), 'header')}${wert(tx('Header-Wert'), 'token', true)}
-    <p class="leise">${esc(tx('Pflicht: ein zweites Paar mit der ID des Rings (Form #12345). Ohne gültige ID schlägt das Test-Event fehl.'))}</p>
-    ${wert(tx('Header-Name'), 'ring_header')}${d.ring_id ? wert(tx('Header-Wert (Ring-ID)'), 'ring_id') : T`<div class="hinweis warn">${esc(tx('Noch keine Ring-ID hinterlegt – unter Ring → Bearbeiten eintragen.'))}</div>`}
     <p class="leise">„Signed requests“ einschalten und dieses Secret eintragen, ohne Leerzeichen:</p>
     ${wert(tx('Signatur-Secret'), 'secret', true)}
     <ol><li>„Send test event“ – im Verlauf erscheint „Test-Event“.</li>
       <li>Je Geste eine kurze Aufnahme.</li>
-      <li>Kommt nichts an: „Recent runs“ in der Pebble-App zeigt die Antwort (401 = Header oder Signatur falsch, 400 beim Test-Event = Ring-ID fehlt oder hat nicht die Form #12345).</li></ol>
+      <li>Kommt nichts an: „Recent runs“ in der Pebble-App zeigt die Antwort (401 = Header oder Signatur falsch).</li></ol>
     <p class="leise">Pebble wiederholt fehlgeschlagene Zustellungen jede Minute, bis zu zehnmal; doppelte erzeugen keinen zweiten Eintrag.</p>`;
 }
 async function pebbleKlick(b, d) {
@@ -5280,7 +5394,7 @@ async function zeigeEinrichten() {
 // ---------- Menü (Hamburger links): drei Hauptseiten, darunter ihre Unterseiten ----------
 
 // Seite → Bereich im Menü.
-const BEREICH = { zugang: 'status', zugangCode: 'status', nutzer: 'system', nutzerNeu: 'system', einladung: 'system', neuEinladen: 'system', nutzerBearbeiten: 'system', backupHochladen: 'system', systemschluessel: 'system', kalender: 'status', mcp: 'status', ring: 'status', ringTauschen: 'status', ringBearbeiten: 'status', joplin: 'status', einstellungBearbeiten: 'status', darstellung: 'status', geraetNeu: 'status', tagsVerwalten: 'status', kosten: 'status', papierkorb: 'status', update: 'system', backups: 'system', einstellungen: 'status', einstellungenBearbeiten: 'status', pebble: 'status', gedaechtnis: 'status', gedaechtnisBearbeiten: 'status', liste: 'listen', verschieben: 'listen', listeBearbeiten: 'listen', gruppeBearbeiten: 'listen', eintrag: 'verlauf', planung: 'verlauf', tags: 'verlauf', antwort: 'verlauf', umhaengen: 'verlauf', wortlaut: 'verlauf', einsortieren: 'verlauf', suche: 'verlauf' };
+const BEREICH = { zugang: 'status', zugangCode: 'status', nutzer: 'system', nutzerNeu: 'system', einladung: 'system', neuEinladen: 'system', nutzerBearbeiten: 'system', backupHochladen: 'system', systemschluessel: 'system', kalender: 'status', mcp: 'status', ring: 'status', ringBearbeiten: 'status', joplin: 'status', einstellungBearbeiten: 'status', darstellung: 'status', geraetNeu: 'status', tagsVerwalten: 'status', kosten: 'status', papierkorb: 'status', update: 'system', backups: 'system', einstellungen: 'status', einstellungenBearbeiten: 'status', pebble: 'status', gedaechtnis: 'status', gedaechtnisBearbeiten: 'status', liste: 'listen', verschieben: 'listen', listeBearbeiten: 'listen', gruppeBearbeiten: 'listen', eintrag: 'verlauf', planung: 'verlauf', tags: 'verlauf', antwort: 'verlauf', umhaengen: 'verlauf', wortlaut: 'verlauf', einsortieren: 'verlauf', suche: 'verlauf' };
 const lokal = (k, v = '') => { try { return localStorage.getItem(k) ?? v; } catch { return v; } };
 let alleGruppenZeigen = false;
 function maleMenue() {

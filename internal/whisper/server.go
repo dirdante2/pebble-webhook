@@ -160,13 +160,16 @@ func (m *Manager) serverFor(md Model) (*server, error) {
 	return s, nil
 }
 
-// infer schickt WAV an den Server und liefert den Text.
-func (s *server) infer(ctx context.Context, wav []byte, language string) (string, error) {
+// infer schickt WAV an den Server und liefert den Text. prompt: Begriffe als Hinweis für die Erkennung (leer = keiner).
+func (s *server) infer(ctx context.Context, wav []byte, language, prompt string) (string, error) {
 	var body bytes.Buffer
 	w := multipart.NewWriter(&body)
 	part, _ := w.CreateFormFile("file", "aufnahme.wav")
 	part.Write(wav)
 	w.WriteField("language", language)
+	if prompt != "" {
+		w.WriteField("prompt", prompt)
+	}
 	w.WriteField("response_format", "json")
 	w.Close()
 	req, err := http.NewRequestWithContext(ctx, "POST", "http://whisper/inference", &body)

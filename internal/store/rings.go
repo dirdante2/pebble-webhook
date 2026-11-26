@@ -49,12 +49,15 @@ type Ring struct {
 	EndedAt         int64  `json:"ende"`
 	CapacitySeconds int64  `json:"kapazitaet_sekunden"`
 	WarnedLevel     int    `json:"gewarnt"`
+	Kennung         string `json:"kennung"`      // Kennung des Rings aus der Zustellungs-ID (12 Hex-Zeichen); "" = noch keine gesehen
+	AppAgent        string `json:"app_agent"`    // User-Agent der Pebble-App bei der letzten Aufnahme dieses Rings
+	Description     string `json:"beschreibung"` // freier Text des Nutzers (z. B. „silber“)
 }
 
 type RingRecording struct {
 	JobID         string
 	RingNr        int64
-	HardwareID    string
+	HardwareID    string // volle Kennung des Rings (bis 4.4.1: die von Hand gesetzte ID „#12345“)
 	ReceivedAt    int64
 	Seconds       float64 // -1 = unbekannt
 	SecondsSource string
@@ -63,20 +66,93 @@ type RingRecording struct {
 	Origin        string // eingang | nachtrag | schaetzung
 }
 
-const ringCols = `nr, hardware_id, started_at, ended_at, capacity_seconds, warned_level`
+const ringCols = `nr, hardware_id, started_at, ended_at, capacity_seconds, warned_level, kennung, app_agent, beschreibung`
 
 func scanRing(r scanner) (*Ring, error) {
 	var g Ring
-	err := r.Scan(&g.Nr, &g.HardwareID, &g.StartedAt, &g.EndedAt, &g.CapacitySeconds, &g.WarnedLevel)
+	err := r.Scan(&g.Nr, &g.HardwareID, &g.StartedAt, &g.EndedAt, &g.CapacitySeconds, &g.WarnedLevel, &g.Kennung, &g.AppAgent, &g.Description)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
 	return &g, err
 }
 
-// ActiveRing: der laufende Ring (ended_at = 0); ErrNotFound, wenn es noch keinen gibt.
+// ActiveRing: der Ring für den Balken in der Seitenleiste – unter den aktiven (ended_at = 0) der mit der höchsten
+// Nutzung (Anteil der Kapazität); ErrNotFound, wenn kein Ring aktiv ist. Ringe laufen nebeneinander, jeder wird an
+// seiner Kennung erkannt; ended_at > 0 heißt „inaktiv“ (vom Nutzer gesetzt; bis 4.4.1: durch einen Ringtausch
+// beendet) – ein inaktiver Ring fehlt nur in der Seitenleiste und zählt, warnt und meldet sonst wie jeder andere.
 func (s *Store) ActiveRing() (*Ring, error) {
-	return scanRing(s.DB.QueryRow(`SELECT ` + ringCols + ` FROM rings WHERE ended_at = 0 ORDER BY nr DESC LIMIT 1`))
+	return scanRing(s.DB.QueryRow(`SELECT ` + ringCols + ` FROM rings WHERE ended_at = 0 ORDER BY
+		COALESCE((SELECT SUM(x.seconds) FROM ring_recordings x WHERE x.ring_nr = rings.nr AND x.seconds > 0), 0) * 1.0 / MAX(capacity_seconds, 1) DESC,
+		nr DESC LIMIT 1`))
+}
+
+// SetRingEnded: Ring deaktivieren (at > 0) oder wieder aktivieren (0).
+func (s *Store) SetRingEnded(nr, at int64) error {
+	_, err := s.DB.Exec(`UPDATE rings SET ended_at = ? WHERE nr = ?`, at, nr)
+	return err
+}
+
+// RingDelivery: protokollierte Aufnahme mit der Zustellungs-ID ihres Eintrags (für den Nachtrag der Kennung).
+type RingDelivery struct {
+	JobID, DeliveryID, HardwareID string
+	RingNr, ReceivedAt            int64
+}
+
+// RingDeliveries: alle protokollierten Aufnahmen, deren Eintrag noch da ist, älteste zuerst.
+func (s *Store) RingDeliveries() ([]RingDelivery, error) {
+	rows, err := s.DB.Query(`SELECT r.job_id, j.delivery_id, r.hardware_id, r.ring_nr, r.received_at FROM ring_recordings r
+		JOIN jobs j ON j.id = r.job_id ORDER BY r.received_at`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []RingDelivery
+	for rows.Next() {
+		var d RingDelivery
+		if err := rows.Scan(&d.JobID, &d.DeliveryID, &d.HardwareID, &d.RingNr, &d.ReceivedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
+}
+
+// MoveRecording ordnet eine protokollierte Aufnahme einem Ring zu.
+func (s *Store) MoveRecording(jobID string, ringNr int64, hardwareID string) error {
+	_, err := s.DB.Exec(`UPDATE ring_recordings SET ring_nr = ?, hardware_id = ? WHERE job_id = ?`, ringNr, hardwareID, jobID)
+	return err
+}
+
+// SetRecordingsHW schreibt die Kennung eines Rings an all seine Aufnahmen (Zeilen aus der Zeit vor der Kennung).
+func (s *Store) SetRecordingsHW(ringNr int64, hardwareID string) error {
+	_, err := s.DB.Exec(`UPDATE ring_recordings SET hardware_id = ? WHERE ring_nr = ? AND hardware_id != ?`, hardwareID, ringNr, hardwareID)
+	return err
+}
+
+// DeleteRecording nimmt eine protokollierte Aufnahme aus der Ring-Nutzung.
+func (s *Store) DeleteRecording(jobID string) error {
+	_, err := s.DB.Exec(`DELETE FROM ring_recordings WHERE job_id = ?`, jobID)
+	return err
+}
+
+// RingByKennung: der Ring mit dieser Kennung; ErrNotFound, wenn sie neu ist.
+func (s *Store) RingByKennung(kennung string) (*Ring, error) {
+	return scanRing(s.DB.QueryRow(`SELECT `+ringCols+` FROM rings WHERE kennung = ? ORDER BY nr DESC LIMIT 1`, kennung))
+}
+
+// AddRing legt einen weiteren Ring an; die übrigen laufen weiter.
+func (s *Store) AddRing(hardwareID, kennung string, at, capacitySeconds int64) (*Ring, error) {
+	res, err := s.DB.Exec(`INSERT INTO rings (hardware_id, kennung, started_at, capacity_seconds, created_at) VALUES (?, ?, ?, ?, ?)`,
+		hardwareID, kennung, at, capacitySeconds, Now())
+	if err != nil {
+		return nil, err
+	}
+	nr, err := res.LastInsertId()
+	if err != nil {
+		return nil, err
+	}
+	return s.RingByNr(nr)
 }
 
 func (s *Store) RingByNr(nr int64) (*Ring, error) {
@@ -152,6 +228,36 @@ func (s *Store) UpdateRing(nr int64, hardwareID string, capacitySeconds int64) e
 // UpdateRingID setzt nur die Hardware-ID (erste ID aus dem Header).
 func (s *Store) UpdateRingID(nr int64, hardwareID string) error {
 	_, err := s.DB.Exec(`UPDATE rings SET hardware_id = ? WHERE nr = ?`, hardwareID, nr)
+	return err
+}
+
+// ringDeviceCols: Angaben zum Gerät je Ring. Kommen ohne neuen Schema-Stand dazu: nur Spalten mit Vorgabe, ältere
+// Versionen lesen und schreiben rings mit benannten Spalten und stört das nicht.
+var ringDeviceCols = []string{"kennung", "app_agent", "beschreibung"}
+
+func addRingDeviceCols(db *sql.DB) error {
+	for _, c := range ringDeviceCols {
+		if _, err := db.Exec(`ALTER TABLE rings ADD COLUMN ` + c + ` TEXT NOT NULL DEFAULT ''`); err != nil && !strings.Contains(err.Error(), "duplicate column") {
+			return err
+		}
+	}
+	return nil
+}
+
+// SetRingKennung setzt die Kennung eines Rings (erste Aufnahme mit Kennung).
+func (s *Store) SetRingKennung(nr int64, kennung string) error {
+	_, err := s.DB.Exec(`UPDATE rings SET kennung = ? WHERE nr = ?`, kennung, nr)
+	return err
+}
+
+// SetRingAgent überschreibt den User-Agent der Pebble-App eines Rings.
+func (s *Store) SetRingAgent(nr int64, agent string) error {
+	_, err := s.DB.Exec(`UPDATE rings SET app_agent = ? WHERE nr = ?`, agent, nr)
+	return err
+}
+
+func (s *Store) SetRingDescription(nr int64, text string) error {
+	_, err := s.DB.Exec(`UPDATE rings SET beschreibung = ? WHERE nr = ?`, text, nr)
 	return err
 }
 
@@ -312,4 +418,11 @@ func (s *Store) LastRecordingHW() (hw string, at int64, err error) {
 func (s *Store) FirstRecordingWithHW(hw string, since int64) (at int64, err error) {
 	err = s.DB.QueryRow(`SELECT COALESCE(MIN(received_at), 0) FROM ring_recordings WHERE hardware_id = ? AND received_at >= ?`, hw, since).Scan(&at)
 	return
+}
+
+// HasRecording: ob zur Notiz eine Ring-Aufnahme gezählt ist.
+func (s *Store) HasRecording(jobID string) (bool, error) {
+	var n int
+	err := s.DB.QueryRow(`SELECT COUNT(*) FROM ring_recordings WHERE job_id = ?`, jobID).Scan(&n)
+	return n > 0, err
 }

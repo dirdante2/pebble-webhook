@@ -68,10 +68,10 @@ var Fields = []Field{
 	{Key: "HOOK_TOKEN_HEADER", Group: "Pebble-App", Label: "Header für den Token", Help: "Name des Headers, in dem die Pebble-App das Webhook-Token mitschickt.", Kind: "text", Default: "X-Webhook-Token", Required: true},
 	{Key: "TRIGGER_SINGLE", Group: "Pebble-App", Label: "Geste „Halten“", Help: "Was eine Aufnahme mit „Halten“ auslöst: diktat = Notiz, planung = Recherche mit Antwort.", Kind: "choice", Default: "diktat", Choices: []string{"diktat", "planung"}},
 	{Key: "TRIGGER_DOUBLE", Group: "Pebble-App", Label: "Geste „Klick + Halten“", Help: "Was eine Aufnahme mit „Klick + Halten“ auslöst: diktat = Notiz, planung = Recherche mit Antwort.", Kind: "choice", Default: "planung", Choices: []string{"diktat", "planung"}},
-	{Key: "RING_ID_HEADER", Group: "Pebble-App", Label: "Header für die Ring-ID", Help: "Name des Headers, in dem die Pebble-App die ID des Rings mitschickt (Pflicht, Form #12345). Ohne gültige ID scheitert das Test-Event; bei Aufnahmen erscheint ein Fehler. Die ID wird je Aufnahme gespeichert; ändert sie sich, schlägt die App einen Ringwechsel vor.", Kind: "text", Default: "X-Ring-ID", Required: true},
 	{Key: "RING_CAPACITY_HOURS", Group: "Pebble-App", Label: "Kapazität eines Rings (Stunden Aufnahme)", Help: "Vorgabe für neue Ringe; Pebble nennt 12–15 Stunden. Warnungen bei 60, 80 und 95 %.", Kind: "int", Default: "12"},
 	{Key: "HOOK_MAX_MB", Group: "Pebble-App", Label: "Größte Aufnahme (MB)", Help: "Größere Aufnahmen weist der Webhook ab.", Kind: "int", Default: "25"},
 	{Key: "HOOK_RATE_PER_MIN", Group: "Pebble-App", Label: "Aufrufe je Minute", Help: "Höchstens so viele Webhook-Aufrufe je Minute; mehr werden abgewiesen (Schutz vor Missbrauch).", Kind: "int", Default: "30"},
+	{Key: "HOOK_MITSCHNITT", Group: "Pebble-App", Label: "Zustellungen mitschneiden", Help: "aktiv = jede Zustellung der Pebble-App liegt roh in einem eigenen Ordner unter DATA_DIR/mitschnitt/<nutzer>/ (die letzten 200): alle Header, Felder und das Audio, unverschlüsselt. Nur zur Analyse; inaktiv löscht die Mitschnitte bei der nächsten Zustellung.", Kind: "choice", Default: "inaktiv", Choices: []string{"aktiv", "inaktiv"}},
 
 	{Key: "KI_ZUGAENGE", Group: "KI-Zugänge", Label: "KI-Zugänge", Kind: "json", Hidden: true},
 	{Key: "KI_BEREICHE", Group: "KI-Zugänge", Label: "KI-Bereiche", Kind: "json", Hidden: true},

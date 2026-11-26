@@ -9,6 +9,26 @@ Version numbers X.Y.Z:
 
 Own builds show X.Y.Z.A: **A** is a local build counter (one per deployed change, starting at 1 for every new X.Y.Z); it never appears in Git or releases, so one version can collect several changes.
 
+## [4.5.0] - 2026-11-26
+
+### New
+- Ring recognised by the identifier in the delivery; no ring header needed, several rings side by side.
+- Ring description (e.g. its colour); card when the Pebble app was updated.
+- Term list for speech recognition (names, own terms, favourites always sent); AI suggests new terms.
+- Cost view: all AI requests from the log by provider and purpose, including local transcription.
+- Option "Capture deliveries": raw deliveries of the Pebble app for analysis.
+- Several different things in one note: the AI asks whether to split; on "yes" each becomes its own note, the original goes to the trash.
+
+### Changed
+- Setting "Header for the ring ID" removed.
+- Key facts belong to the note only; list items carry none (database column removed, existing facts moved to their notes).
+- A film, book etc. is always its own note with one list item; existing collections are split into one note per item.
+- Recordings from the ring are never split.
+- A note may hold several list items for the sub-steps of a task.
+
+### Fixed
+- Key facts no longer show twice on notes sorted into a list.
+
 ## [4.4.1] - 2026-11-25
 
 ### Fixed

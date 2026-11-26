@@ -127,14 +127,10 @@ func (a *App) findList(group, name string) (*store.List, error) {
 // placeItems legt fresh als neuen Punkt in list an oder zieht die vorhandenen Punkte des Eintrags dorthin um.
 // learn: Umzüge und neue Punkte sind Korrekturen des Nutzers und kommen als Vorschlag ins Gedächtnis.
 // Liefert die Ids aller berührten Listen.
-func (a *App) placeItems(list *store.List, items []*store.ListItem, fresh *store.ListItem, facts []Fact, learn bool) ([]string, error) {
+func (a *App) placeItems(list *store.List, items []*store.ListItem, fresh *store.ListItem, learn bool) ([]string, error) {
 	touched := []string{list.ID}
 	if len(items) == 0 {
-		fresh.ListID, fresh.Facts = list.ID, "[]"
-		if len(facts) > 0 {
-			data, _ := json.Marshal(facts)
-			fresh.Facts = string(data)
-		}
+		fresh.ListID = list.ID
 		if err := a.DB.AddListItem(fresh); err != nil {
 			return nil, err
 		}
@@ -256,7 +252,7 @@ func (a *App) sortPlanning(ctx context.Context, p *store.Planning) error {
 	if text == "" {
 		text = plan.Titel
 	}
-	touched, err := a.placeItems(list, nil, &store.ListItem{PlanningID: p.ID, Text: store.Preview(text, 120)}, plan.Eckdaten, false)
+	touched, err := a.placeItems(list, nil, &store.ListItem{PlanningID: p.ID, Text: store.Preview(text, 120)}, false)
 	if err != nil {
 		return err
 	}
@@ -333,11 +329,7 @@ func (a *App) describe(ctx context.Context) (int, error) {
 	add := func(id, head string, items []*store.ListItem, save func(string) error) {
 		fmt.Fprintf(&in, "\nid: %s\n%s\nJüngste Punkte:\n", id, head)
 		for _, it := range items {
-			fmt.Fprintf(&in, "- %s", it.Text)
-			if fl := factLine(it.Facts); fl != "" {
-				fmt.Fprintf(&in, " (%s)", store.Preview(fl, 150))
-			}
-			in.WriteString("\n")
+			fmt.Fprintf(&in, "- %s\n", it.Text)
 		}
 		due[id] = save
 	}
@@ -614,10 +606,9 @@ func (a *App) BackfillNoteLists(ctx context.Context) (checked, sorted int, cost 
 		}
 		checked++
 		group, name := "", genericList
-		var facts []Fact
 		notiz := ""
 		if d != nil {
-			notiz, facts = d.Notiz, d.Eckdaten
+			notiz = d.Notiz
 		}
 		{
 			hint, err := a.listHint()
@@ -652,7 +643,7 @@ func (a *App) BackfillNoteLists(ctx context.Context) (checked, sorted int, cost 
 		if err != nil {
 			return checked, sorted, cost, err
 		}
-		touched, err := a.placeItems(list, nil, &store.ListItem{JobID: j.ID, Text: store.Preview(shortTitle(j.Title), 120)}, facts, false)
+		touched, err := a.placeItems(list, nil, &store.ListItem{JobID: j.ID, Text: store.Preview(shortTitle(j.Title), 120)}, false)
 		if err != nil {
 			return checked, sorted, cost, err
 		}

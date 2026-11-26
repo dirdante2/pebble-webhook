@@ -97,7 +97,7 @@ func (c *Client) send(req *http.Request, out any) error {
 
 // Transcribe schickt eine Aufnahme (name: Dateiname mit Endung) zur Transkription und liefert den Text und die
 // abgerechnete Dauer in Sekunden (-1, wenn die Antwort keine Dauer nennt).
-func (c *Client) Transcribe(ctx context.Context, model, name string, audio []byte, mime, language string) (string, float64, error) {
+func (c *Client) Transcribe(ctx context.Context, model, name string, audio []byte, mime, language, prompt string) (string, float64, error) {
 	var body bytes.Buffer
 	w := multipart.NewWriter(&body)
 	w.WriteField("model", model)
@@ -109,6 +109,10 @@ func (c *Client) Transcribe(ctx context.Context, model, name string, audio []byt
 		} else {
 			w.WriteField("languages[]", language)
 		}
+	}
+	// Begriffe (Namen, Eigenbegriffe) als Hinweis für die Erkennung; Modelle mit Sprechertrennung kennen das Feld nicht.
+	if prompt != "" && !strings.Contains(model, "diarize") {
+		w.WriteField("prompt", prompt)
 	}
 	h := textproto.MIMEHeader{}
 	h.Set("Content-Disposition", fmt.Sprintf(`form-data; name="file"; filename="%s"`, filepath.Base(name)))
@@ -208,6 +212,7 @@ type Result struct {
 	Incomplete   string   // Grund, wenn die Antwort abgeschnitten wurde
 	Cost         *float64 // USD nach den Preisen des Eintrags (Router); nil = nicht berechnet
 	Provider     string   // Name des Eintrags, der geantwortet hat (Router)
+	Model        string   // sein Modell (Router)
 }
 
 // Respond ruft die Responses-API auf. Mit Functions läuft eine Schleife: ruft die KI ein Werkzeug, wird es ausgeführt

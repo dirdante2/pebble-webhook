@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"strconv"
+	"pebble-webhook/internal/openai"
 	"strings"
 	"time"
 )
@@ -118,7 +118,17 @@ func OpenSystem(path string) (*System, error) {
 			return nil, fmt.Errorf("system.db Schema %d: %w", v+1, err)
 		}
 	}
-	return &System{DB: db}, nil
+	// Protokoll der KI-Anfragen: kommt ohne neuen Schema-Stand dazu (nur Anlegen, ältere Versionen stört die Tabelle nicht).
+	if _, err := db.Exec(aiRequestsSchema); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("system.db ai_requests: %w", err)
+	}
+	s := &System{DB: db}
+	if err := s.carryOverSpent(); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("system.db KI-Kosten übernehmen: %w", err)
+	}
+	return s, nil
 }
 
 func (s *System) Close() error { return s.DB.Close() }
@@ -130,23 +140,160 @@ func (s *System) Set(k, v string) error        { return kvSet(s.DB, k, v) }
 func (s *System) Settings() (map[string]string, error)        { return kvSettings(s.DB) }
 func (s *System) SaveSettings(values map[string]string) error { return kvSaveSettings(s.DB, values) }
 
-// --- KI-Kosten je Eintrag eines Bereichs und Monat (Monatslimit der Einträge) ---
+// --- KI-Anfragen: eine Zeile je gelungener Anfrage, egal wofür (Auswertung, Lernlauf, Transkription, Bild …) ---
 
-func aiSpentKey(id string) string { return "ki-kosten:" + time.Now().Format("2006-01") + ":" + id }
+// ai_requests ist die einzige Quelle für Verbrauch und Kosten je Anbieter: rohe Tokens ein/aus, Suchen, Sekunden,
+// Bilder und die Kosten nach den Preisen, die bei der Anfrage galten. NULL = für diese Anfrage nicht bekannt.
+const aiRequestsSchema = `
+CREATE TABLE IF NOT EXISTS ai_requests (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  at INTEGER NOT NULL,
+  user_id INTEGER NOT NULL DEFAULT 0,
+  area TEXT NOT NULL,
+  purpose TEXT NOT NULL DEFAULT '',
+  entry_id TEXT NOT NULL,
+  provider TEXT NOT NULL DEFAULT '',
+  model TEXT NOT NULL DEFAULT '',
+  tokens_in INTEGER,
+  tokens_out INTEGER,
+  searches INTEGER NOT NULL DEFAULT 0,
+  seconds REAL,
+  images INTEGER NOT NULL DEFAULT 0,
+  cost_usd REAL,
+  ref TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS ai_requests_entry ON ai_requests(entry_id, at);
+CREATE INDEX IF NOT EXISTS ai_requests_ref ON ai_requests(ref);
+CREATE INDEX IF NOT EXISTS ai_requests_user ON ai_requests(user_id, at);
+`
+
+// AIPurposeCarry: Zeile, die eine frühere Monatssumme ohne Einzelanfragen fortführt (Tokens unbekannt).
+const AIPurposeCarry = "uebertrag"
+
+// carryOverSpent übernimmt die früheren Monatssummen (kv „ki-kosten:<Monat>:<Eintrag>“) je als eine Zeile zum
+// Monatsersten und entfernt sie – ai_requests ist danach die einzige Quelle.
+func (s *System) carryOverSpent() error {
+	rows, err := s.DB.Query(`SELECT k, CAST(v AS REAL) FROM kv WHERE k LIKE 'ki-kosten:%'`)
+	if err != nil {
+		return err
+	}
+	type old struct {
+		key string
+		usd float64
+	}
+	var olds []old
+	for rows.Next() {
+		var o old
+		if err := rows.Scan(&o.key, &o.usd); err != nil {
+			rows.Close()
+			return err
+		}
+		olds = append(olds, o)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil || len(olds) == 0 {
+		return err
+	}
+	tx, err := s.DB.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, o := range olds {
+		parts := strings.SplitN(o.key, ":", 3)
+		month, err := time.ParseInLocation("2006-01", parts[1], time.Local)
+		if len(parts) != 3 || err != nil {
+			continue // unlesbarer Schlüssel bleibt stehen
+		}
+		if o.usd > 0 {
+			if _, err := tx.Exec(`INSERT INTO ai_requests (at, area, purpose, entry_id, cost_usd) VALUES (?,?,?,?,?)`,
+				month.UnixMilli(), "", AIPurposeCarry, parts[2], o.usd); err != nil {
+				return err
+			}
+		}
+		if _, err := tx.Exec(`DELETE FROM kv WHERE k = ?`, o.key); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func monthStart() int64 {
+	now := time.Now()
+	return time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location()).UnixMilli()
+}
 
 // Spent: Kosten des Eintrags im laufenden Monat (USD).
 func (s *System) Spent(id string) float64 {
-	var v float64
-	s.DB.QueryRow(`SELECT CAST(v AS REAL) FROM kv WHERE k = ?`, aiSpentKey(id)).Scan(&v)
-	return v
+	var v sql.NullFloat64
+	s.DB.QueryRow(`SELECT SUM(cost_usd) FROM ai_requests WHERE entry_id = ? AND at >= ?`, id, monthStart()).Scan(&v)
+	return v.Float64
 }
 
-// Spend zählt Kosten auf den Eintrag im laufenden Monat.
-func (s *System) Spend(id string, usd float64) {
-	if _, err := s.DB.Exec(`INSERT INTO kv (k, v) VALUES (?, ?) ON CONFLICT(k) DO UPDATE SET v = CAST(CAST(v AS REAL) + CAST(excluded.v AS REAL) AS TEXT)`,
-		aiSpentKey(id), strconv.FormatFloat(usd, 'f', -1, 64)); err != nil {
-		log.Printf("KI-Kosten nicht gezählt (%s): %v", id, err)
+// Record hält eine Anfrage fest.
+func (s *System) Record(u openai.Usage) {
+	if _, err := s.DB.Exec(`INSERT INTO ai_requests (at, user_id, area, purpose, entry_id, provider, model, tokens_in, tokens_out,
+		searches, seconds, images, cost_usd, ref) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		Now(), u.UserID, u.Area, u.Purpose, u.EntryID, u.Provider, u.Model, u.TokensIn, u.TokensOut, u.Searches, u.Seconds, u.Images, u.Cost, u.Ref); err != nil {
+		log.Printf("KI-Anfrage nicht festgehalten (%s): %v", u.EntryID, err)
 	}
+}
+
+// AIUsage: Summe der Anfragen einer Gruppe (Bereich, Zweck, Anbieter, Modell). Tokens nil = bei keiner Anfrage bekannt.
+type AIUsage struct {
+	Area, Purpose, EntryID, Provider, Model string
+	Requests                                int
+	TokensIn, TokensOut                     *int64
+	Searches                                int64
+	Seconds                                 *float64
+	Images                                  int64
+	Cost                                    *float64
+}
+
+func (s *System) aiUsage(where string, args ...any) ([]AIUsage, error) {
+	rows, err := s.DB.Query(`SELECT area, purpose, entry_id, provider, model, COUNT(*), SUM(tokens_in), SUM(tokens_out), SUM(searches),
+		SUM(seconds), SUM(images), SUM(cost_usd) FROM ai_requests WHERE `+where+`
+		GROUP BY area, purpose, entry_id, provider, model ORDER BY MIN(id)`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []AIUsage
+	for rows.Next() {
+		var u AIUsage
+		var in, o sql.NullInt64
+		var sec, cost sql.NullFloat64
+		if err := rows.Scan(&u.Area, &u.Purpose, &u.EntryID, &u.Provider, &u.Model, &u.Requests, &in, &o, &u.Searches, &sec, &u.Images, &cost); err != nil {
+			return nil, err
+		}
+		if in.Valid {
+			u.TokensIn = &in.Int64
+		}
+		if o.Valid {
+			u.TokensOut = &o.Int64
+		}
+		if sec.Valid {
+			u.Seconds = &sec.Float64
+		}
+		if cost.Valid {
+			u.Cost = &cost.Float64
+		}
+		out = append(out, u)
+	}
+	return out, rows.Err()
+}
+
+// AIUsageByRef: Anfragen eines Auftrags (Notiz, Planungsrunde), in der Reihenfolge ihres ersten Auftretens.
+func (s *System) AIUsageByRef(userID int64, ref string) ([]AIUsage, error) {
+	return s.aiUsage(`user_id = ? AND ref = ?`, userID, ref)
+}
+
+// AIUsageSince: alle Anfragen eines Nutzers seit since (ms); userID 0 = alle Nutzer.
+func (s *System) AIUsageSince(userID, since int64) ([]AIUsage, error) {
+	if userID == 0 {
+		return s.aiUsage(`at >= ?`, since)
+	}
+	return s.aiUsage(`user_id = ? AND at >= ?`, userID, since)
 }
 
 // --- Nutzer ---

@@ -115,6 +115,7 @@ textarea { min-height: 9rem; resize: vertical; }
 .linkknopf { background: none; border: 0; padding: 0; font: inherit; color: var(--akzent); text-decoration: underline; cursor: pointer; text-align: left; }
 .ringkarte { border-left-color: var(--warn); }
 .ringkarte p { margin: .3rem 0; }
+.umbruch { overflow-wrap: anywhere; }
 .ringbalken { display: block; padding: .5rem .2rem .3rem; color: inherit; text-decoration: none; font-size: .85rem; }
 .ringtext { display: flex; justify-content: space-between; gap: .5rem; flex-wrap: wrap; }
 .ringbalken .balken, .balken.ringgross { margin: .3rem 0 0; }
@@ -324,6 +325,26 @@ dialog.drawer[open] { animation: hoch .18s ease-out; }
 
 /* Gedächtnis */
 .gedkarte { overflow-wrap: anywhere; }
+/* Begriffe der Spracherkennung: kompakte Zeilen in Sende-Reihenfolge, Optionen im Blatt von unten */
+.begriffliste { border: 1px solid var(--linie); border-radius: var(--radius); background: var(--flaeche); overflow: hidden; margin-bottom: 1rem; }
+.begriffzeile { display: flex; align-items: center; line-height: 1.35; justify-content: space-between; gap: .5rem; width: 100%; min-height: 2.6rem; padding: .25rem .5rem .25rem .7rem; border: 0; background: none; color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+.begriffzeile + .begriffzeile { border-top: 1px solid var(--linie); }
+.begriffzeile:hover, .begriffzeile:focus-visible { background: var(--bg); }
+.begriffzeile.aus .begrifftext { color: var(--leise); }
+.begrifftext { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.begrifftext .badge { vertical-align: baseline; }
+.begriffmeta { flex: none; display: flex; align-items: center; gap: .4rem; color: var(--leise); }
+.begriffzeile.gestapelt .begriffmeta { flex-direction: column; align-items: flex-end; gap: .1rem; }
+.begriffzeile .quelle { flex: none; width: 1.1rem; height: 1.1rem; }
+/* Sätze (Vorschläge, Aktiv, Gelöscht): jede Zeile für sich mit Abstand; Begriffe bleiben eine dichte Liste */
+.begriffliste.luft { border: 0; border-radius: 0; background: none; overflow: visible; display: flex; flex-direction: column; gap: .45rem; }
+.begriffliste.luft .begriffzeile { border: 1px solid var(--linie); border-radius: var(--radius); background: var(--flaeche); padding-top: .45rem; padding-bottom: .45rem; }
+.begriffliste.luft .begriffzeile:hover, .begriffliste.luft .begriffzeile:focus-visible { background: var(--bg); }
+.begriffdatum { flex: none; color: var(--leise); font-size: .82rem; font-variant-numeric: tabular-nums; text-align: right; }
+.begriffzeile .weiter { flex: none; width: 1.3rem; height: 1.3rem; color: var(--leise); }
+.begriffzeile .stern, .blattkopf .stern { color: var(--akzent); }
+.begriffrest { margin: 0 0 .4rem; }
+.blattkopf { padding: 0 .5rem .6rem; overflow-wrap: anywhere; }
 .gedkarte .leiste { margin: .5rem 0 0; }
 .gedkarte .leiste .btn { flex: 0 1 auto; }
 
@@ -873,4 +894,12 @@ dialog.tagdialog .kikopf h2 { margin: 0; }
 .karte.kibereich { display: flex; flex-direction: row; align-items: center; gap: .8rem; color: inherit; text-decoration: none; margin: .7rem 0; }
 .kibereich:hover { border-color: var(--akzent); }
 .kibereichtext { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: .25rem; overflow-wrap: anywhere; }
+.ringmeta > :last-child { margin-left: auto; }
+a.kartenlink { color: inherit; text-decoration: none; flex-wrap: nowrap; }
+a.kartenlink strong { min-width: 0; overflow-wrap: anywhere; }
 .kipfeil { flex: none; font-size: 2.4rem; line-height: 1; color: var(--leise); padding: 0 .2rem; }
+
+/* KI-Kosten: Protokoll je Anbieter */
+.anbieterkarte { margin-bottom: .6rem; overflow-wrap: anywhere; }
+.anbieterkarte .zeile { flex-wrap: nowrap; align-items: flex-start; }
+.anbieterkarte details { margin-top: .4rem; }

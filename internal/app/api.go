@@ -128,10 +128,8 @@ func (a *App) jobSummary(j *store.Job) map[string]any {
 			}
 			m["liste"] = map[string]any{"id": l.ID, "nr": l.Nr, "name": l.Name, "projekt": l.Project, "punkte": len(items), "erledigt": done}
 			// Film/Serie: Regie und Schauspieler unter dem Titel der Karte im Verlauf (die Notizansicht hat sie in den Eckdaten).
-			if len(items) == 1 {
-				var facts []Fact
-				json.Unmarshal([]byte(items[0].Facts), &facts)
-				if line := castLine(facts); line != "" {
+			if d := parseDictation(j.Result); d != nil && len(items) == 1 {
+				if line := castLine(d.Eckdaten); line != "" {
 					m["besetzung"] = line
 				}
 			}
@@ -516,6 +514,13 @@ func (a *App) handleJob(w http.ResponseWriter, r *http.Request) {
 	m["limit_usd"] = a.Cfg.ResearchLimitUSD
 	if j.CostUSD != nil {
 		m["kosten_usd"] = *j.CostUSD
+	}
+	// KI-Anfragen dieses Auftrags aus dem Protokoll: je Bereich, Anbieter und Modell mit rohen Tokens und Kosten.
+	// Ältere Aufträge haben keine Zeilen; für sie bleibt nur kosten_usd.
+	if usage, err := a.System.DB.AIUsageByRef(a.UserID, j.ID); err != nil {
+		logf("KI-Anfragen %s: %v", j.ID, err)
+	} else if len(usage) > 0 {
+		m["ki_anfragen"] = aiUsageJSON(usage)
 	}
 	text := j.Transcript
 	switch j.Mode {
@@ -1115,9 +1120,39 @@ func (a *App) handleCosts(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	// Je Anbieter und Modell aus dem Protokoll der Anfragen: rohe Tokens und Kosten nach den Preisen, die bei der
+	// Anfrage galten – auch Lernlauf, Einsortieren und alles andere ohne Auftrag.
+	usage, err := a.System.DB.AIUsageSince(a.UserID, start.UnixMilli())
+	if err != nil {
+		writeErr(w, 500, "speicher", "Datenbankfehler")
+		return
+	}
 	writeJSON(w, 200, map[string]any{
-		"tage": series, "summen": totals, "arten": kinds, "limit_usd": a.Cfg.ResearchLimitUSD,
+		"tage": series, "summen": totals, "arten": kinds, "limit_usd": a.Cfg.ResearchLimitUSD, "anfragen": aiUsageJSON(usage),
 	})
+}
+
+// aiUsageJSON: Gruppen des Protokolls für die Web-App; fehlende Werte (nicht bekannt) bleiben weg statt 0.
+func aiUsageJSON(usage []store.AIUsage) []map[string]any {
+	out := make([]map[string]any, 0, len(usage))
+	for _, u := range usage {
+		m := map[string]any{"bereich": u.Area, "zweck": u.Purpose, "eintrag": u.EntryID, "anbieter": u.Provider, "modell": u.Model,
+			"anzahl": u.Requests, "suchen": u.Searches, "bilder": u.Images}
+		if u.TokensIn != nil {
+			m["tokens_ein"] = *u.TokensIn
+		}
+		if u.TokensOut != nil {
+			m["tokens_aus"] = *u.TokensOut
+		}
+		if u.Seconds != nil {
+			m["sekunden"] = *u.Seconds
+		}
+		if u.Cost != nil {
+			m["kosten_usd"] = *u.Cost
+		}
+		out = append(out, m)
+	}
+	return out
 }
 
 // handlePebbleSetup liefert die Werte, die in der Pebble-App einzutragen sind (nur mit Sitzung).
@@ -1130,7 +1165,7 @@ func (a *App) handlePebbleSetup(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{
 		"url": a.Cfg.PublicURL + "/hook", "header": a.Cfg.HookTokenHeader, "token": access.Token, "secret": access.Secret,
 		"halten": a.Cfg.TriggerSingle, "doppelklick_halten": a.Cfg.TriggerDouble, "transkription": pebbleMode(a.KI().AI),
-		"max_mb": a.Cfg.HookMaxBytes >> 20, "ring_header": a.Cfg.RingIDHeader, "ring_id": a.activeRingID(),
+		"max_mb": a.Cfg.HookMaxBytes >> 20,
 	})
 }
 

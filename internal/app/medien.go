@@ -450,7 +450,7 @@ func (a *App) generateImage(ctx context.Context, m *Medium) (*float64, error) {
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
 	defer cancel()
 	prompt := m.Prompt + "\n\nStyle: clean, simple explanatory illustration, flat colors, white background, no text or only very short labels."
-	data, price, err := gen.Image(ctx, prompt, "1536x1024", "low")
+	data, price, err := gen.Image(a.tagged(ctx), prompt, "1536x1024", "low")
 	if err != nil {
 		return nil, err
 	}
@@ -795,7 +795,7 @@ func (a *App) aiTrailer(ctx context.Context, query, lang string) (*float64, stri
 	if lang == "en" {
 		language = "Englisch"
 	}
-	res, err := a.AI.Respond(ctx, openai.Request{Area: openai.AreaResearch, Instructions: fmt.Sprintf(trailerInstructions, language),
+	res, err := a.AI.Respond(a.tagged(ctx), openai.Request{Area: openai.AreaResearch, Instructions: fmt.Sprintf(trailerInstructions, language),
 		Input: query, MaxOutputTokens: 1500, ReasoningEffort: "low", WebSearch: true, SearchContext: "low", MaxToolCalls: 2,
 		SchemaName: "trailer", Schema: trailerSchema})
 	if err != nil {

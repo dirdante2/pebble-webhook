@@ -84,13 +84,22 @@ func (a *System) handleHook(w http.ResponseWriter, r *http.Request) {
 		hookReply(w, http.StatusUnauthorized, "nicht angemeldet")
 		return
 	}
-	if v := r.Header.Get("X-Index-Webhook-Version"); v != "1" {
-		hookReply(w, http.StatusBadRequest, "Webhook-Version nicht unterstützt")
-		return
-	}
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, a.Cfg.HookMaxBytes))
 	if err != nil {
 		hookReply(w, http.StatusRequestEntityTooLarge, "Aufnahme zu groß")
+		return
+	}
+	// Mitschnitt vor allen weiteren Prüfungen: auch abgewiesene Zustellungen bleiben sichtbar.
+	if a.Cfg.HookCapture {
+		rec := &hookRecorder{ResponseWriter: w}
+		dir := a.captureHook(tok.UserID, r, body, time.Now())
+		defer func() { captureReply(dir, rec.status, rec.body.Bytes()) }()
+		w = rec
+	} else {
+		a.dropCapture(tok.UserID)
+	}
+	if v := r.Header.Get("X-Index-Webhook-Version"); v != "1" {
+		hookReply(w, http.StatusBadRequest, "Webhook-Version nicht unterstützt")
 		return
 	}
 	delivery := strings.TrimSpace(r.Header.Get("X-Index-Delivery"))
@@ -151,11 +160,6 @@ func (a *App) acceptHook(w http.ResponseWriter, r *http.Request, body []byte, de
 		j.FailedAt = now
 		j.Mode, j.Failed, j.Error = "unbekannt", true, a.Tf("Unbekannte Geste „%s“ – keine Aktion zugeordnet", store.Preview(trigger, 60))
 	}
-	// Ring-ID ist Pflicht: das Test-Event beim Einrichten scheitert ohne gültige ID, damit der Header gesetzt wird.
-	if j.IsTest && !ringIDRe.MatchString(strings.TrimSpace(r.Header.Get(a.Cfg.RingIDHeader))) {
-		hookReply(w, http.StatusBadRequest, "Ring-ID fehlt oder ungültig: Header "+a.Cfg.RingIDHeader+" mit Wert #12345 eintragen")
-		return
-	}
 	if !j.IsTest && len(audio) == 0 && j.PebbleText == "" {
 		hookReply(w, http.StatusBadRequest, "weder Audio noch Transkript")
 		return
@@ -182,16 +186,12 @@ func (a *App) acceptHook(w http.ResponseWriter, r *http.Request, body []byte, de
 		hookReply(w, http.StatusOK, "bereits angenommen")
 		return
 	}
-	ringOK := a.recordRecording(j, strings.TrimSpace(r.Header.Get(a.Cfg.RingIDHeader)))
+	a.recordRecording(j, ringKennung(delivery), strings.TrimSpace(r.Header.Get("User-Agent")))
 	a.changed(j.ID)
 	if j.Failed {
 		a.notify(config.NotifyErrors, a.T("Notiz fehlgeschlagen"), store.Preview(j.Error, 120), "/eintrag/"+j.ID)
 	}
 	a.Wake()
-	if !ringOK {
-		hookReply(w, http.StatusOK, "angenommen, aber Ring-ID fehlt oder ungültig (Header "+a.Cfg.RingIDHeader+": #12345)")
-		return
-	}
 	hookReply(w, http.StatusOK, "angenommen")
 }
 

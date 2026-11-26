@@ -31,12 +31,12 @@ type Config struct {
 	HookTokenHeader string
 	HookMaxBytes    int64
 	HookRatePerMin  int
+	HookCapture     bool // letzte Zustellung roh nach DATA_DIR/mitschnitt/<nutzer>/
 	MinFreeBytes    uint64
 
 	TriggerSingle     string // diktat | planung
 	TriggerDouble     string
-	RingIDHeader      string // eigener Header der Pebble-App mit der Ring-ID
-	RingCapacityHours int    // Akku eines neuen Rings in Stunden Aufnahme
+	RingCapacityHours int // Akku eines neuen Rings in Stunden Aufnahme
 
 	WhisperModel         string // Modell der lokalen Transkription (whisper.Models)
 	WhisperKeepMinutes   int    // Modell so lange nach der letzten Aufnahme im RAM halten; 0 = dauerhaft
@@ -237,11 +237,11 @@ func FromValues(boot Bootstrap, lookup func(string) string) (*Config, error) {
 		HookTokenHeader: str("HOOK_TOKEN_HEADER", "X-Webhook-Token"),
 		HookMaxBytes:    int64(num("HOOK_MAX_MB", 25)) << 20,
 		HookRatePerMin:  num("HOOK_RATE_PER_MIN", 30),
+		HookCapture:     str("HOOK_MITSCHNITT", "inaktiv") == "aktiv",
 		MinFreeBytes:    uint64(num("MIN_FREE_MB", 500)) << 20,
 
 		TriggerSingle:     mode("TRIGGER_SINGLE", "diktat"),
 		TriggerDouble:     mode("TRIGGER_DOUBLE", "planung"),
-		RingIDHeader:      str("RING_ID_HEADER", "X-Ring-ID"),
 		RingCapacityHours: num("RING_CAPACITY_HOURS", 12),
 
 		WhisperModel:         str("WHISPER_MODEL", whisper.DefaultModel),

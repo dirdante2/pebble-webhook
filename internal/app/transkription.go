@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"pebble-webhook/internal/config"
+	"pebble-webhook/internal/openai"
 	"pebble-webhook/internal/store"
 	"pebble-webhook/internal/whisper"
 )
@@ -26,20 +27,28 @@ const (
 func (a *App) transcribeAudio(ctx context.Context, name string, audio []byte, mime string, cost **float64) (text string, seconds float64, source string, err error) {
 	var reasons []string
 	ki := a.KI()
+	prompt := a.transcribePrompt()
 	for _, e := range ki.AI.Active(config.AreaTranscribe) {
 		if e.Access == config.EntryPebble {
 			continue
 		}
 		if e.Access == config.EntryWhisper {
-			text, seconds, err = a.Whisper.Transcribe(ctx, ki.WhisperModel, audio, a.Cfg.Language)
+			text, seconds, err = a.Whisper.Transcribe(ctx, ki.WhisperModel, audio, a.Cfg.Language, prompt)
 			if err == nil {
 				zero := 0.0
 				addCost(cost, &zero)
+				// Auch die lokale Transkription steht im Protokoll (Kosten 0), damit es alle Anfragen zeigt.
+				u := openai.Usage{UserID: a.UserID, Ref: openai.TagOf(ctx).Ref, Area: openai.AreaTranscribe, EntryID: e.ID,
+					Provider: "Whisper", Model: ki.WhisperModel, Cost: &zero}
+				if seconds >= 0 {
+					u.Seconds = &seconds
+				}
+				a.System.DB.Record(u)
 				return text, seconds, sourceLocal, nil
 			}
 		} else {
 			var c *float64
-			text, seconds, c, err = a.AI.TranscribeStep(ctx, e.ID, name, audio, mime, a.Cfg.Language)
+			text, seconds, c, err = a.AI.TranscribeStep(a.tagged(ctx), e.ID, name, audio, mime, a.Cfg.Language, prompt)
 			if err == nil {
 				addCost(cost, c)
 				source = sourceOpenAI

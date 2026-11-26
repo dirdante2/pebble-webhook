@@ -53,9 +53,9 @@ type Answer struct {
 	Zeit int64 `json:"zeit,omitempty"`
 }
 
+// DictItem ist ein Listenpunkt einer Notiz. Eckdaten trägt nur die Notiz selbst.
 type DictItem struct {
-	Text     string `json:"text"`
-	Eckdaten []Fact `json:"eckdaten"`
+	Text string `json:"text"`
 }
 
 func parseDictation(s string) *Dictation {
@@ -71,10 +71,11 @@ func parseDictation(s string) *Dictation {
 
 var dictationSchema = map[string]any{
 	"type": "object", "additionalProperties": false,
-	"required": []string{"titel", "art", "termin", "notiz", "beschreibung", "eckdaten", "hinweise", "gruppe", "liste", "punkte", "quellen", "rueckfragen", "medien", "tags", "neue_tags", "merken", "bezug"},
+	"required": []string{"titel", "art", "termin", "notiz", "beschreibung", "eckdaten", "hinweise", "gruppe", "liste", "punkte", "quellen", "rueckfragen", "medien", "tags", "neue_tags", "merken", "bezug", "aufteilen"},
 	"properties": map[string]any{
 		"titel":        map[string]any{"type": "string"},
 		"bezug":        map[string]any{"type": "integer"},
+		"aufteilen":    map[string]any{"type": "boolean"},
 		"art":          map[string]any{"type": "string", "enum": []string{"notiz", "listenpunkt", "termin"}},
 		"termin":       appointmentSchema,
 		"notiz":        map[string]any{"type": "string"},
@@ -84,8 +85,8 @@ var dictationSchema = map[string]any{
 		"liste":        map[string]any{"type": "string"},
 		"gruppe":       map[string]any{"type": "string"},
 		"punkte": map[string]any{"type": "array", "items": map[string]any{
-			"type": "object", "additionalProperties": false, "required": []string{"text", "eckdaten"},
-			"properties": map[string]any{"text": map[string]any{"type": "string"}, "eckdaten": factsSchema}}},
+			"type": "object", "additionalProperties": false, "required": []string{"text"},
+			"properties": map[string]any{"text": map[string]any{"type": "string"}}}},
 		"quellen":   sourcesSchema,
 		"medien":    mediaSchema,
 		"tags":      map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
@@ -107,13 +108,14 @@ Felder:
 - notiz: kurze Fassung des Gesagten in 1–3 sauberen Sätzen, ohne Füllwörter, Versprecher und Wiederholungen; Erkennungsfehler berichtigen. Nur was gesagt wurde – kein Zusatzwissen, nichts aus der Websuche. Immer füllen, auch bei listenpunkt.
 - beschreibung: Zusatzwissen zum genannten Werk, Produkt, Ort oder Thema in 2–4 kurzen Sätzen (Regie und Schauspieler stehen in den Eckdaten, hier nicht wiederholen) (Film, Serie, Buch: worum es geht, ohne das Ende zu verraten; Ort: was es dort gibt). Nichts aus eckdaten oder notiz wiederholen. Leer bei persönlichen Gedanken, Aufgaben, Einkäufen und wenn du nichts Gesichertes weißt.
 - ` + sortRules + `
-- punkte: bei listenpunkt: je genanntem Ding ein Punkt. Bei notiz nur, wenn eine Anweisung des Nutzers verlangt, die Notiz in mehrere Punkte aufzuteilen: dann je Teil ein Punkt (eckdaten leer). text = richtiger Name oder Titel (Erkennungsfehler berichtigen), höchstens 8 Wörter; Film und Serie immer als Titel mit Jahr in Klammern („Arrival (2016)“, Serie mit Startjahr: „Severance (2022)“). eckdaten = 2–6 Paare name/wert zu diesem Punkt (Film/Serie: Jahr, Zu sehen bei, Regie (Serie: Idee), Schauspieler – höchstens 3 bekannte, Genre, Länge; Regie bzw. Idee und Schauspieler immer; Buch: Autor, Jahr, Genre; Einkauf: leer). Sonst bei notiz leer.
+- punkte: Listenpunkte dieser Notiz, nur Namen (Eckdaten stehen nie am Punkt, nur oben an der Notiz). Bei listenpunkt mit einem Ding (ein Film, ein Buch …): genau ein Punkt. Nennt die Notiz mehrere verschiedene Dinge: je Ding ein Punkt (siehe aufteilen). Bei notiz nur, wenn die Aufgabe aus mehreren Teilschritten besteht oder eine Anweisung des Nutzers das Aufteilen in Punkte verlangt: dann je Teil ein Punkt. text = richtiger Name oder Titel (Erkennungsfehler berichtigen), höchstens 8 Wörter; Film und Serie immer als Titel mit Jahr in Klammern („Arrival (2016)“, Serie mit Startjahr: „Severance (2022)“).
 - Film und Serie: „Zu sehen bei“ ist Pflicht – Streaming-Anbieter in Deutschland, bei denen er im Abo läuft (z. B. „Netflix, Prime Video“). Läuft er nirgends im Abo: „Kaufen/Leihen“ mit Anbieter (z. B. „Amazon, Apple TV“) und den Link zum Kaufen/Leihen in quellen. Dafür die Websuche nutzen.
-- eckdaten: nur bei notiz: 0–5 Paare name/wert mit den wichtigsten Fakten zum Thema (Termin, Ort, Preis, Person …). name höchstens 3 Wörter, wert höchstens 8 Wörter. Bei listenpunkt leer.
+- eckdaten: die Eckdaten der Notiz, 0–6 Paare name/wert, name höchstens 3 Wörter, wert höchstens 8 Wörter. Notiz: die wichtigsten Fakten zum Thema (Termin, Ort, Preis, Person …). Listenpunkt mit einem Ding: Film/Serie: Jahr, Zu sehen bei, Regie (Serie: Idee), Schauspieler – höchstens 3 bekannte, Genre, Länge; Regie bzw. Idee und Schauspieler immer; Buch: Autor, Jahr, Genre; Einkauf: leer. Nennt die Notiz mehrere verschiedene Dinge: leer.
+- aufteilen: true nur, wenn die Notiz mehrere verschiedene Dinge nennt (z. B. zwei Filme, oder ein Film und ein Einkauf) und der Nutzer eine Rückfrage, ob sie in einzelne Notizen aufgeteilt werden soll, bejaht hat (oder es anweist). Dann wird je Punkt eine eigene Notiz. Nennt die Notiz mehrere verschiedene Dinge und gibt es noch keine Antwort dazu: aufteilen false und eine Rückfrage „In einzelne Notizen aufteilen?“ mit den Antworten „Ja, aufteilen“, „Nein, zusammen lassen“ und einem dritten passenden Vorschlag. Teilschritte einer Aufgabe sind keine verschiedenen Dinge. Steht in der Eingabe „Nicht aufteilen“, immer false und keine solche Rückfrage.
 - hinweise: höchstens 4 Stichpunkte, die weiterhelfen: Ähnliches, Tipp, nächster Schritt, wichtige Einschränkung. Nichts aus den Eckdaten oder der notiz wiederholen. Keine URLs, Links gehören in quellen. Leer, wenn nichts Nützliches zu sagen ist.
 - quellen: die tatsächlich verwendeten Webseiten mit Titel und vollständiger URL. Nichts erfinden.
 - ` + mediaRules + ` Marker nur in beschreibung. Bei persönlichen Gedanken, Aufgaben, Einkäufen und Terminen keine Medien außer Trailern.
-- rueckfragen: höchstens 2 Fragen an den Nutzer, nur wenn du die Notiz ohne die Antwort nicht richtig verstehen oder einsortieren kannst (unbekannter Name, unklare Abkürzung, mehrdeutiges Ziel, fehlender Zusammenhang) und das Gedächtnis es nicht klärt. Je Frage: frage = kurz und einzeln beantwortbar; antworten = genau 3 naheliegende, unterschiedliche Vorschläge, je höchstens 6 Wörter. Werte die Notiz trotzdem so gut wie möglich aus. Stehen in der Eingabe schon Antworten des Nutzers, stellst du keine Frage mehr. Meist leer.
+- rueckfragen: höchstens 2 Fragen an den Nutzer, nur wenn du die Notiz ohne die Antwort nicht richtig verstehen oder einsortieren kannst (unbekannter Name, unklare Abkürzung, mehrdeutiges Ziel, fehlender Zusammenhang) und das Gedächtnis es nicht klärt, dazu die Aufteil-Rückfrage (siehe aufteilen). Je Frage: frage = kurz und einzeln beantwortbar; antworten = genau 3 naheliegende, unterschiedliche Vorschläge, je höchstens 6 Wörter. Werte die Notiz trotzdem so gut wie möglich aus. Stehen in der Eingabe schon Antworten des Nutzers, stellst du keine Frage mehr. Meist leer.
 - ` + tagRules + `
 - ` + memoryRules + ` Besonders, was Antworten des Nutzers auf Rückfragen über diese Notiz hinaus klären.
 - ` + contextRules + `
@@ -186,6 +188,11 @@ func (a *App) analyseDictation(ctx context.Context, j *store.Job) error {
 	if k, _ := a.DB.Get(contextKey(j.ID)); k != "" {
 		input += fmt.Sprintf("\n\nAufgenommen in der Web-App, während offen war: %s. Gehört die Notiz erkennbar dazu, dorthin einsortieren.", k)
 	}
+	// Ring-Aufnahmen und schon abgeteilte Notizen werden nie (weiter) aufgeteilt.
+	noSplit := a.fromRing(j) || isSplitPart(j)
+	if noSplit {
+		input += "\n\nNicht aufteilen: mehrere Dinge bleiben Punkte dieser einen Notiz, keine Rückfrage zum Aufteilen."
+	}
 	req := openai.Request{
 		Area: openai.AreaDictation, Instructions: dictationInstructions, MaxOutputTokens: 3000,
 		ReasoningEffort: a.Cfg.PlanReasoningEffort, SchemaName: "diktat", Schema: dictationSchema,
@@ -201,6 +208,7 @@ func (a *App) analyseDictation(ctx context.Context, j *store.Job) error {
 		Tags      []string       `json:"tags"`
 		NeueTags  []string       `json:"neue_tags"`
 		Merken    []string       `json:"merken"`
+		Aufteilen bool           `json:"aufteilen"`
 	}
 	res, err := a.respond(ctx, req)
 	if err == nil {
@@ -278,22 +286,25 @@ func (a *App) analyseDictation(ctx context.Context, j *store.Job) error {
 	d.Liste, d.Gruppe = cleanName(d.Liste), cleanName(d.Gruppe)
 	items := []DictItem{}
 	for _, it := range d.Punkte {
-		it.Eckdaten = cleanFacts(it.Eckdaten, 6)
-		it.Text = store.Preview(withYear(it.Text, it.Eckdaten), 120)
+		it.Text = store.Preview(it.Text, 120)
 		if it.Text != "" && len(items) < 20 {
 			items = append(items, it)
 		}
 	}
+	// Ein Ding (Film, Buch): Punkt und Titel der Notiz mit Jahr aus den Eckdaten der Notiz.
+	if len(items) == 1 {
+		items[0].Text = store.Preview(withYear(items[0].Text, d.Eckdaten), 120)
+	}
 	d.Punkte = items
-	// Film/Serie: Titel der Notiz mit Jahr (Regie und Schauspieler zeigt die Notizansicht unter dem Titel, aus den Eckdaten).
-	if facts := d.Eckdaten; len(items) == 1 || castLine(facts) != "" {
-		if len(items) == 1 {
-			facts = items[0].Eckdaten
-		}
-		if t := withYear(title, facts); t != title {
+	if len(items) == 1 || castLine(d.Eckdaten) != "" {
+		if t := withYear(title, d.Eckdaten); t != title {
 			title = t
 			j.Title = title + " – " + date
 		}
+	}
+	// Mehrere verschiedene Dinge, Aufteilen bejaht: je Punkt eine eigene Notiz, diese geht in den Papierkorb.
+	if full.Aufteilen && !noSplit && d.Art != "termin" && len(d.Punkte) > 1 {
+		return a.splitJob(j, &d)
 	}
 	// Im Diktat mit Nummer genannte Liste („Liste 12“) gilt vor der Wahl der KI.
 	list := a.listByNr(j.Transcript)
@@ -328,8 +339,8 @@ func (a *App) analyseDictation(ctx context.Context, j *store.Job) error {
 		if err := a.addToList(j, list, d.Punkte); err != nil {
 			return err
 		}
-		// Listenpunkte stehen in der Notiz ihrer Liste, nicht als eigene Notiz unter Notizen.
-		d.Liste, d.Gruppe, d.Eckdaten, j.JoplinID = list.Name, list.Project, []Fact{}, ""
+		// Listenpunkte stehen in der Notiz ihrer Liste, nicht als eigene Notiz unter Notizen; die Eckdaten bleiben an der Notiz.
+		d.Liste, d.Gruppe, j.JoplinID = list.Name, list.Project, ""
 		if oldNote != "" {
 			// War die Notiz vor den Antworten eine eigene Joplin-Notiz, verschwindet diese.
 			if err := a.DB.AddJoplinDelete(oldNote); err != nil {
@@ -341,9 +352,9 @@ func (a *App) analyseDictation(ctx context.Context, j *store.Job) error {
 		if d.Art != "termin" {
 			d.Art = "notiz"
 		}
-		// Aufteilen nur auf Anweisung des Nutzers: dann steht die Notiz als mehrere Punkte in ihrer Liste.
+		// Teilschritte einer Aufgabe (oder Anweisung des Nutzers): dann steht die Notiz als mehrere Punkte in ihrer Liste.
 		parts := []DictItem{}
-		if len(instructions) > 0 && len(d.Punkte) > 1 && d.Art == "notiz" {
+		if len(d.Punkte) > 1 && d.Art == "notiz" {
 			parts = d.Punkte
 		}
 		d.Liste, d.Gruppe, d.Punkte = "", "", parts
@@ -369,13 +380,13 @@ func (a *App) analyseDictation(ctx context.Context, j *store.Job) error {
 			var touched []string
 			if len(parts) > 0 && len(items) == 0 {
 				for _, p := range parts {
-					t, err := a.placeItems(list, nil, &store.ListItem{JobID: j.ID, Text: p.Text}, p.Eckdaten, false)
+					t, err := a.placeItems(list, nil, &store.ListItem{JobID: j.ID, Text: p.Text}, false)
 					if err != nil {
 						return err
 					}
 					touched = t
 				}
-			} else if touched, err = a.placeItems(list, items, &store.ListItem{JobID: j.ID, Text: title}, d.Eckdaten, false); err != nil {
+			} else if touched, err = a.placeItems(list, items, &store.ListItem{JobID: j.ID, Text: title}, false); err != nil {
 				return err
 			}
 			for _, id := range touched {
@@ -513,8 +524,7 @@ func (a *App) addToList(j *store.Job, list *store.List, items []DictItem) error 
 		if dup {
 			continue
 		}
-		facts, _ := json.Marshal(it.Eckdaten)
-		ni := &store.ListItem{ListID: list.ID, JobID: j.ID, Text: it.Text, Facts: string(facts)}
+		ni := &store.ListItem{ListID: list.ID, JobID: j.ID, Text: it.Text}
 		if err := a.DB.AddListItem(ni); err != nil {
 			return err
 		}
@@ -590,11 +600,7 @@ func (a *App) pushList(l *store.List) error {
 		if it.DoneAt != 0 {
 			box = "- [x] "
 		}
-		b.WriteString(box + nrPrefix(it.Nr) + it.Text)
-		if fl := factLine(it.Facts); fl != "" {
-			b.WriteString(" – " + fl)
-		}
-		b.WriteString("\n")
+		b.WriteString(box + nrPrefix(it.Nr) + it.Text + "\n")
 	}
 	n.Body = b.String()
 	if err := a.Notes.PutNote(n); err != nil {
@@ -943,9 +949,7 @@ func (a *App) handleDeleteFailed(w http.ResponseWriter, r *http.Request) {
 // --- Listen: API ---
 
 func itemJSON(it *store.ListItem) map[string]any {
-	facts := []Fact{}
-	json.Unmarshal([]byte(it.Facts), &facts)
-	m := map[string]any{"id": it.ID, "text": it.Text, "eckdaten": facts, "erledigt": it.DoneAt, "angelegt": it.CreatedAt, "eintrag": it.JobID, "planung": it.PlanningID}
+	m := map[string]any{"id": it.ID, "text": it.Text, "erledigt": it.DoneAt, "angelegt": it.CreatedAt, "eintrag": it.JobID, "planung": it.PlanningID}
 	if it.Nr > 0 {
 		m["nr"] = it.Nr
 	}
@@ -1243,16 +1247,12 @@ func (a *App) handleJobToList(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, "speicher", "Datenbankfehler")
 		return
 	}
-	// Punkt = Kurztitel der Notiz ohne das angehängte Datum, dazu die Eckdaten der Auswertung.
+	// Punkt = Kurztitel der Notiz ohne das angehängte Datum (Eckdaten stehen nur an der Notiz).
 	text := shortTitle(j.Title)
 	if text == "" {
 		text = store.Preview(j.Transcript, 120)
 	}
-	var facts []Fact
-	if d := parseDictation(j.Result); d != nil {
-		facts = d.Eckdaten
-	}
-	if a.sortInto(w, r, items, &store.ListItem{JobID: j.ID, Text: text}, facts) {
+	if a.sortInto(w, r, items, &store.ListItem{JobID: j.ID, Text: text}) {
 		a.changed(j.ID)
 	}
 }
@@ -1279,14 +1279,14 @@ func (a *App) handlePlanningToList(w http.ResponseWriter, r *http.Request) {
 	if text == "" {
 		text = plan.Titel
 	}
-	if a.sortInto(w, r, items, &store.ListItem{PlanningID: p.ID, Text: store.Preview(text, 120)}, plan.Eckdaten) {
+	if a.sortInto(w, r, items, &store.ListItem{PlanningID: p.ID, Text: store.Preview(text, 120)}) {
 		a.hub.send("planung:" + p.ID)
 	}
 }
 
 // sortInto legt den Punkt in der gewünschten Liste an oder zieht die vorhandenen Punkte dorthin um
 // und schreibt die Antwort. Liefert false, wenn schon ein Fehler geantwortet wurde.
-func (a *App) sortInto(w http.ResponseWriter, r *http.Request, items []*store.ListItem, fresh *store.ListItem, facts []Fact) bool {
+func (a *App) sortInto(w http.ResponseWriter, r *http.Request, items []*store.ListItem, fresh *store.ListItem) bool {
 	var in struct {
 		Ziel    string `json:"ziel"`
 		Neu     string `json:"neu"`
@@ -1328,7 +1328,7 @@ func (a *App) sortInto(w http.ResponseWriter, r *http.Request, items []*store.Li
 			return false
 		}
 	}
-	touched, err := a.placeItems(list, items, fresh, facts, learn)
+	touched, err := a.placeItems(list, items, fresh, learn)
 	if err != nil {
 		writeErr(w, 500, "speicher", "Datenbankfehler")
 		return false

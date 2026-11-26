@@ -230,9 +230,9 @@ func (m *Manager) download(ctx context.Context, md Model, p *progress) error {
 	return os.Rename(tmp, m.path(md))
 }
 
-// Transcribe wandelt eine Aufnahme mit dem Modell id um. seconds = Länge der Aufnahme.
+// Transcribe wandelt eine Aufnahme mit dem Modell id um. seconds = Länge der Aufnahme. prompt: Begriffe als Hinweis.
 // Die Aufnahme berührt die Platte nicht: ffmpeg und whisper-cli lesen aus Speicherdateien (memfd).
-func (m *Manager) Transcribe(ctx context.Context, id string, audio []byte, language string) (text string, seconds float64, err error) {
+func (m *Manager) Transcribe(ctx context.Context, id string, audio []byte, language, prompt string) (text string, seconds float64, err error) {
 	defer func() {
 		if err != nil && ctx.Err() == nil {
 			m.mu.Lock()
@@ -286,7 +286,7 @@ func (m *Manager) Transcribe(ctx context.Context, id string, audio []byte, langu
 		lang = "auto"
 	}
 	start := time.Now()
-	text, err = srv.infer(ctx, wav, lang)
+	text, err = srv.infer(ctx, wav, lang, prompt)
 	m.mu.Lock()
 	srv.lastUse = time.Now()
 	m.mu.Unlock()

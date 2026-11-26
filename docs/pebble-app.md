@@ -5,7 +5,7 @@ The web app shows every value under *Status → Pebble-App* with show and copy b
 1. In the Pebble app open **Index 01 → Webhooks** and configure **both gestures** the same way.
 2. **URL**: `https://<your-domain>/hook`
 3. **Payload**: *Both* (audio and transcript).
-4. **Headers**: name `X-Webhook-Token` (setting *Header für den Token*), value = webhook token. **Required** second header: name `X-Ring-ID` (setting *Header für die Ring-ID*), value = the ring's ID in the form `#12345`. Without a valid ring ID the test event fails (400).
+4. **Headers**: name `X-Webhook-Token` (setting *Header für den Token*), value = webhook token. No ring header is needed: the app identifies the ring by the identifier inside the delivery ID (`ring_<12 hex>-…`); the ring ID is `#` plus its last three characters.
 5. **Signed requests**: on, secret = signing secret.
 6. **Test**: *Send test event* – a test entry appears in the history. Then record once per gesture: *hold* creates a note, *click + hold* a planning (configurable).
 

@@ -4,6 +4,20 @@ Summarised notes for **beta** and **stable** releases. Each section lists only w
 
 A tag `vX.Y.Z-stable` (stable; before 1.33.5 `vX.Y.Z`) or `vX.Y.Z-beta` (beta) needs a section `## [X.Y.Z]` or `## [X.Y.Z-beta]` here; the release workflow uses it as the release notes.
 
+## [4.5.0] - 2026-11-26
+
+### Rings
+- Recognised by their own identifier; no ring header, several rings side by side.
+- Description per ring; hint when the Pebble app was updated.
+
+### Notes and lists
+- Key facts only on the note, never on list items; existing data moved.
+- A film, book etc. is its own note; several things in one note are split after asking (never for the ring).
+
+### Speech recognition and costs
+- Term list with favourites as a hint for speech recognition.
+- All AI requests by provider and purpose, including local transcription.
+
 ## [4.4.0] - 2026-11-25
 
 ### AI providers
