@@ -55,6 +55,7 @@ type Ring struct {
 	Description     string `json:"beschreibung"`    // freier Text des Nutzers (z. B. „silber“)
 	InactiveReason  string `json:"inaktiv_grund"`   // Grund beim Inaktiv-Setzen (RingReasons); "" = aktiv oder vor 4.6
 	AskDeclined     string `json:"frage_abgelehnt"` // Frage „inaktiv setzen?“ abgelehnt (Zeitpunkt in ms); "" = offen
+	OffsetSeconds   int64  `json:"vorher_sekunden"` // Nutzung vor der ersten Aufnahme hier (vom Nutzer angegeben), zählt zur Nutzung
 }
 
 // RingReasons: Gründe für „inaktiv“ in der Reihenfolge der Auswahl.
@@ -72,11 +73,11 @@ type RingRecording struct {
 	Origin        string // eingang | nachtrag | schaetzung
 }
 
-const ringCols = `nr, hardware_id, started_at, ended_at, capacity_seconds, warned_level, kennung, app_agent, beschreibung, inaktiv_grund, frage_abgelehnt`
+const ringCols = `nr, hardware_id, started_at, ended_at, capacity_seconds, warned_level, kennung, app_agent, beschreibung, inaktiv_grund, frage_abgelehnt, vorher_sekunden`
 
 func scanRing(r scanner) (*Ring, error) {
 	var g Ring
-	err := r.Scan(&g.Nr, &g.HardwareID, &g.StartedAt, &g.EndedAt, &g.CapacitySeconds, &g.WarnedLevel, &g.Kennung, &g.AppAgent, &g.Description, &g.InactiveReason, &g.AskDeclined)
+	err := r.Scan(&g.Nr, &g.HardwareID, &g.StartedAt, &g.EndedAt, &g.CapacitySeconds, &g.WarnedLevel, &g.Kennung, &g.AppAgent, &g.Description, &g.InactiveReason, &g.AskDeclined, &g.OffsetSeconds)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -89,7 +90,7 @@ func scanRing(r scanner) (*Ring, error) {
 // Ringtausch beendet) – ein inaktiver Ring fehlt in der Seitenleiste und warnt nicht mehr.
 func (s *Store) ActiveRing() (*Ring, error) {
 	return scanRing(s.DB.QueryRow(`SELECT ` + ringCols + ` FROM rings WHERE ended_at = 0 ORDER BY
-		COALESCE((SELECT SUM(x.seconds) FROM ring_recordings x WHERE x.ring_nr = rings.nr AND x.seconds > 0), 0) * 1.0 / MAX(capacity_seconds, 1) DESC,
+		(vorher_sekunden + COALESCE((SELECT SUM(x.seconds) FROM ring_recordings x WHERE x.ring_nr = rings.nr AND x.seconds > 0), 0)) * 1.0 / MAX(capacity_seconds, 1) DESC,
 		nr DESC LIMIT 1`))
 }
 
@@ -271,7 +272,16 @@ func addRingDeviceCols(db *sql.DB) error {
 			return err
 		}
 	}
+	if _, err := db.Exec(`ALTER TABLE rings ADD COLUMN vorher_sekunden INTEGER NOT NULL DEFAULT 0`); err != nil && !strings.Contains(err.Error(), "duplicate column") {
+		return err
+	}
 	return nil
+}
+
+// SetRingOffset: Nutzung vor der ersten Aufnahme (Sekunden, ≥ 0).
+func (s *Store) SetRingOffset(nr, secs int64) error {
+	_, err := s.DB.Exec(`UPDATE rings SET vorher_sekunden = ? WHERE nr = ?`, secs, nr)
+	return err
 }
 
 // SetRingKennung setzt die Kennung eines Rings (erste Aufnahme mit Kennung).
@@ -417,12 +427,30 @@ func (s *Store) RingTotals(nr int64) (*RingTotals, error) {
 			t.Last = last
 		}
 	}
-	return t, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	// Nutzung vor der ersten Aufnahme (vom Nutzer angegeben) zählt mit – als eigener Teil „vorher“.
+	var off int64
+	if err := s.DB.QueryRow(`SELECT vorher_sekunden FROM rings WHERE nr = ?`, nr).Scan(&off); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return nil, err
+	}
+	if off > 0 {
+		t.Seconds += float64(off)
+		t.Parts["vorher"] += float64(off)
+	}
+	return t, nil
 }
 
 // RingSecondsSince: bekannte Sekunden eines Rings ab since (für die Vorhersage).
 func (s *Store) RingSecondsSince(nr, since int64) (secs float64, err error) {
 	err = s.DB.QueryRow(`SELECT COALESCE(SUM(seconds), 0) FROM ring_recordings WHERE ring_nr = ? AND seconds >= 0 AND received_at >= ?`, nr, since).Scan(&secs)
+	if err == nil && since <= 0 { // ab Anfang: die Nutzung vor der ersten Aufnahme gehört dazu
+		var off int64
+		if e := s.DB.QueryRow(`SELECT vorher_sekunden FROM rings WHERE nr = ?`, nr).Scan(&off); e == nil {
+			secs += float64(off)
+		}
+	}
 	return
 }
 

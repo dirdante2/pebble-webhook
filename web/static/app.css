@@ -86,10 +86,19 @@ dl { display: grid; grid-template-columns: minmax(7rem, 40%) 1fr; gap: .3rem .8r
 dt { color: var(--leise); } dd { margin: 0; }
 
 label { display: block; font-weight: 600; margin: .9rem 0 .3rem; }
-textarea, input[type=text], input[type=password], input[type=url], #zielsuche {
-  width: 100%; padding: .65rem .75rem; border: 1px solid var(--linie); border-radius: 10px;
+/* Alle Eingabefelder gleich (Text, Zahl, Mail, Datum …); besondere Felder (Suche, Code, Stepper) überschreiben danach. */
+textarea, input:not([type]), input[type=text], input[type=password], input[type=url], input[type=email], input[type=number],
+input[type=search], input[type=tel], input[type=date], input[type=time], input[type=datetime-local], #zielsuche {
+  width: 100%; box-sizing: border-box; min-height: 2.75rem; padding: .65rem .75rem; border: 1px solid var(--linie); border-radius: 10px;
   background: var(--flaeche); color: var(--text); font: inherit;
 }
+textarea:focus, input:not([type]):focus, input[type=text]:focus, input[type=password]:focus, input[type=url]:focus, input[type=email]:focus,
+input[type=number]:focus, input[type=search]:focus, input[type=tel]:focus, input[type=date]:focus, input[type=time]:focus,
+input[type=datetime-local]:focus, select:focus {
+  outline: none; border-color: var(--akzent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--akzent) 22%, transparent);
+}
+input[type=checkbox], input[type=radio] { accent-color: var(--akzent); }
+input::placeholder, textarea::placeholder { color: var(--leise); opacity: .8; }
 textarea { min-height: 9rem; resize: vertical; }
 .einstellungen fieldset { border: 1px solid var(--linie); border-radius: var(--radius); margin: 1rem 0; padding: .2rem .9rem .9rem; min-width: 0; }
 .einstellungen legend { font-weight: 700; padding: 0 .3rem; }
@@ -129,10 +138,12 @@ textarea { min-height: 9rem; resize: vertical; }
 .balken.ringgross.mehrteilig i:first-child { border-top-left-radius: .3rem; border-bottom-left-radius: .3rem; }
 .balken.ringgross.mehrteilig i:last-child { border-top-right-radius: .3rem; border-bottom-right-radius: .3rem; }
 .balken.ringgross.mehrteilig i.t-diktat { background: var(--gut); }
+.balken.ringgross.mehrteilig i.t-vorher { background: var(--s1); }
 .balken.ringgross.mehrteilig i.t-planung { background: var(--planung); }
 .balken.ringgross.mehrteilig i.t-fehl { background: var(--schlecht); }
 .balken.ringgross.mehrteilig i.t-geloescht { background: var(--leise); }
 .kachel.f-diktat { border-left: 4px solid var(--gut); }
+.kachel.f-vorher { border-left: 4px solid var(--s1); }
 .kachel.f-planung { border-left: 4px solid var(--planung); }
 .kachel.f-fehl { border-left: 4px solid var(--schlecht); }
 .kachel.f-geloescht { border-left: 4px solid var(--leise); }
@@ -394,7 +405,7 @@ details.quellen { margin-top: 1.1rem; }
 .gruppenkopf { display: flex; align-items: center; justify-content: space-between; gap: .5rem; }
 .gruppenkopf .btn { text-transform: none; letter-spacing: 0; font-weight: 600; }
 .gruppenkopf + .leise { margin: 0 0 .3rem; font-size: .82rem; display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-select { width: 100%; font: inherit; padding: .55rem .6rem; border: 1px solid var(--linie); border-radius: var(--radius); background: var(--flaeche); color: inherit; }
+select { width: 100%; box-sizing: border-box; min-height: 2.75rem; font: inherit; padding: .55rem .6rem; border: 1px solid var(--linie); border-radius: 10px; background: var(--flaeche); color: inherit; }
 .filtergruppe { flex-wrap: wrap; }
 .block.listenbezug .lp.erledigt .lptext > div:first-child { text-decoration: line-through; }
 /* Gruppentitel als Knopf (öffnet die Gruppe), Abstand zur vorigen Gruppe */
@@ -671,6 +682,8 @@ dialog.formblatt h2 { margin-top: 0; }
 dialog.formblatt .grundliste { margin: .6rem 0 .8rem; border: 1px solid var(--linie); border-radius: .5rem; }
 .feldpaar { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: .6rem; }
 .feldpaar input { width: 100%; }
+.feldpaar.gleich { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: end; }
+.feldpaar.gleich label { overflow-wrap: anywhere; }
 .schalter { display: flex; align-items: center; gap: .5rem; margin: .7rem 0; }
 
 /* Termin verschieben: große Felder, ‹ › daneben, Schnellwahl als Chips */

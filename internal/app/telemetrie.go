@@ -158,7 +158,7 @@ func (s *System) telemetryMonthly(month string, only *App) (*telemetryMonth, err
 	if err != nil {
 		return nil, err
 	}
-	m := &telemetryMonth{AppID: id, Version: shortVersion(s.Version), Channel: s.installedChannel(), Month: month, Rings: []telemetryRing{}}
+	m := &telemetryMonth{AppID: id, Version: telemetryVersion(s.Version), Channel: s.updateChannel(), Month: month, Rings: []telemetryRing{}}
 	apps := s.Apps()
 	if only != nil {
 		apps = []*App{only}
@@ -447,7 +447,7 @@ func (a *App) ringEventOf(g *store.Ring) (telemetryEvent, bool, error) {
 	if err != nil {
 		return telemetryEvent{}, false, err
 	}
-	ev := telemetryEvent{AppID: id, Version: shortVersion(a.System.Version), Channel: a.System.installedChannel(), Ring: h, Seconds: float64(int64(secs)),
+	ev := telemetryEvent{AppID: id, Version: telemetryVersion(a.System.Version), Channel: a.System.updateChannel(), Ring: h, Seconds: float64(int64(secs)),
 		Event: "aktiv", Day: time.Now().Format("2006-01-02")}
 	if g.EndedAt > 0 {
 		ev.Event, ev.Reason, ev.Day = "inaktiv", g.InactiveReason, time.UnixMilli(g.EndedAt).Format("2006-01-02")
@@ -624,6 +624,16 @@ func (a *App) handleGlobalLife(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"lebensdauer": globalLife.life, "stand": globalLife.stand, "eigene": own})
 }
 
+// telemetryVersion: Versionsnummer ohne Kanal-Endung („4.6.0-nightly“ → „4.6.0“) – eine Version ist in jedem Kanal
+// derselbe Code; der Kanal geht getrennt als Update-Kanal (Einstellung) mit.
+func telemetryVersion(v string) string {
+	v = shortVersion(v)
+	if i := strings.IndexByte(v, '-'); i > 0 {
+		v = v[:i]
+	}
+	return v
+}
+
 // kvVal: Wert aus kv; ein Lesefehler zählt hier wie „nicht gesetzt“ (nur Anzeige).
 func kvVal(v string, _ error) string { return v }
 
@@ -656,7 +666,7 @@ func (a *App) handleFeedback(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 503, "aus", "Rückmeldungen sind in diesem Build nicht verfügbar")
 		return
 	}
-	body := map[string]any{"art": in.Kind, "text": in.Text, "version": shortVersion(a.System.Version), "kanal": a.System.installedChannel()}
+	body := map[string]any{"art": in.Kind, "text": in.Text, "version": telemetryVersion(a.System.Version), "kanal": a.System.updateChannel()}
 	if in.Email != "" {
 		body["email"] = in.Email
 	}

@@ -2192,5 +2192,11 @@
 "Gilt für alle Nutzer dieser Installation.": "Applies to all users of this installation.",
 "Die Daten aller Installationen sind nur sichtbar, solange diese Installation selbst sendet": "The data of all installations is only visible while this installation sends its own",
 "Vergleich mit allen Installationen": "Comparison with all installations",
-"{0}: {1}": "{0}: {1}"
+"{0}: {1}": "{0}: {1}",
+"Vorher genutzt": "Used before",
+"vor der ersten Aufnahme hier": "before the first recording here",
+"Bereits genutzt (min)": "Already used (min)",
+"Kapazität (h)": "Capacity (h)",
+"Bereits genutzt: Aufnahmezeit, bevor der Ring hier aufgenommen hat; zählt zur Nutzung. Kapazität: Stunden Aufnahme, die der Ring hält.": "Already used: recording time before the ring recorded here; counts towards usage. Capacity: hours of recording the ring holds.",
+"Bereits genutzt: 0–60000 Minuten": "Already used: 0–60000 minutes"
 }

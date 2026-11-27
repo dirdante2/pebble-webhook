@@ -4,6 +4,12 @@ Summarised notes for **beta** and **stable** releases. Each section lists only w
 
 A tag `vX.Y.Z-stable` (stable; before 1.33.5 `vX.Y.Z`) or `vX.Y.Z-beta` (beta) needs a section `## [X.Y.Z]` or `## [X.Y.Z-beta]` here; the release workflow uses it as the release notes.
 
+## [4.6.1] - 2026-11-27
+
+Stable release of 4.6.0 plus:
+- Ring edit: usage before the first recording ("already used") counts towards the ring.
+- Uniform input fields.
+
 ## [4.6.0] - 2026-11-27
 
 ### Rings

@@ -11,6 +11,15 @@ Own builds show X.Y.Z.A: **A** is a local build counter (one per deployed change
 
 ## [Unreleased]
 
+## [4.6.1] - 2026-11-27
+
+### New
+- Ring edit: "Already used (min)" next to capacity; counts towards usage and statistics.
+
+### Changed
+- All input fields share one style (text, number, email, date, select).
+- Statistics send the version without channel suffix and the chosen update channel.
+
 ## [4.6.0] - 2026-11-27
 
 ### New

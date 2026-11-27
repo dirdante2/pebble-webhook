@@ -3438,7 +3438,7 @@ function wortBlock(w) {
 
 // Teile des Ring-Balkens (Sekunden ohne Überschneidung, Anteil an der Kapazität); die Karten darunter tragen dieselbe
 // Farbe als Streifen links – eine Legende braucht es nicht.
-const RING_TEILE = [['diktat', 'Notizen'], ['planung', 'Planungen'], ['fehl', 'Fehlaufnahmen'], ['geloescht', 'Gelöscht']];
+const RING_TEILE = [['vorher', 'Vorher genutzt'], ['diktat', 'Notizen'], ['planung', 'Planungen'], ['fehl', 'Fehlaufnahmen'], ['geloescht', 'Gelöscht']];
 function ringTeile(g) {
   const kap = Math.max(1, g.kapazitaet_sekunden);
   let rest = 100;
@@ -3476,7 +3476,9 @@ async function zeigeRing() {
         <p><strong>${esc(tx('{0} von {1}', stunden(g.sekunden), stunden(g.kapazitaet_sekunden)))}</strong> · ${Math.floor(p)} %</p>
         ${aktiv && prog ? T`<p class="leise">${esc(tx('Bei gleichbleibender Nutzung (Ø {0} je Tag, letzte {1} Tage): 80 % {2} · 100 % {3}', stunden(prog.sekunden_je_tag), Math.round(prog.basis_tage), wann(prog.datum80), wann(prog.datum100)))}</p>` : ''}
       </div>
-      <div class="kacheln paar">${RING_TEILE.map(([k, name]) => kachel(tx(name), g.anteile?.[k] || 0, g.anteile_anzahl?.[k] || 0, 'f-' + k)).join('')}</div>
+      <div class="kacheln paar">${RING_TEILE.filter(([k]) => k !== 'vorher' || g.anteile?.vorher).map(([k, name]) => k === 'vorher'
+        ? T`<div class="kachel f-vorher"><div class="leise">${esc(tx(name))}</div><div class="zahl">${esc(stunden(g.anteile.vorher))}</div><div class="leise">${esc(tx('vor der ersten Aufnahme hier'))}</div></div>`
+        : kachel(tx(name), g.anteile?.[k] || 0, g.anteile_anzahl?.[k] || 0, 'f-' + k)).join('')}</div>
       <div class="kacheln paar">${kachel(tx('Halten'), g.halten_sekunden || 0, g.halten)}${kachel(tx('Klick + Halten'), g.klick_halten_sekunden || 0, g.klick_halten)}</div>
       <h2>${esc(tx('Aufnahmezeit'))}</h2>
       <div class="karte" id="rverlauf"></div>
@@ -3528,21 +3530,23 @@ function ringInaktivFenster(g, danach) {
 async function zeigeRingBearbeiten(nr) {
   const d = await api(`/api/ring?ring=${encodeURIComponent(nr)}`);
   const g = d.ring;
-  const kapWert = Math.round((g.kapazitaet_sekunden / 3600) * 100) / 100;
+  const kapWert = Math.round((g.kapazitaet_sekunden / 3600) * 100) / 100, vorherWert = Math.round((g.vorher_sekunden || 0) / 60);
   seite.innerHTML = T`<p><a class="btn klein" href="/status/ring?ring=${g.nr}">← ${esc(tx('Ring'))}</a></p><h1>${esc(tx('Ring {0} bearbeiten', g.nr))}</h1>
     <dl><dt>${esc(tx('Ring-ID'))}</dt><dd>${esc(g.hardware_id || tx('ohne ID'))}</dd><dt>${esc(tx('Kennung'))}</dt><dd class="umbruch">${esc(g.kennung || tx('noch keine Aufnahme mit Kennung'))}</dd></dl>
     <p class="leise hilfe">${esc(tx('Die Ring-ID sind die letzten drei Zeichen der Kennung; beides kommt vom Ring und ist nicht änderbar.'))}</p>
     <label for="rbeschr">${esc(tx('Beschreibung'))}</label><input id="rbeschr" maxlength="60" autocomplete="off" value="${esc(g.beschreibung || '')}">
     <p class="leise hilfe">${esc(tx('Freier Text, z. B. die Farbe des Rings (höchstens 60 Zeichen).'))}</p>
-    <label for="rkap">${esc(tx('Kapazität (Stunden Aufnahme)'))}</label><input id="rkap" type="number" min="1" max="1000" step="0.5" value="${kapWert}">
+    <div class="feldpaar gleich"><div><label for="rvorher">${esc(tx('Bereits genutzt (min)'))}</label><input id="rvorher" type="number" inputmode="numeric" min="0" max="60000" step="1" value="${vorherWert}"></div>
+      <div><label for="rkap">${esc(tx('Kapazität (h)'))}</label><input id="rkap" type="number" inputmode="decimal" min="1" max="1000" step="0.5" value="${kapWert}"></div></div>
+    <p class="leise hilfe">${esc(tx('Bereits genutzt: Aufnahmezeit, bevor der Ring hier aufgenommen hat; zählt zur Nutzung. Kapazität: Stunden Aufnahme, die der Ring hält.'))}</p>
     <div class="leiste"><button class="btn haupt" id="rsichern">${esc(tx('Speichern'))}</button><a class="btn" href="/status/ring?ring=${g.nr}">${esc(tx('Abbrechen'))}</a></div>
     <h2>${esc(tx('Status'))}</h2>
     ${g.ende ? T`<p><strong>${esc(tx('Inaktiv seit {0}', datumKurz(g.ende)))}</strong>${g.inaktiv_grund ? ` · ${esc(ringGrund(g.inaktiv_grund))}` : ''}</p>
       <div class="leiste"><button class="btn" id="raktivieren">${esc(tx('Aktiv setzen'))}</button></div>`
     : T`<p>${esc(tx('Aktiv'))}</p><div class="leiste"><button class="btn" id="rinaktiv">${esc(tx('Inaktiv setzen'))}</button></div>`}
     <p class="leise hilfe">${esc(tx('Inaktive Ringe fehlen in der Seitenleiste und warnen nicht mehr; ihre Nutzung bleibt in der Auswertung.'))}</p>`;
-  const beschr = document.getElementById('rbeschr'), kap = document.getElementById('rkap');
-  const geaendert = () => beschr.value.trim() !== (g.beschreibung || '') || Number(kap.value) !== kapWert;
+  const beschr = document.getElementById('rbeschr'), kap = document.getElementById('rkap'), vorher = document.getElementById('rvorher');
+  const geaendert = () => beschr.value.trim() !== (g.beschreibung || '') || Number(kap.value) !== kapWert || Number(vorher.value || 0) !== vorherWert;
   const zurueck = async () => { geheZu(`/status/ring?ring=${g.nr}`, true); };
   const weiterOhneSpeichern = () => !geaendert() || confirm(tx('Ungespeicherte Änderungen verwerfen?'));
   const inaktiv = document.getElementById('rinaktiv');
@@ -3561,9 +3565,11 @@ async function zeigeRingBearbeiten(nr) {
   document.getElementById('rsichern').onclick = async (ev) => {
     const k = Number(kap.value);
     if (!(k >= 1 && k <= 1000)) return melde(tx('Kapazität 1–1000 Stunden'));
+    const v = Number(vorher.value || 0);
+    if (!(v >= 0 && v <= 60000)) return melde(tx('Bereits genutzt: 0–60000 Minuten'));
     ev.target.disabled = true;
     try {
-      await api(`/api/ring/${g.nr}`, { method: 'PUT', body: { kapazitaet_stunden: k, beschreibung: beschr.value.trim() } });
+      await api(`/api/ring/${g.nr}`, { method: 'PUT', body: { kapazitaet_stunden: k, beschreibung: beschr.value.trim(), vorher_minuten: v } });
       melde(tx('Gespeichert'));
       await ladeZaehler();
       await zurueck();

@@ -610,6 +610,7 @@ func (a *App) ringView(g *store.Ring) (map[string]any, error) {
 	v := map[string]any{"nr": g.Nr, "hardware_id": g.HardwareID, "kennung": g.Kennung, "app_agent": g.AppAgent, "beschreibung": g.Description,
 		"start": g.StartedAt, "ende": g.EndedAt, "inaktiv_grund": g.InactiveReason,
 		"kapazitaet_sekunden": g.CapacitySeconds, "sekunden": t.Seconds, "prozent": t.Seconds / float64(g.CapacitySeconds) * 100,
+		"vorher_sekunden": g.OffsetSeconds,
 		"anzahl": t.Count, "fehlaufnahmen": t.Empty, "geloescht": t.Deleted,
 		"diktat":  map[string]any{"sekunden": t.SecondsByMode["diktat"], "anzahl": t.CountByMode["diktat"]},
 		"planung": map[string]any{"sekunden": t.SecondsByMode["planung"], "anzahl": t.CountByMode["planung"]},
@@ -682,11 +683,16 @@ func (a *App) handleRing(w http.ResponseWriter, r *http.Request) {
 func (a *App) handleRingEdit(w http.ResponseWriter, r *http.Request) {
 	nr, _ := strconv.ParseInt(r.PathValue("nr"), 10, 64)
 	var in struct {
-		Hours       float64 `json:"kapazitaet_stunden"`
-		Description *string `json:"beschreibung"` // fehlt = unverändert
+		Hours       float64  `json:"kapazitaet_stunden"`
+		Description *string  `json:"beschreibung"`   // fehlt = unverändert
+		Before      *float64 `json:"vorher_minuten"` // Nutzung vor der ersten Aufnahme; fehlt = unverändert
 	}
 	if readJSON(r, &in) != nil || in.Hours < 1 || in.Hours > 1000 {
 		writeErr(w, 400, "ungueltig", "Kapazität 1–1000 Stunden")
+		return
+	}
+	if in.Before != nil && (*in.Before < 0 || *in.Before > 60000 || math.IsNaN(*in.Before)) {
+		writeErr(w, 400, "ungueltig", "Bereits genutzt: 0–60000 Minuten")
 		return
 	}
 	if in.Description != nil {
@@ -712,6 +718,12 @@ func (a *App) handleRingEdit(w http.ResponseWriter, r *http.Request) {
 	}
 	if in.Description != nil {
 		if err := a.DB.SetRingDescription(nr, *in.Description); err != nil {
+			writeErr(w, 500, "speicher", "Datenbankfehler")
+			return
+		}
+	}
+	if in.Before != nil {
+		if err := a.DB.SetRingOffset(nr, int64(math.Round(*in.Before*60))); err != nil {
 			writeErr(w, 500, "speicher", "Datenbankfehler")
 			return
 		}
