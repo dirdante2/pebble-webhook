@@ -124,6 +124,18 @@ textarea { min-height: 9rem; resize: vertical; }
 .stufe60 .balken i, .balken.ringgross.stufe60 i { background: var(--warn); }
 .stufe80 .balken i, .balken.ringgross.stufe80 i { background: var(--warn); }
 .stufe95 .balken i, .balken.ringgross.stufe95 i { background: var(--schlecht); }
+.balken.ringgross.mehrteilig { display: flex; gap: 2px; }
+.balken.ringgross.mehrteilig i { flex: none; border-radius: 0; }
+.balken.ringgross.mehrteilig i:first-child { border-top-left-radius: .3rem; border-bottom-left-radius: .3rem; }
+.balken.ringgross.mehrteilig i:last-child { border-top-right-radius: .3rem; border-bottom-right-radius: .3rem; }
+.balken.ringgross.mehrteilig i.t-diktat { background: var(--gut); }
+.balken.ringgross.mehrteilig i.t-planung { background: var(--planung); }
+.balken.ringgross.mehrteilig i.t-fehl { background: var(--schlecht); }
+.balken.ringgross.mehrteilig i.t-geloescht { background: var(--leise); }
+.kachel.f-diktat { border-left: 4px solid var(--gut); }
+.kachel.f-planung { border-left: 4px solid var(--planung); }
+.kachel.f-fehl { border-left: 4px solid var(--schlecht); }
+.kachel.f-geloescht { border-left: 4px solid var(--leise); }
 .ringzeile { display: grid; gap: .3rem; color: inherit; text-decoration: none; }
 .ringzeile.aktiv { border-color: var(--akzent); }
 .ringzeile .zeile { display: flex; justify-content: space-between; gap: .5rem; }
@@ -656,6 +668,7 @@ dialog.mehrblatt:focus { outline: none; }
 dialog.formblatt { width: min(26rem, calc(100vw - 2rem)); border: 1px solid var(--linie); border-radius: var(--radius); background: var(--flaeche); color: var(--text); padding: 1rem; }
 dialog.formblatt::backdrop { background: rgb(0 0 0 / .5); }
 dialog.formblatt h2 { margin-top: 0; }
+dialog.formblatt .grundliste { margin: .6rem 0 .8rem; border: 1px solid var(--linie); border-radius: .5rem; }
 .feldpaar { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: .6rem; }
 .feldpaar input { width: 100%; }
 .schalter { display: flex; align-items: center; gap: .5rem; margin: .7rem 0; }
@@ -722,6 +735,9 @@ dialog.logblatt h2 { margin-top: 0; }
 .wortblock > * { max-width: 32rem; margin-left: auto; margin-right: auto; }
 .wortschnitt { position: relative; display: inline-block; font-size: .85rem; font-weight: 600; white-space: nowrap; }
 .wortbalken { position: relative; display: block; height: .75rem; margin: .2rem 0 .3rem; border-radius: .4rem; background: color-mix(in srgb, var(--diktat) 45%, transparent); }
+.wortbalken i.eigen { width: 3px; margin-left: -1.5px; top: -.15rem; height: 1.05rem; background: #000; z-index: 1; }
+@media (prefers-color-scheme: dark) { :root:not([data-modus="hell"]) .wortbalken i.eigen { box-shadow: 0 0 0 1px rgb(255 255 255 / .6); } }
+:root[data-modus="dunkel"] .wortbalken i.eigen { box-shadow: 0 0 0 1px rgb(255 255 255 / .6); }
 .wortbalken i { position: absolute; top: -.25rem; width: 4px; height: 1.25rem; margin-left: -2px; border-radius: 2px; background: var(--diktat); }
 .wortgrenzen { display: flex; justify-content: space-between; font-size: .8rem; color: var(--leise); }
 .punkt-farbe { width: .7rem; height: .7rem; border-radius: 50%; flex: none; }

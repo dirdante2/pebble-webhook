@@ -16,7 +16,7 @@ Restart after changes: `sudo systemctl restart pebble-webhook`.
 
 ## Setup wizard
 
-On the first start the service only runs the setup wizard. It is protected by a one-time code (`sudo pebble ersteinrichtung` prints the link). It asks for your name (you become the first user and admin); every other field is prefilled with its default. *Prüfen* tests the OpenAI key. After saving, the service restarts, you create the first passkey and the welcome page shows your recovery code once – note it, it is the only way to reopen your encrypted data if the key file is lost.
+On the first start the service only runs the setup wizard. No link is printed: open the address and choose *Einrichten* within 5 minutes after the start (only the first browser gets it; afterwards restart the service). The same button creates the first passkey if none exists yet. It asks for your name (you become the first user and admin); every other field is prefilled with its default. *Prüfen* tests the OpenAI key. After saving, the service restarts, you create the first passkey and the welcome page shows your recovery code once – note it, it is the only way to reopen your encrypted data if the key file is lost.
 
 If the stored settings ever become invalid, the service starts in the wizard again and shows the error.
 

@@ -43,6 +43,9 @@ async function bildHolen(req) {
   return antwort;
 }
 
+// Pfade der Web-App (Routen in app.js); nur sie bekommen die App-Hülle aus dem Cache.
+const SPA_PFADE = /^\/(?:$|(?:admin\/|(?:anmelden|einrichten|eintrag|ersteinrichtung|gruppe|liste|listen|pebble|planung|status|suche|tags|verbinden|wiederherstellen|willkommen)(?:\/|$)))/;
+
 self.addEventListener('fetch', (e) => {
   const url = new URL(e.request.url);
   if (e.request.method === 'GET' && url.origin === location.origin && url.pathname.startsWith('/api/bilder/')) {
@@ -52,6 +55,7 @@ self.addEventListener('fetch', (e) => {
   }
   if (e.request.method !== 'GET' || url.origin !== location.origin || url.pathname.startsWith('/api/') || url.pathname.startsWith('/oauth/') || url.pathname.startsWith('/kalender/') || url.pathname.startsWith('/.well-known/') || url.pathname === '/mcp' || url.pathname === '/hook' || url.pathname === '/sw') return;
   const seite = e.request.mode === 'navigate';
+  if (seite && !SPA_PFADE.test(url.pathname)) return; // andere Seiten unter derselben Adresse: direkt vom Netz
   const key = seite ? '/' : url.pathname + url.search;
   if (!seite && !HUELLE.includes(key)) return;
   e.respondWith(caches.open(CACHE).then(async (c) => {

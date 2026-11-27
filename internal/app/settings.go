@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"crypto/subtle"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -279,7 +280,12 @@ func SetupCode(db *store.System) (string, error) {
 	if err != nil || code != "" {
 		return code, err
 	}
-	code = config.NewSecret()[:24]
+	return NewSetupCode(db)
+}
+
+// NewSetupCode ersetzt den Code des Assistenten; ein früher ausgegebener gilt nicht mehr.
+func NewSetupCode(db *store.System) (string, error) {
+	code := config.NewSecret()[:24]
 	return code, db.Set(setupCodeKey, code)
 }
 
@@ -290,17 +296,27 @@ type SetupServer struct {
 	Version string
 	LoadErr error // warum der Dienst nicht normal startet (nil = noch nie eingerichtet)
 
+	win *setupWindow // „Einrichten“ in den ersten 5 Minuten nach dem Start
+
 	rateMu sync.Mutex
 	fails  map[string]int // Fehlversuche je Adresse (so sperrt ein Fremder den Betreiber nicht aus)
 	total  int            // alle Fehlversuche – Obergrenze gegen Raten über viele Adressen
 }
 
 func (s *SetupServer) Handler() http.Handler {
+	if s.win == nil {
+		s.win = newSetupWindow()
+		// Nur eine nie eingerichtete Installation öffnet „Einrichten“; sind die Einstellungen einer benutzten
+		// ungültig, gilt allein der Code aus dem Log.
+		users, err := s.DB.Users()
+		s.win.locked = err != nil || len(users) > 0 || (s.LoadErr != nil && !errors.Is(s.LoadErr, ErrNotConfigured))
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { fmt.Fprintln(w, "ersteinrichtung") })
 	mux.HandleFunc("GET /api/sitzung", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, 200, map[string]any{"angemeldet": false, "eingerichtet": false, "ersteinrichtung": true})
+		writeJSON(w, 200, map[string]any{"angemeldet": false, "eingerichtet": false, "ersteinrichtung": true, "einrichtung": s.win.state(), "einrichtung_rest": s.win.rest()})
 	})
+	mux.HandleFunc("POST /api/ersteinrichtung/start", s.handleSetupStart)
 	mux.HandleFunc("GET /api/ersteinrichtung", s.handleGet)
 	mux.HandleFunc("POST /api/ersteinrichtung/openai", s.handleCheckOpenAI)
 	mux.HandleFunc("POST /api/ersteinrichtung", s.handleSave)
@@ -355,7 +371,7 @@ func (s *SetupServer) codeOK(r *http.Request, code string) bool {
 
 func (s *SetupServer) handleGet(w http.ResponseWriter, r *http.Request) {
 	if !s.codeOK(r, r.URL.Query().Get("code")) {
-		writeErr(w, http.StatusForbidden, "code", "Der Einrichtungs-Code fehlt oder ist falsch. Er steht im Log des Dienstes (pebble ersteinrichtung).")
+		writeErr(w, http.StatusForbidden, "code", "Der Einrichtungs-Code fehlt oder ist falsch. Auf der Startseite „Einrichten“ wählen (in den ersten 5 Minuten nach dem Start).")
 		return
 	}
 	values, err := s.DB.Settings()
@@ -423,6 +439,9 @@ func (s *SetupServer) handleSave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	merged := mergeSettings(old, in.Werte, scopeAll)
+	if len(users) == 0 {
+		setupDefaults(merged)
+	}
 	if _, err := config.FromValues(s.Boot, func(k string) string { return merged[k] }); err != nil {
 		writeErr(w, 400, "ungueltig", strings.TrimPrefix(err.Error(), "Konfiguration: "))
 		return
@@ -488,4 +507,16 @@ func checkOpenAI(ctx context.Context, base, key string) error {
 		return i18n.Errorf("OpenAI antwortet %d", resp.StatusCode)
 	}
 	return nil
+}
+
+// setupDefaults: Vorgaben einer neuen Installation (Einrichtungs-Assistent, erster Nutzer). Transkription lokal mit
+// Whisper, damit keine Aufnahme den Server verlässt. Bestehende Installationen ohne gespeicherte KI-Bereiche behalten
+// die bisherige Vorgabe (Cloud); änderbar unter Status → KI.
+func setupDefaults(merged map[string]string) {
+	if merged["KI_BEREICHE"] != "" || merged["TRANSCRIPTION"] != "" {
+		return
+	}
+	if _, locked := config.EnvLocked("TRANSCRIPTION"); !locked {
+		merged["TRANSCRIPTION"] = "lokal"
+	}
 }

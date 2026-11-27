@@ -6,3 +6,4 @@
 # Tests bleiben lokal (Arbeitsregel: Testdateien nie committen)
 *_test.go
 /internal/whisper/engine/*/
+/admin/

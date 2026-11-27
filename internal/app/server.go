@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"mime"
 	"net/http"
+	"os"
 	"path"
 	"strings"
 
@@ -19,6 +20,7 @@ func (s *System) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /hook", s.handleHook)
 	mux.HandleFunc("GET /healthz", s.handleHealth)
+	mux.HandleFunc("GET /admin", s.handleAdminLink)
 
 	mux.HandleFunc("GET /api/sitzung", s.handleSession)
 	mux.HandleFunc("POST /api/auth/einrichten/art", s.public(s.handleEnrollKind))
@@ -29,6 +31,7 @@ func (s *System) Handler() http.Handler {
 	mux.HandleFunc("POST /api/auth/anmelden/start", s.public(s.handleLoginStart))
 	mux.HandleFunc("POST /api/auth/anmelden/ende", s.public(s.handleLoginFinish))
 	mux.HandleFunc("POST /api/auth/abmelden", s.public(s.handleLogout))
+	mux.HandleFunc("POST /api/auth/ersteinrichten", s.public(s.handleFirstEnroll))
 
 	// u: Web-App des angemeldeten Nutzers; m: zusätzlich Maschinenzugang (API-Token des Nutzers) – nur Lesen,
 	// Einsortieren, Abhaken; ad: Systemverwaltung (nur Admin).
@@ -123,7 +126,13 @@ func (s *System) Handler() http.Handler {
 	mux.HandleFunc("GET /api/ring", u((*App).handleRing))
 	mux.HandleFunc("GET /api/eingaenge", u((*App).handleIntake))
 	mux.HandleFunc("PUT /api/ring/{nr}", u((*App).handleRingEdit))
+	mux.HandleFunc("PUT /api/ring/{nr}/aktiv", u((*App).handleRingActive))
+	mux.HandleFunc("POST /api/ring/{nr}/frage-abgelehnt", u((*App).handleRingAskDecline))
 	mux.HandleFunc("POST /api/ring/bestaetigt", u((*App).handleRingConfirm))
+	mux.HandleFunc("GET /api/statistik/lebensdauer", u((*App).handleGlobalLife))
+	mux.HandleFunc("GET /api/statistik", u((*App).handleTelemetry))
+	mux.HandleFunc("PUT /api/statistik", ad(s.handleTelemetrySave))
+	mux.HandleFunc("POST /api/rueckmeldung", u((*App).handleFeedback))
 	mux.HandleFunc("PUT /api/eintraege/{id}/wortlaut", u((*App).handleTranscriptEdit))
 	mux.HandleFunc("POST /api/eintraege/{id}/neu-transkribieren", u((*App).handleRetranscribe))
 	mux.HandleFunc("POST /api/gedaechtnis", u((*App).handleMemoryAdd))
@@ -321,4 +330,25 @@ func localizeShell(src []byte, lang string) []byte {
 	// Wörterbuch zuletzt, damit die Ersetzungen oben es nicht treffen.
 	words := strings.ReplaceAll(string(i18n.Dictionary(lang)), "</", `<\/`)
 	return []byte(strings.ReplaceAll(s, "__WOERTER__", words))
+}
+
+// handleAdminLink: /admin führt Admins zu einer eigenen Verwaltung, wenn der Betreiber sie in der Umgebung nennt
+// (ADMIN_LINK, z. B. in /etc/pebble-webhook/env); sonst und für alle anderen zur Startseite.
+func (s *System) handleAdminLink(w http.ResponseWriter, r *http.Request) {
+	link := strings.TrimSpace(os.Getenv("ADMIN_LINK"))
+	sess, ok := s.sessionOf(r)
+	if !ok {
+		if link != "" {
+			http.Redirect(w, r, "/anmelden?weiter=%2Fadmin", http.StatusFound)
+			return
+		}
+		http.Redirect(w, r, "/", http.StatusFound)
+		return
+	}
+	u, err := s.DB.User(sess.uid)
+	if link == "" || err != nil || !u.Admin() || u.LockedAt != 0 || !strings.HasPrefix(link, "https://") {
+		http.Redirect(w, r, "/", http.StatusFound)
+		return
+	}
+	http.Redirect(w, r, link, http.StatusFound)
 }

@@ -141,7 +141,7 @@ Enter the proxy's IP as *Reverse-Proxy* in the settings so rate limits use the r
 
 ## Setup wizard
 
-Open the printed link (`/ersteinrichtung?code=…`) – ideally already through your HTTPS domain. Lost the link? Run `sudo pebble ersteinrichtung`. See [configuration](configuration.md).
+Open the address of the service – ideally already through your HTTPS domain – and choose *Einrichten*. This only works within 5 minutes after the service started and only for the first browser; afterwards restart the service (`sudo systemctl restart pebble-webhook` or restart the container) and try again. See [configuration](configuration.md).
 
 ## Files
 

@@ -49,6 +49,9 @@ const (
 	NotifyRing         = "NOTIFY_RING"
 )
 
+// Telemetry: anonyme Nutzungsstatistik an den Entwickler (für die ganze Installation, nur Admins schalten; Vorgabe an).
+const Telemetry = "TELEMETRY"
+
 // NotifyChannels: alle Kanäle in der Reihenfolge der Oberfläche.
 var NotifyChannels = []string{NotifyQuestions, NotifyErrors, NotifySaved, NotifyAppointments, NotifyRing, NotifyUpdates}
 
@@ -147,6 +150,8 @@ var Fields = []Field{
 	{Key: NotifyAppointments, Group: "Benachrichtigungen", Label: "Termin-Erinnerungen", Help: "Push zu Terminen aus deinen Notizen.", Kind: "choice", Default: "aktiv", Choices: []string{"aktiv", "inaktiv"}},
 	{Key: NotifyRing, Group: "Benachrichtigungen", Label: "Ring-Nutzung", Help: "Push bei 60, 80 und 95 % der Aufnahmezeit des Rings.", Kind: "choice", Default: "aktiv", Choices: []string{"aktiv", "inaktiv"}},
 	{Key: NotifyUpdates, Group: "Benachrichtigungen", Label: "Updates", Help: "Push, wenn eine neue Version bereitsteht (nur für Admins).", Kind: "choice", Default: "aktiv", Choices: []string{"aktiv", "inaktiv"}},
+
+	{Key: Telemetry, Group: "Statistik", Label: "Anonyme Statistik senden", Help: "Es werden nur anonyme Daten zur Gesamtnutzungszeit der Ringe gesendet.", Kind: "choice", Default: "aktiv", Choices: []string{"aktiv", "inaktiv"}},
 
 	{Key: "VAPID_SUBJECT", Group: "Zugang und Updates", Label: "Kontakt für Web-Push", Help: "mailto:… oder https-Adresse; leer = öffentliche Adresse.", Kind: "text"},
 	{Key: "UPDATE_CHANNEL", Group: "Zugang und Updates", Label: "Update-Kanal", Help: "stable = Langzeit-Versionen; beta = neue, noch nicht ausgereifte Funktionen; nightly = jede Änderung, auch ungetestet.", Kind: "choice", Default: "stable", Choices: []string{"stable", "beta", "nightly"}},

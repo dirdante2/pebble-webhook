@@ -59,6 +59,8 @@ type System struct {
 	apps   map[int64]*App
 	locked map[int64]string // Nutzer, deren Daten nicht geöffnet sind → Grund (gesperrt, Schlüssel fehlt …)
 	runCtx context.Context  // Lebensdauer der Worker (für später geöffnete Nutzer)
+
+	setupWin *setupWindow // „Einrichten“ ohne Passkey in den ersten 5 Minuten nach dem Start
 }
 
 // App: ein Nutzer – seine Datenbank, sein Worker, seine Live-Meldungen.
@@ -109,7 +111,7 @@ func NewSystem(cfg *config.Config, db *store.System, ai AI, version string, note
 		notes = func(*config.Config) Notes { return nil }
 	}
 	s := &System{Cfg: cfg, DB: db, AI: ai, Version: version, NewNotes: notes, Whisper: whisper.New(cfg.DataDir), rate: map[string][]int64{},
-		cer: map[string]ceremony{}, apps: map[int64]*App{}, locked: map[int64]string{}}
+		cer: map[string]ceremony{}, apps: map[int64]*App{}, locked: map[int64]string{}, setupWin: newSetupWindow()}
 	s.SetKI(cfg)
 	if err := s.initAuth(); err != nil {
 		return nil, err
@@ -323,6 +325,7 @@ func (s *System) Run(ctx context.Context) {
 	go s.CheckUpdates(ctx)
 	go s.AutoUpdate(ctx)
 	go s.BackupSchedule(ctx)
+	go s.TelemetrySchedule(ctx)
 	s.startWhisper(ctx)
 	for _, a := range apps {
 		s.startApp(ctx, a)

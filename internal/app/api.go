@@ -922,7 +922,7 @@ func (a *App) handleStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out := map[string]any{
-		"version": a.Version, "audio_unbekannt": a.scanAudio(), "warteschlange": counts.Open, "fehlgeschlagen": counts.Failed,
+		"version": a.Version, "statistik": telemetryAvailable(), "audio_unbekannt": a.scanAudio(), "warteschlange": counts.Open, "fehlgeschlagen": counts.Failed,
 		"einstellungen": map[string]any{
 			"halten": a.Cfg.TriggerSingle, "doppelklick_halten": a.Cfg.TriggerDouble, "leer_stunden": a.Cfg.EmptyRetentionHours,
 			"limit_usd": a.Cfg.ResearchLimitUSD, "papierkorb_tage": a.Cfg.TrashRetentionDays, "schliessen_tage": a.Cfg.AutoCloseDays,

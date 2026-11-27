@@ -2,12 +2,15 @@
 
 > **Hardware:** made for the [Pebble Index 01](https://repebble.com/index) voice ring by Pebble (Core Devices) – [buy it on repebble.com](https://repebble.com/index) · official website: [repebble.com](https://repebble.com/). This is an independent community project, not affiliated with Pebble.
 
-Self-hosted backend for the **Pebble Index 01** voice ring. It receives recordings via webhook, transcribes them with OpenAI and turns them into notes, appointments or research plannings. An AI sorts everything into groups and lists; a mobile web app (PWA, English or German) shows the history, sends web push notifications and lets you answer follow-up questions.
+Self-hosted backend for the **Pebble Index 01** voice ring. It receives recordings via webhook, transcribes them locally with Whisper – by default, so no audio leaves your server – and turns them into notes, appointments or research plannings. An AI sorts everything into groups and lists; a mobile web app (PWA, English or German) shows the history, sends web push notifications and lets you answer follow-up questions.
 
 One Go binary: webhook, worker, SQLite and web app. No queue, no second database.
 
 ## Features
 
+- **Private by default**: new installations transcribe on your own server with Whisper (bundled, no extra service); recordings never leave it. Only the text goes to the AI that evaluates it – or nowhere, with a local model
+- **Your choice of AI providers**: OpenAI or your own – any OpenAI-compatible service (e.g. Groq), local models via Ollama, SearXNG for web search; per area an ordered list with fallback and monthly cost limit
+- **Encrypted storage**: each user's database and recordings are encrypted on disk; API keys in backups are encrypted with a server-only key
 - **Notes** with key facts, hints and list items; **appointments** with reminders (web push)
 - **Plannings**: web research in rounds, continued by voice or text, with open questions
 - **Lists and groups** sorted by the AI; tags, full-text search, trash with restore; new entries marked across all devices
@@ -17,8 +20,8 @@ One Go binary: webhook, worker, SQLite and web app. No queue, no second database
 - Built-in **MCP server** with OAuth: connect Claude, ChatGPT & co., read lists and tick items off from AI chats
 - **Ring usage**: the Index 01 battery lasts about 12–15 hours of recording. Every recording is counted (seconds, notes vs. plannings, button presses) per ring – each ring is recognised by its own identifier, several rings can be used side by side; warnings at 60/80/95/100 %, forecast at constant use, comparison of rings
 - **English or German** – UI, messages, push and MCP answers, and the texts the AI writes; chosen in the setup wizard (preset from the browser), changeable under Status → Configuration
-- **Multiple users**: own encrypted database and recordings per user, admin/user roles, invite links, recovery code; nobody sees another user's data
-- Passkey login (new devices with a 4-digit code), setup wizard, settings with explanations and validation, **themes** (day/night, colour palettes) and **updates** in the web app
+- **Multiple users**: own database and recordings per user, admin/user roles, invite links, recovery code; nobody sees another user's data
+- Passkey login (new devices with a 6-digit code), setup wizard, settings with explanations and validation, **themes** (day/night, colour palettes) and **updates** in the web app
 
 ## Screenshots
 
@@ -58,7 +61,7 @@ docker compose up -d && docker compose logs pebble
 
 Tags, paths, `PUID`/`PGID` and updates: [installation](docs/installation.md#docker).
 
-The installer (or the container log) prints a link to the setup wizard. Put the service behind an HTTPS reverse proxy (passkeys need HTTPS), enter your OpenAI key and the public address, then create your first passkey.
+The installer (or the container log) prints a link to the setup wizard. Put the service behind an HTTPS reverse proxy (passkeys need HTTPS), enter the public address and an AI key (OpenAI; other providers under Status → AI), then create your first passkey. Transcription runs locally with Whisper from the start; the model is downloaded after saving.
 
 ## Tips
 

@@ -4,6 +4,21 @@ Summarised notes for **beta** and **stable** releases. Each section lists only w
 
 A tag `vX.Y.Z-stable` (stable; before 1.33.5 `vX.Y.Z`) or `vX.Y.Z-beta` (beta) needs a section `## [X.Y.Z]` or `## [X.Y.Z-beta]` here; the release workflow uses it as the release notes.
 
+## [4.6.0] - 2026-11-27
+
+### Rings
+- "Set inactive" with reason (lost, defective, battery empty, other); "Set active"; inactive rings stay silent.
+- Question after 14 days whether an unused ring should be set inactive; a ring that sends again becomes active.
+- Ring usage: multi-coloured bar by notes, plannings, misfires and deleted; "Usage" always in the menu.
+
+### Statistics and feedback
+- Anonymous, encrypted statistics (ring hash and usage time), switched by admins, on by default.
+- Ring lifetime of all installations with your own rings for comparison.
+- Feedback (comment or bug) with app version and optional email.
+
+### Setup
+- First setup without a printed link: "Set up" on the start page within 5 minutes after the start.
+
 ## [4.5.0] - 2026-11-26
 
 ### Rings

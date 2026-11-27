@@ -230,6 +230,34 @@ In der Web-App und in Joplin heißt die Art „Notiz“ (Nutzervorgabe 15.11.202
 4. Inhalt: alle Termine (auch erledigte mit „✓ “), UID = Eintrags-ID, Zeiten in UTC, ganztägige als Datum, Ort, Notiz + Link, Erinnerung als VALARM. Papierkorb = nicht mehr drin.
 5. „Neuen Link erzeugen“ (`POST /api/kalender/neu`) ersetzt den Token; der alte Link liefert sofort 404.
 
+## Ring inaktiv setzen (seit 27.11.2026)
+
+1. Ring bearbeiten → „Inaktiv setzen“ → Fenster mit Grund (Ring verloren, Ring defekt, Batterie leer, Sonstiger Grund) → `PUT /api/ring/{nr}/aktiv {aktiv:false, grund}` → `rings.ended_at` + `inaktiv_grund`; ohne gültigen Grund 400.
+2. Inaktiv: fehlt in der Seitenleiste, keine Schwellen-Hinweise, kein Push; Aufnahmen zählen weiter.
+3. „Aktiv setzen“ (Rückfrage) → `{aktiv:true}` → Grund geleert.
+4. Frage auf allen Seiten: aktiver Ring > 14 Tage ohne Aufnahme, ein anderer aktiver Ring danach benutzt → „Inaktiv setzen …“ (dasselbe Fenster) oder „Nein, aktiv lassen“ (`POST /api/ring/{nr}/frage-abgelehnt` → `rings.frage_abgelehnt`, kommt für diesen Ring nie wieder).
+5. Jede Änderung → Ring-Ereignis an die Statistik (unten).
+
+## Anonyme Statistik und Rückmeldung (seit 27.11.2026)
+
+Empfänger-URL, Pepper und öffentlicher Schlüssel des Empfängers kommen beim Build per `-ldflags` dazu (`deploy.sh` aus `.env`, CI aus Secrets); ohne sie ist alles aus. Jeder Bericht geht verschlüsselt (`internal/umschlag`: X25519 + HKDF + AES-GCM, Zweck als Zusatzdaten); nur der Empfänger kann ihn öffnen.
+
+1. App-ID: beim ersten Start `sha256(machine-id + Hostname + Zufall)`, 32 Hex → System-kv `telemetrie:app_id`, danach fest.
+2. Ring-Hash: `sha256(Pepper + ":" + Kennung)`, 24 Hex – gleich in jeder Installation, ohne Pepper nicht rückrechenbar; Ringe ohne Kennung nicht gesendet.
+3. Monatlich: Ticker je Minute → Termin zufällig am 1. (kv `telemetrie:faellig`; verpasst → 0–6 h nach Start) → Bericht `{app_id, version, kanal, monat, ringe:[{ring, sekunden}]}` (nur aktive Ringe) über alle geöffneten Nutzer, wenn die Installation sendet (System-`TELEMETRY`, Vorgabe aktiv) → `POST <URL>/statistik` → kv `telemetrie:gesendet`; Fehler → kv `telemetrie:fehler`, neuer Versuch nach 1 h. Ausgeschaltet → nichts gesendet.
+3a. Sofort-Bericht: 1 min nach dem Start (auch nach der Installation) und nach dem Einschalten der Statistik → derselbe Bericht (aktive Ringe) → `POST <URL>/statistik`, dann je inaktivem Ring mit Grund `POST <URL>/ring-ereignis` mit `tag` = Abschaltdatum (`rings.ended_at`), danach offene Ring-Ereignisse; höchstens einmal je 60 min (System-kv `telemetrie:zuletzt`). Admin zählt den Wechsel am `tag` (`ringe.geaendert`), nicht am Empfang.
+4. Ring-Ereignis (Inaktiv-/Aktiv-Setzen; ein inaktiver Ring, der wieder eine Aufnahme schickt, wird automatisch aktiv gesetzt und gemeldet): sofort `POST <URL>/ring-ereignis` (im Hintergrund); Fehler → Nutzer-kv `telemetrie:offen`, stündlich nachgesendet.
+5. Rückmeldung: Status → „Rückmeldung senden“ → `POST /api/rueckmeldung {art, text, email?}` (+ Version, keine App-ID/Ringe) → Server leitet an `<URL>/rueckmeldung` weiter (Browser kennt das Ziel nicht).
+6. Ansicht: Status → „Anonyme Statistik“ bzw. Link am Ende der Ringnutzung (`GET /api/statistik` → verfuegbar, aktiv, admin). Schalter nur für Admins: `PUT /api/statistik {aktiv}` → System-Einstellung `TELEMETRY` (ganze Installation, ohne Neustart); ein → Sofort-Bericht, aus → Warteschlangen leeren. Nutzer sehen nur die Auswertung.
+7. Ring-Lebensdauer aller Installationen (nur bei eingeschalteter Statistik, sonst 403 und Hinweis): Statistik-Seite → `GET /api/statistik/lebensdauer` → Server holt `<URL>/statistik` (6 h zwischengespeichert) → nur `lebensdauer` + `stand` an den Browser.
+
+## Erste Einrichtung ohne Link (seit 27.11.2026)
+
+1. Start ohne Einstellungen (Assistent) oder ohne Passkey: Anmeldeseite zeigt „Einrichten“ – nur in den ersten 5 Minuten nach dem Start und nur für den ersten Browser (`/api/sitzung` → `einrichtung: offen|vergeben|abgelaufen`).
+2. Assistent: `POST /api/ersteinrichtung/start` → Code des Assistenten → `/ersteinrichtung?code=…`. Ohne Passkey: `POST /api/auth/ersteinrichten` → Einmal-Link des ersten Admins → `/einrichten#…` → Passkey.
+3. Abgelaufen oder vergeben → Hinweis „Dienst neu starten“; Log, CLI und Installer nennen nur die Adresse, keinen Link.
+4. `/admin`: Admins mit Sitzung → `ADMIN_LINK` aus der Umgebung (https); sonst Startseite.
+
 ## Anmeldung
 
 1. Erstes Gerät: auf dem Server `pebble enroll` (Nutzer 1; anderer: `PEBBLE_NUTZER=<id>`) → Einmal-Link (15 min) → im Browser öffnen → Passkey anlegen (`/api/auth/einrichten/start|ende`) → Sitzung (Cookie, 90 Tage gleitend).

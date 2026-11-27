@@ -24,6 +24,10 @@ import (
 
 var version = "dev"
 
+// Ziel, Pepper und öffentlicher Schlüssel des Empfängers der anonymen Statistik; kommen beim Build dazu
+// (-ldflags -X), leer = Statistik aus.
+var telemetrieURL, telemetriePepper, telemetrieKey string
+
 const usage = `pebble-webhook <Befehl>
 
   serve     Dienst starten (Webhook, Verarbeitung, Web-App)
@@ -39,7 +43,7 @@ const usage = `pebble-webhook <Befehl>
   gedaechtnis-zuruecksetzen
             alle Gedächtnis-Einträge samt Entscheidungen löschen (Beobachtungen bleiben); danach in der Web-App „Jetzt lernen“
   ersteinrichtung
-            Pfad des Einrichtungsassistenten mit Einmal-Code ausgeben (nur solange nicht eingerichtet)
+            Hinweis zur Einrichtung ausgeben (Adresse öffnen, „Einrichten“ in den ersten 5 Minuten nach dem Start)
   aufnahmen-verschluesseln
             Aufnahmen bis 2.x sofort verschlüsselt in den Ordner des Nutzers legen (sonst 24 h nach dem Umzug)
   nutzer-anlegen <Name> [admin]
@@ -75,7 +79,7 @@ Datei aus PEBBLE_ENV_FILE gelesen (Standard /etc/pebble-webhook/env). Alle übri
 liegen in der Datenbank und werden in der Web-App gepflegt.`
 
 func main() {
-	log.SetFlags(0) // Zeitstempel setzt das Journal
+	log.SetFlags(0)      // Zeitstempel setzt das Journal
 	syscall.Umask(0o027) // Datenbanken, Schlüssel und Aufnahmen nie für andere lesbar (auch beim Aufruf über die Kommandozeile)
 	cmd := ""
 	if len(os.Args) > 1 {
@@ -343,6 +347,7 @@ func setup() (*app.System, error) {
 		}
 		return joplin.New(c.JoplinURL, c.JoplinEmail, c.JoplinPassword)
 	}
+	app.TelemetryURL, app.TelemetryPepper, app.TelemetryKey = strings.TrimRight(telemetrieURL, "/"), telemetriePepper, telemetrieKey
 	sys, err := app.NewSystem(cfg, db, app.NewAI(cfg.AI, db), version, notes)
 	if err != nil {
 		db.Close()
@@ -443,12 +448,19 @@ func serveSetup(boot config.Bootstrap, db *store.System, loadErr error) error {
 	if err != nil {
 		return err
 	}
+	users, _ := db.Users()
+	if len(users) > 0 || !errors.Is(loadErr, app.ErrNotConfigured) {
+		// Benutzte Installation mit ungültigen Einstellungen: kein „Einrichten“, nur der Link mit Code (Log, pebble ersteinrichtung).
+		log.Printf("Einrichtungsassistent: http://<server>:%s/ersteinrichtung?code=%s", port(boot.Listen), code)
+	}
 	if errors.Is(loadErr, app.ErrNotConfigured) {
 		log.Printf("pebble-webhook %s: noch nicht eingerichtet", version)
 	} else {
 		log.Printf("pebble-webhook %s: Einstellungen ungültig (%v) – bitte im Einrichtungsassistenten korrigieren", version, loadErr)
 	}
-	log.Printf("Einrichtungsassistent: http://<server>:%s/ersteinrichtung?code=%s", port(boot.Listen), code)
+	if len(users) == 0 && errors.Is(loadErr, app.ErrNotConfigured) {
+		log.Printf("Einrichtung: http://<server>:%s im Browser öffnen und „Einrichten“ wählen – nur in den ersten 5 Minuten nach dem Start", port(boot.Listen))
+	}
 	s := &app.SetupServer{DB: db, Boot: boot, Version: version, LoadErr: loadErr}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -537,14 +549,19 @@ func setupLink() error {
 		return err
 	}
 	defer db.Close()
-	if _, err := app.LoadSettings(db, boot); err == nil {
+	_, lerr := app.LoadSettings(db, boot)
+	if lerr == nil {
 		return fmt.Errorf("schon eingerichtet – Einstellungen in der Web-App unter Status → Einstellungen")
 	}
-	code, err := app.SetupCode(db)
-	if err != nil {
-		return err
+	if users, _ := db.Users(); len(users) > 0 || !errors.Is(lerr, app.ErrNotConfigured) {
+		code, err := app.SetupCode(db)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("Einrichtungsassistent (Einstellungen ungültig; im Browser öffnen):\n\n  http://<server>:%s/ersteinrichtung?code=%s\n", port(boot.Listen), code)
+		return nil
 	}
-	fmt.Printf("Einrichtungsassistent (im Browser öffnen):\n\n  http://<server>:%s/ersteinrichtung?code=%s\n", port(boot.Listen), code)
+	fmt.Printf("Einrichtung (im Browser öffnen, „Einrichten“ wählen; nur in den ersten 5 Minuten nach dem Start des Dienstes):\n\n  http://<server>:%s\n\nAbgelaufen? Dienst neu starten: systemctl restart pebble-webhook\n", port(boot.Listen))
 	return nil
 }
 

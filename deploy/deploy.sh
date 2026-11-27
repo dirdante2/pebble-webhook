@@ -26,11 +26,18 @@ LOKAL="$SEMVER.$A"
 grep -q "^## \[$SEMVER\]" CHANGELOG.md || { echo "CHANGELOG.md: Abschnitt „## [$SEMVER]“ fehlt" >&2; exit 1; }
 VERSION="$LOKAL (Build $(date +%Y%m%d-%H%M), $(git describe --always --dirty 2>/dev/null || echo unbekannt))"
 
+# Ziel, Pepper und öffentlicher Empfänger-Schlüssel der anonymen Statistik: aus der Umgebung oder aus .env (nicht in Git); fehlen sie, ist sie im Build aus.
+envwert() { [ -f .env ] && sed -n "s/^$1=//p" .env | tail -1; }
+TELEMETRIE_URL="${PEBBLE_TELEMETRIE_URL:-$(envwert PEBBLE_TELEMETRIE_URL)}"
+TELEMETRIE_PEPPER="${PEBBLE_TELEMETRIE_PEPPER:-$(envwert PEBBLE_TELEMETRIE_PEPPER)}"
+TELEMETRIE_KEY="${PEBBLE_TELEMETRIE_KEY:-$(envwert PEBBLE_TELEMETRIE_KEY)}"
+[ -n "$TELEMETRIE_URL" ] && [ -n "$TELEMETRIE_PEPPER" ] && [ -n "$TELEMETRIE_KEY" ] || echo "Hinweis: PEBBLE_TELEMETRIE_URL/_PEPPER/_KEY fehlen – Statistik im Build aus" >&2
+
 deploy/whisper-engine.sh # lokale Transkription; baut nur, wenn sie fehlt oder veraltet ist
 go vet ./...
 go test ./...
 mkdir -p bin
-CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w -X 'main.version=$VERSION'" -o bin/pebble-webhook ./cmd/pebble-webhook
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w -X 'main.version=$VERSION' -X 'main.telemetrieURL=$TELEMETRIE_URL' -X 'main.telemetriePepper=$TELEMETRIE_PEPPER' -X 'main.telemetrieKey=$TELEMETRIE_KEY'" -o bin/pebble-webhook ./cmd/pebble-webhook
 
 # Eigener, nur für root lesbarer Ordner auf dem Ziel (kein festes /tmp/install.sh, das ein anderer vorher anlegen könnte).
 RDIR="$(ssh "$ZIEL" 'mktemp -d')"

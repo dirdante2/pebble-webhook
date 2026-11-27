@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"errors"
+	"strconv"
 	"strings"
 )
 
@@ -49,10 +50,15 @@ type Ring struct {
 	EndedAt         int64  `json:"ende"`
 	CapacitySeconds int64  `json:"kapazitaet_sekunden"`
 	WarnedLevel     int    `json:"gewarnt"`
-	Kennung         string `json:"kennung"`      // Kennung des Rings aus der Zustellungs-ID (12 Hex-Zeichen); "" = noch keine gesehen
-	AppAgent        string `json:"app_agent"`    // User-Agent der Pebble-App bei der letzten Aufnahme dieses Rings
-	Description     string `json:"beschreibung"` // freier Text des Nutzers (z. B. „silber“)
+	Kennung         string `json:"kennung"`         // Kennung des Rings aus der Zustellungs-ID (12 Hex-Zeichen); "" = noch keine gesehen
+	AppAgent        string `json:"app_agent"`       // User-Agent der Pebble-App bei der letzten Aufnahme dieses Rings
+	Description     string `json:"beschreibung"`    // freier Text des Nutzers (z. B. „silber“)
+	InactiveReason  string `json:"inaktiv_grund"`   // Grund beim Inaktiv-Setzen (RingReasons); "" = aktiv oder vor 4.6
+	AskDeclined     string `json:"frage_abgelehnt"` // Frage „inaktiv setzen?“ abgelehnt (Zeitpunkt in ms); "" = offen
 }
+
+// RingReasons: Gründe für „inaktiv“ in der Reihenfolge der Auswahl.
+var RingReasons = []string{"verloren", "defekt", "batterie", "sonstiges"}
 
 type RingRecording struct {
 	JobID         string
@@ -66,11 +72,11 @@ type RingRecording struct {
 	Origin        string // eingang | nachtrag | schaetzung
 }
 
-const ringCols = `nr, hardware_id, started_at, ended_at, capacity_seconds, warned_level, kennung, app_agent, beschreibung`
+const ringCols = `nr, hardware_id, started_at, ended_at, capacity_seconds, warned_level, kennung, app_agent, beschreibung, inaktiv_grund, frage_abgelehnt`
 
 func scanRing(r scanner) (*Ring, error) {
 	var g Ring
-	err := r.Scan(&g.Nr, &g.HardwareID, &g.StartedAt, &g.EndedAt, &g.CapacitySeconds, &g.WarnedLevel, &g.Kennung, &g.AppAgent, &g.Description)
+	err := r.Scan(&g.Nr, &g.HardwareID, &g.StartedAt, &g.EndedAt, &g.CapacitySeconds, &g.WarnedLevel, &g.Kennung, &g.AppAgent, &g.Description, &g.InactiveReason, &g.AskDeclined)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -79,18 +85,42 @@ func scanRing(r scanner) (*Ring, error) {
 
 // ActiveRing: der Ring für den Balken in der Seitenleiste – unter den aktiven (ended_at = 0) der mit der höchsten
 // Nutzung (Anteil der Kapazität); ErrNotFound, wenn kein Ring aktiv ist. Ringe laufen nebeneinander, jeder wird an
-// seiner Kennung erkannt; ended_at > 0 heißt „inaktiv“ (vom Nutzer gesetzt; bis 4.4.1: durch einen Ringtausch
-// beendet) – ein inaktiver Ring fehlt nur in der Seitenleiste und zählt, warnt und meldet sonst wie jeder andere.
+// seiner Kennung erkannt; ended_at > 0 heißt „inaktiv“ (vom Nutzer gesetzt, mit Grund; bis 4.4.1: durch einen
+// Ringtausch beendet) – ein inaktiver Ring fehlt in der Seitenleiste und warnt nicht mehr.
 func (s *Store) ActiveRing() (*Ring, error) {
 	return scanRing(s.DB.QueryRow(`SELECT ` + ringCols + ` FROM rings WHERE ended_at = 0 ORDER BY
 		COALESCE((SELECT SUM(x.seconds) FROM ring_recordings x WHERE x.ring_nr = rings.nr AND x.seconds > 0), 0) * 1.0 / MAX(capacity_seconds, 1) DESC,
 		nr DESC LIMIT 1`))
 }
 
-// SetRingEnded: Ring deaktivieren (at > 0) oder wieder aktivieren (0).
-func (s *Store) SetRingEnded(nr, at int64) error {
-	_, err := s.DB.Exec(`UPDATE rings SET ended_at = ? WHERE nr = ?`, at, nr)
+// SetRingInactive: Ring mit Grund deaktivieren (at > 0) oder wieder aktivieren (at = 0, Grund wird geleert).
+// Wer einen Ring bewusst wieder aktiv setzt, hat die Frage „inaktiv setzen?“ beantwortet – sie kommt nicht wieder.
+func (s *Store) SetRingInactive(nr, at int64, reason string) error {
+	if at == 0 {
+		_, err := s.DB.Exec(`UPDATE rings SET ended_at = 0, inaktiv_grund = '', frage_abgelehnt = CASE WHEN frage_abgelehnt = '' THEN ? ELSE frage_abgelehnt END WHERE nr = ?`,
+			strconv.FormatInt(Now(), 10), nr)
+		return err
+	}
+	_, err := s.DB.Exec(`UPDATE rings SET ended_at = ?, inaktiv_grund = ? WHERE nr = ?`, at, reason, nr)
 	return err
+}
+
+// ReactivateRing: inaktiver Ring hat wieder gesendet – aktiv ohne Grund; die Frage „inaktiv setzen?“ bleibt möglich.
+func (s *Store) ReactivateRing(nr int64) error {
+	_, err := s.DB.Exec(`UPDATE rings SET ended_at = 0, inaktiv_grund = '' WHERE nr = ? AND ended_at > 0`, nr)
+	return err
+}
+
+// SetRingAskDeclined: Frage „inaktiv setzen?“ für diesen Ring abgelehnt – sie kommt nicht wieder.
+func (s *Store) SetRingAskDeclined(nr, at int64) error {
+	_, err := s.DB.Exec(`UPDATE rings SET frage_abgelehnt = ? WHERE nr = ?`, strconv.FormatInt(at, 10), nr)
+	return err
+}
+
+// RingLastRecording: Zeitpunkt der letzten Aufnahme eines Rings (0 = keine).
+func (s *Store) RingLastRecording(nr int64) (at int64, err error) {
+	err = s.DB.QueryRow(`SELECT COALESCE(MAX(received_at), 0) FROM ring_recordings WHERE ring_nr = ?`, nr).Scan(&at)
+	return
 }
 
 // RingDelivery: protokollierte Aufnahme mit der Zustellungs-ID ihres Eintrags (für den Nachtrag der Kennung).
@@ -233,7 +263,7 @@ func (s *Store) UpdateRingID(nr int64, hardwareID string) error {
 
 // ringDeviceCols: Angaben zum Gerät je Ring. Kommen ohne neuen Schema-Stand dazu: nur Spalten mit Vorgabe, ältere
 // Versionen lesen und schreiben rings mit benannten Spalten und stört das nicht.
-var ringDeviceCols = []string{"kennung", "app_agent", "beschreibung"}
+var ringDeviceCols = []string{"kennung", "app_agent", "beschreibung", "inaktiv_grund", "frage_abgelehnt"}
 
 func addRingDeviceCols(db *sql.DB) error {
 	for _, c := range ringDeviceCols {
@@ -336,13 +366,20 @@ type RingTotals struct {
 	SecondsByMode map[string]float64 `json:"sekunden_art"`  // diktat | planung | …
 	CountByMode   map[string]int     `json:"anzahl_art"`
 	ByTrigger     map[string]int     `json:"gesten"`
-	First, Last   int64              `json:"-"`
+	SecsTrigger   map[string]float64 `json:"gesten_sekunden"`
+	// Parts: Sekunden ohne Überschneidung – gelöscht, sonst Fehlaufnahme, sonst nach Art (diktat, planung, …).
+	Parts       map[string]float64 `json:"anteile"`
+	PartCounts  map[string]int     `json:"anteile_anzahl"`
+	First, Last int64              `json:"-"`
 }
 
 func (s *Store) RingTotals(nr int64) (*RingTotals, error) {
-	t := &RingTotals{SecondsByMode: map[string]float64{}, CountByMode: map[string]int{}, ByTrigger: map[string]int{}}
+	t := &RingTotals{SecondsByMode: map[string]float64{}, CountByMode: map[string]int{}, ByTrigger: map[string]int{}, Parts: map[string]float64{}, PartCounts: map[string]int{}, SecsTrigger: map[string]float64{}}
 	rows, err := s.DB.Query(`SELECT mode, trigger, COUNT(*), COALESCE(SUM(CASE WHEN seconds >= 0 THEN seconds END), 0),
-		SUM(seconds < 0), SUM(seconds_source = ?), SUM(empty), SUM(deleted_at > 0), MIN(received_at), MAX(received_at)
+		SUM(seconds < 0), SUM(seconds_source = ?), SUM(empty), SUM(deleted_at > 0), MIN(received_at), MAX(received_at),
+		COALESCE(SUM(CASE WHEN seconds >= 0 AND deleted_at > 0 THEN seconds END), 0),
+		COALESCE(SUM(CASE WHEN seconds >= 0 AND deleted_at = 0 AND empty THEN seconds END), 0),
+		SUM(deleted_at = 0 AND empty)
 		FROM ring_recordings WHERE ring_nr = ? GROUP BY mode, trigger`, SecondsEstimate, nr)
 	if err != nil {
 		return nil, err
@@ -351,11 +388,18 @@ func (s *Store) RingTotals(nr int64) (*RingTotals, error) {
 	for rows.Next() {
 		var mode, trig string
 		var n, unknown, est, empty, deleted int
-		var secs float64
+		var secs, delSecs, emptySecs float64
 		var first, last int64
-		if err := rows.Scan(&mode, &trig, &n, &secs, &unknown, &est, &empty, &deleted, &first, &last); err != nil {
+		var emptyKept int
+		if err := rows.Scan(&mode, &trig, &n, &secs, &unknown, &est, &empty, &deleted, &first, &last, &delSecs, &emptySecs, &emptyKept); err != nil {
 			return nil, err
 		}
+		t.Parts["geloescht"] += delSecs
+		t.Parts["fehl"] += emptySecs
+		t.Parts[mode] += secs - delSecs - emptySecs
+		t.PartCounts["geloescht"] += deleted
+		t.PartCounts["fehl"] += emptyKept
+		t.PartCounts[mode] += n - deleted - emptyKept
 		t.Count += n
 		t.Seconds += secs
 		t.Unknown += unknown
@@ -365,6 +409,7 @@ func (s *Store) RingTotals(nr int64) (*RingTotals, error) {
 		t.SecondsByMode[mode] += secs
 		t.CountByMode[mode] += n
 		t.ByTrigger[trig] += n
+		t.SecsTrigger[trig] += secs
 		if t.First == 0 || first < t.First {
 			t.First = first
 		}

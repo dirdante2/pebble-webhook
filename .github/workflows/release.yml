@@ -117,13 +117,17 @@ jobs:
 
       - name: Build
         shell: bash
+        env:
+          TELEMETRIE_URL: ${{ secrets.TELEMETRIE_URL }}
+          TELEMETRIE_PEPPER: ${{ secrets.TELEMETRIE_PEPPER }}
+          TELEMETRIE_KEY: ${{ secrets.TELEMETRIE_KEY }}
         run: |
           set -euo pipefail
           go vet ./...
           mkdir -p out
           for ARCH in amd64 arm64; do
             CGO_ENABLED=0 GOOS=linux GOARCH=$ARCH go build -trimpath \
-              -ldflags "-s -w -X 'main.version=${{ steps.meta.outputs.version }}'" \
+              -ldflags "-s -w -X 'main.version=${{ steps.meta.outputs.version }}' -X 'main.telemetrieURL=$TELEMETRIE_URL' -X 'main.telemetriePepper=$TELEMETRIE_PEPPER' -X 'main.telemetrieKey=$TELEMETRIE_KEY'" \
               -o out/pebble-webhook-linux-$ARCH ./cmd/pebble-webhook
           done
           cp install.sh out/

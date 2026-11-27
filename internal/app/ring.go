@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -32,6 +33,9 @@ var ringLevels = []int{60, 80, 95, 100}
 
 // ringForecastDays: Zeitraum für die Vorhersage bei gleichbleibender Nutzung.
 const ringForecastDays = 30
+
+// ringIdleDays: so lange unbenutzt, während ein anderer Ring weiterläuft, fragt die App „inaktiv setzen?“.
+const ringIdleDays = 14
 
 // ringIDRe: Ring-IDs haben die Form „#449“ (Raute, dann Ziffern und A–F): das Kürzel eines Rings sind die letzten
 // drei Zeichen seiner Kennung. Ringe aus der Zeit des eigenen Headers (bis 4.4.1) tragen bis zu 12 Zeichen.
@@ -325,12 +329,22 @@ func (a *App) recordRecording(j *store.Job, kennung, agent string) {
 		logf("Ring: Aufnahme %s protokollieren: %v", j.ID, err)
 		return
 	}
+	if g.EndedAt > 0 { // inaktiver Ring sendet wieder: aktiv setzen und melden
+		if err := a.DB.ReactivateRing(g.Nr); err != nil {
+			logf("Ring %d: wieder aktiv setzen: %v", g.Nr, err)
+		} else if ng, err := a.DB.RingByNr(g.Nr); err == nil {
+			logf("Ring %d: sendet wieder – aktiv gesetzt (war %s)", g.Nr, g.InactiveReason)
+			g = ng
+			a.telemetryRingEvent(g)
+			a.hub.send("ring")
+		}
+	}
 	after, err := a.DB.RingTotals(g.Nr)
 	if err != nil {
 		logf("Ring: %v", err)
 		return
 	}
-	if l := ringLevel(after.Seconds, g.CapacitySeconds); l > ringLevel(before.Seconds, g.CapacitySeconds) && l > g.WarnedLevel {
+	if l := ringLevel(after.Seconds, g.CapacitySeconds); g.EndedAt == 0 && l > ringLevel(before.Seconds, g.CapacitySeconds) && l > g.WarnedLevel {
 		a.notify(config.NotifyRing, a.T("Ring-Nutzung"), a.Tf("Der Ring hat %d %% seiner Aufnahmezeit erreicht.", l), "/status/ring?ring="+strconv.FormatInt(g.Nr, 10))
 	}
 	a.ringAgent(g, agent, j.ReceivedAt)
@@ -440,8 +454,10 @@ func (a *App) ringSeconds(jobID string, seconds float64) {
 }
 
 // ringSummary: Ringe kurz für alle Seiten – „balken“ ist der aktive Ring mit der höchsten Nutzung (Seitenleiste;
-// fehlt, wenn keiner aktiv ist), „hinweise“ sind alle Ringe mit einer erreichten, noch nicht bestätigten Schwelle
-// (auch inaktive), dazu ein Update der Pebble-App. nil = es gibt noch keinen Ring.
+// fehlt, wenn keiner aktiv ist), „hinweise“ sind die aktiven Ringe mit einer erreichten, noch nicht bestätigten
+// Schwelle, „frage_inaktiv“ die aktiven Ringe, die seit ringIdleDays nicht benutzt wurden, während ein anderer
+// aktiver Ring danach Aufnahmen hat (Frage „inaktiv setzen?“, bis sie beantwortet ist), dazu ein Update der
+// Pebble-App. nil = es gibt noch keinen Ring.
 func (a *App) ringSummary() map[string]any {
 	rings, err := a.DB.Rings()
 	if err != nil {
@@ -455,8 +471,20 @@ func (a *App) ringSummary() map[string]any {
 		return map[string]any{"fehler": err.Error()}
 	}
 	out := map[string]any{"app_update": appUpdate}
-	hints := []map[string]any{}
+	hints, idle := []map[string]any{}, []map[string]any{}
 	var bar map[string]any
+	last := map[int64]int64{}
+	for _, g := range rings {
+		at, err := a.DB.RingLastRecording(g.Nr)
+		if err != nil {
+			return map[string]any{"fehler": err.Error()}
+		}
+		if at == 0 {
+			at = g.StartedAt
+		}
+		last[g.Nr] = at
+	}
+	idleBefore := store.Now() - ringIdleDays*86_400_000
 	for i := len(rings) - 1; i >= 0; i-- { // älteste zuerst
 		g := rings[i]
 		t, err := a.DB.RingTotals(g.Nr)
@@ -466,14 +494,24 @@ func (a *App) ringSummary() map[string]any {
 		percent := t.Seconds / float64(g.CapacitySeconds) * 100
 		v := map[string]any{"nr": g.Nr, "hardware_id": g.HardwareID, "beschreibung": g.Description, "sekunden": t.Seconds,
 			"kapazitaet_sekunden": g.CapacitySeconds, "prozent": percent, "stufe": ringLevel(t.Seconds, g.CapacitySeconds)}
-		if l := v["stufe"].(int); l > g.WarnedLevel && l > 0 {
+		if l := v["stufe"].(int); g.EndedAt == 0 && l > g.WarnedLevel && l > 0 {
 			hints = append(hints, v)
+		}
+		if g.EndedAt == 0 && g.AskDeclined == "" && last[g.Nr] < idleBefore {
+			for _, o := range rings {
+				if o.Nr != g.Nr && o.EndedAt == 0 && last[o.Nr] > last[g.Nr] {
+					idle = append(idle, map[string]any{"nr": g.Nr, "hardware_id": g.HardwareID, "beschreibung": g.Description,
+						"letzte": last[g.Nr], "neuer": map[string]any{"nr": o.Nr, "hardware_id": o.HardwareID, "beschreibung": o.Description}})
+					break
+				}
+			}
 		}
 		if g.EndedAt == 0 && (bar == nil || percent >= bar["prozent"].(float64)) {
 			bar = v
 		}
 	}
 	out["hinweise"] = hints
+	out["frage_inaktiv"] = idle
 	if bar != nil {
 		out["balken"] = bar
 	}
@@ -570,12 +608,13 @@ func (a *App) ringView(g *store.Ring) (map[string]any, error) {
 		until = g.EndedAt
 	}
 	v := map[string]any{"nr": g.Nr, "hardware_id": g.HardwareID, "kennung": g.Kennung, "app_agent": g.AppAgent, "beschreibung": g.Description,
-		"start": g.StartedAt, "ende": g.EndedAt,
+		"start": g.StartedAt, "ende": g.EndedAt, "inaktiv_grund": g.InactiveReason,
 		"kapazitaet_sekunden": g.CapacitySeconds, "sekunden": t.Seconds, "prozent": t.Seconds / float64(g.CapacitySeconds) * 100,
 		"anzahl": t.Count, "fehlaufnahmen": t.Empty, "geloescht": t.Deleted,
 		"diktat":  map[string]any{"sekunden": t.SecondsByMode["diktat"], "anzahl": t.CountByMode["diktat"]},
 		"planung": map[string]any{"sekunden": t.SecondsByMode["planung"], "anzahl": t.CountByMode["planung"]},
-		"halten":  t.ByTrigger["single-click-hold"], "klick_halten": t.ByTrigger["double-click-hold"],
+		"halten":  t.ByTrigger["single-click-hold"], "klick_halten": t.ByTrigger["double-click-hold"], "anteile": t.Parts, "anteile_anzahl": t.PartCounts,
+		"halten_sekunden": t.SecsTrigger["single-click-hold"], "klick_halten_sekunden": t.SecsTrigger["double-click-hold"],
 		"tage": math.Max(1, float64(until-g.StartedAt)/86_400_000)}
 	return v, nil
 }
@@ -645,7 +684,6 @@ func (a *App) handleRingEdit(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Hours       float64 `json:"kapazitaet_stunden"`
 		Description *string `json:"beschreibung"` // fehlt = unverändert
-		Active      *bool   `json:"aktiv"`        // fehlt = unverändert
 	}
 	if readJSON(r, &in) != nil || in.Hours < 1 || in.Hours > 1000 {
 		writeErr(w, 400, "ungueltig", "Kapazität 1–1000 Stunden")
@@ -678,19 +716,68 @@ func (a *App) handleRingEdit(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	// Inaktiv: der Ring fehlt nur in der Seitenleiste; er zählt, warnt und meldet wie jeder andere.
-	if in.Active != nil && *in.Active != (g.EndedAt == 0) {
+	a.hub.send("ring")
+	writeJSON(w, 200, map[string]any{"ok": true})
+}
+
+// handleRingActive: Ring inaktiv setzen (mit Grund aus store.RingReasons) oder wieder aktiv. Ein inaktiver Ring fehlt
+// in der Seitenleiste und warnt nicht mehr; jede Änderung geht als Ring-Ereignis an die Statistik.
+func (a *App) handleRingActive(w http.ResponseWriter, r *http.Request) {
+	nr, _ := strconv.ParseInt(r.PathValue("nr"), 10, 64)
+	var in struct {
+		Active bool   `json:"aktiv"`
+		Reason string `json:"grund"`
+	}
+	if readJSON(r, &in) != nil || (!in.Active && !slices.Contains(store.RingReasons, in.Reason)) {
+		writeErr(w, 400, "ungueltig", "Grund fehlt oder ist unbekannt")
+		return
+	}
+	ringMu.Lock()
+	g, err := a.DB.RingByNr(nr)
+	if err == nil && in.Active != (g.EndedAt == 0) {
 		at := int64(0)
-		if !*in.Active {
+		if !in.Active {
 			at = store.Now()
 		}
-		if err := a.DB.SetRingEnded(nr, at); err != nil {
-			writeErr(w, 500, "speicher", "Datenbankfehler")
+		if err = a.DB.SetRingInactive(nr, at, in.Reason); err == nil {
+			g, err = a.DB.RingByNr(nr)
+		}
+		if err == nil {
+			a.telemetryRingEvent(g)
+		}
+	}
+	ringMu.Unlock()
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeErr(w, 404, "fehlt", "Ring nicht gefunden")
 			return
 		}
+		writeErr(w, 500, "speicher", "Datenbankfehler")
+		return
 	}
 	a.hub.send("ring")
 	writeJSON(w, 200, map[string]any{"ok": true})
+}
+
+// handleRingAskDecline: Frage „Ring inaktiv setzen?“ ablehnen; für diesen Ring kommt sie nicht wieder.
+func (a *App) handleRingAskDecline(w http.ResponseWriter, r *http.Request) {
+	nr, _ := strconv.ParseInt(r.PathValue("nr"), 10, 64)
+	ringMu.Lock()
+	_, err := a.DB.RingByNr(nr)
+	if err == nil {
+		err = a.DB.SetRingAskDeclined(nr, store.Now())
+	}
+	ringMu.Unlock()
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeErr(w, 404, "fehlt", "Ring nicht gefunden")
+			return
+		}
+		writeErr(w, 500, "speicher", "Datenbankfehler")
+		return
+	}
+	a.hub.send("ring")
+	writeJSON(w, 200, map[string]any{"ring": a.ringSummary()})
 }
 
 // handleRingConfirm: Hinweis zur erreichten Schwelle eines Rings (ring, sonst der zuletzt benutzte) bestätigen; „plus“ erhöht die Kapazität dauerhaft um 30 min

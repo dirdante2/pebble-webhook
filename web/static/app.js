@@ -511,6 +511,8 @@ const routen = [
   [/^\/status\/kosten$/, 'kosten', zeigeKosten],
   [/^\/status\/ring$/, 'ring', zeigeRing],
   [/^\/status\/ring\/(\d+)\/bearbeiten$/, 'ringBearbeiten', zeigeRingBearbeiten],
+  [/^\/status\/statistik$/, 'statistik', zeigeStatistik],
+  [/^\/status\/rueckmeldung$/, 'rueckmeldung', zeigeRueckmeldung],
   [/^\/status\/papierkorb$/, 'papierkorb', zeigePapierkorb],
   [/^\/status\/gedaechtnis$/, 'gedaechtnis', zeigeGedaechtnis],
   [/^\/status\/gedaechtnis\/neu$/, 'gedaechtnisBearbeiten', () => zeigeGedaechtnisBearbeiten('')],
@@ -2936,6 +2938,9 @@ async function zeigeStatus() {
       <div class="leiste"><a class="btn" href="/status/mcp">${esc(tx('App verbinden (MCP-Server hinzufügen)'))}</a></div>
       <h2>${esc(tx('Kalender-Abo'))}</h2>
       <a class="karte" href="/status/kalender"><strong>${esc(tx('Termine in Google, Apple oder Outlook abonnieren'))}</strong><br><span class="leise">${esc(tx('Link und Anleitung'))}</span></a>
+      ${s.statistik ? T`<h2>${esc(tx('Statistik und Rückmeldung'))}</h2>
+      <a class="karte" href="/status/statistik"><strong>${esc(tx(istAdmin() ? 'Anonyme Statistik' : 'Ring-Lebensdauer aller Installationen'))}</strong><br><span class="leise">${esc(tx(istAdmin() ? 'Ein- oder ausschalten, Ring-Lebensdauer aller Installationen' : 'Vergleich mit allen Installationen'))}</span></a>
+      <a class="karte" href="/status/rueckmeldung"><strong>${esc(tx('Rückmeldung senden'))}</strong><br><span class="leise">${esc(tx('Kommentar oder Fehler an den Entwickler'))}</span></a>` : ''}
       <h2>Zugang und Sicherheit</h2>
       <a class="karte" href="/status/zugang"><strong>API-Token und Wiederherstellungscode</strong><br><span class="leise">Maschinenzugang für Skripte, Code für deine verschlüsselten Daten</span></a>
       <div class="leiste"><button class="btn gefahr" data-a="abmelden">Abmelden</button></div>
@@ -3252,8 +3257,8 @@ function zeigeSpeicherkarte() {
 function zeigeRingkarte() {
   const karte = document.getElementById('ringkarte');
   const r = ringInfo;
-  const hinweise = r?.hinweise || [], upd = r?.app_update;
-  karte.hidden = !r || (!r.fehler && !hinweise.length && !upd);
+  const hinweise = r?.hinweise || [], upd = r?.app_update, fragen = r?.frage_inaktiv || [];
+  karte.hidden = !r || (!r.fehler && !hinweise.length && !upd && !fragen.length);
   if (karte.hidden) return;
   if (r.fehler) {
     karte.innerHTML = T`<div><strong>${esc(tx('Ring-Auswertung'))}</strong><p class="leise">${esc(tx('Fehler: {0}', r.fehler))}</p></div>`;
@@ -3275,17 +3280,28 @@ function zeigeRingkarte() {
       <a href="/status/ring?ring=${h.nr}">${esc(tx('Auswertung ansehen'))}</a></div>
       <div class="leiste">${voll ? T`<button type="button" class="btn" data-ring-plus="${h.nr}">${esc(tx('+30 min'))}</button>` : ''}<button type="button" class="btn haupt" data-ring-ok="${h.nr}">${esc(tx('Bestätigen'))}</button></div>`);
   }
+  for (const f of fragen) {
+    teile.push(T`<div><strong>${esc(tx('{0} inaktiv setzen?', ringName(f)))}</strong>
+      <p>${esc(tx('Seit {0} nicht mehr benutzt; {1} ist seitdem im Einsatz.', datumKurz(f.letzte), ringName(f.neuer)))}</p></div>
+      <div class="leiste"><button type="button" class="btn haupt" data-ring-inaktiv="${f.nr}">${esc(tx('Inaktiv setzen …'))}</button><button type="button" class="btn" data-ring-nein="${f.nr}">${esc(tx('Nein, aktiv lassen'))}</button></div>`);
+  }
   karte.innerHTML = teile.join('');
+  karte.querySelectorAll('[data-ring-inaktiv]').forEach((b) => {
+    const f = fragen.find((x) => x.nr === Number(b.dataset.ringInaktiv));
+    b.onclick = () => ringInaktivFenster(f, async () => { if (aktuell?.neuLaden) aktuell.neuLaden(); });
+  });
   const knopf = (sel, fn) => karte.querySelectorAll(sel).forEach((b) => { b.onclick = async () => { b.disabled = true; try { await fn(b); await ladeZaehler(); if (aktuell?.neuLaden) aktuell.neuLaden(); } catch (f) { b.disabled = false; melde(f.message); } }; });
   knopf('[data-ring-ok]', (b) => api('/api/ring/bestaetigt', { method: 'POST', body: { ring: Number(b.dataset.ringOk) } }));
+  knopf('[data-ring-nein]', (b) => api(`/api/ring/${b.dataset.ringNein}/frage-abgelehnt`, { method: 'POST' }));
   knopf('[data-ring-appok]', () => api('/api/ring/bestaetigt', { method: 'POST', body: { app_update: true } }));
   knopf('[data-ring-plus]', (b) => api('/api/ring/bestaetigt', { method: 'POST', body: { plus: true, ring: Number(b.dataset.ringPlus) } }));
 }
 
-// Balken ganz unten im Menü: Verbrauch des aktiven Rings.
+// Balken ganz unten im Menü: Verbrauch des aktiven Rings; ohne aktiven Ring nur der Link zur Ring-Nutzung.
 function ringBalkenHtml() {
   const r = ringInfo?.balken; // aktiver Ring mit der höchsten Nutzung; inaktive stehen nicht in der Seitenleiste
-  if (!r) return '';
+  // Kein aktiver Ring (alle inaktiv oder noch keiner): der Link zur Ring-Nutzung bleibt trotzdem da.
+  if (!r) return T`<a class="ringbalken" href="/status/ring"><span class="ringtext"><span>${esc(tx('Nutzung'))}</span><span class="leise">${esc(tx('kein aktiver Ring'))}</span></span></a>`;
   return T`<a class="ringbalken ${stufeKlasse(r.prozent)}" href="/status/ring?ring=${r.nr}"><span class="ringtext"><span>${esc(tx('Nutzung'))}</span><span>${esc(stunden(r.sekunden))}</span></span><span class="balken"><i data-anteil="${Math.min(100, r.prozent)}"></i></span></a>`;
 }
 // Strich und Beschriftung im Wortbalken an ihre Stelle (Prozent aus data-pos); Beschriftung bleibt im Rahmen.
@@ -3420,6 +3436,19 @@ function wortBlock(w) {
       <span class="wortgrenzen"><span>${esc(tx('Min {0}', zahl(w.min)))}</span><span>${esc(tx('Max {0}', zahl(w.max)))}</span></span></div></div>`;
 }
 
+// Teile des Ring-Balkens (Sekunden ohne Überschneidung, Anteil an der Kapazität); die Karten darunter tragen dieselbe
+// Farbe als Streifen links – eine Legende braucht es nicht.
+const RING_TEILE = [['diktat', 'Notizen'], ['planung', 'Planungen'], ['fehl', 'Fehlaufnahmen'], ['geloescht', 'Gelöscht']];
+function ringTeile(g) {
+  const kap = Math.max(1, g.kapazitaet_sekunden);
+  let rest = 100;
+  return RING_TEILE.map(([k]) => {
+    const anteil = Math.min(rest, ((g.anteile?.[k] || 0) / kap) * 100);
+    rest -= anteil;
+    return anteil > 0 ? T`<i class="t-${k}" data-anteil="${anteil}"></i>` : '';
+  }).join('');
+}
+
 async function zeigeRing() {
   seite.innerHTML = T`<p class="leer">${esc(tx('Lädt …'))}</p>`;
   const wahl = new URLSearchParams(location.search).get('ring') || '';
@@ -3428,63 +3457,116 @@ async function zeigeRing() {
     if (aktuell?.name !== 'ring') return;
     const g = d.ring, aktiv = !g.ende, p = g.prozent;
     // Kleine Kachel mit Zahl und Anteil an allen Aufnahmen des Rings (Fehlaufnahmen, Gelöschte).
-    const klein = (titel, hinweis, n, gesamt) => T`<div class="kachel klein"><div class="leise">${esc(titel)}</div><div class="zahl">${n}</div><div class="leise">${gesamt ? `${Math.round((n / gesamt) * 100)} % · ` : ''}${esc(hinweis)}</div></div>`;
-    const kachel = (titel, sek, n) => T`<div class="kachel"><div class="leise">${esc(titel)}</div><div class="zahl">${esc(stunden(sek))}</div><div class="leise">${esc(tx('{0} Aufnahmen', n))}${n ? ` · Ø ${esc(stunden(sek / n))}` : ''}</div></div>`;
+    const kachel = (titel, sek, n, farbe = '') => T`<div class="kachel ${farbe}"><div class="leise">${esc(titel)}</div><div class="zahl">${esc(stunden(sek))}</div><div class="leise">${esc(tx('{0} Aufnahmen', n))}${n ? ` · Ø ${esc(stunden(sek / n))}` : ''}</div></div>`;
     const prog = d.prognose;
     const wann = (v) => (v === 0 ? tx('erreicht') : v == null ? tx('keine Nutzung') : datumKurz(v));
     const verlauf = d.verlauf || [];
     // Vergleich als kompakte Zeilen (mobil ohne breite Tabelle): ID, Zeit, Anteil; darunter Zeitraum, Aufnahmen, Ø je Tag.
     const vergleich = d.ringe.map((r) => T`<a class="karte ringzeile${r.nr === g.nr ? ' aktiv' : ''}" href="/status/ring?ring=${r.nr}">
-      <span class="zeile"><strong>${esc(r.hardware_id || tx('Ring {0}', r.nr))}${r.ende ? T` <span class="kimarke">${esc(tx('inaktiv'))}</span>` : ''}</strong><span>${esc(stunden(r.sekunden))} · ${Math.floor(r.prozent)} %</span></span>
+      <span class="zeile"><strong>${esc(r.hardware_id || tx('Ring {0}', r.nr))}${r.ende ? T` <span class="kimarke">${esc(r.inaktiv_grund ? tx('inaktiv · {0}', ringGrund(r.inaktiv_grund)) : tx('inaktiv'))}</span>` : ''}</strong><span>${esc(stunden(r.sekunden))} · ${Math.floor(r.prozent)} %</span></span>
       <span class="balken ${stufeKlasse(r.prozent)}"><i data-anteil="${Math.min(100, r.prozent)}"></i></span>
       <span class="leise">${esc(tx('seit: {0}', datumKurz(r.start)))} · ${esc(tx('{0} Aufnahmen', r.anzahl))} · ${esc(tx('Ø {0} je Tag', stunden(r.sekunden / r.tage)))}</span></a>`).join('');
     seite.innerHTML = T`<h1>${esc(tx('Ringnutzung'))}</h1>
       ${eingangsKarte(st)}
       ${d.ringe.length > 1 ? T`<nav class="btn-group" aria-label="${esc(tx('Ring wählen'))}">${d.ringe.slice().reverse().map((r) => T`<a class="btn${r.nr === g.nr ? ' aktiv' : ''}" href="/status/ring?ring=${r.nr}"${r.nr === g.nr ? ' aria-current="page"' : ''}>${esc(r.hardware_id || tx('Ring {0}', r.nr))}</a>`).join('')}</nav>` : ''}
       <div class="karte">
-        <a class="zeile kartentitel kartenlink" href="/status/ring/${g.nr}/bearbeiten" aria-label="${esc(tx('Ring bearbeiten'))}"><strong>${esc(ringName(g))}${aktiv ? '' : T` <span class="kimarke">${esc(tx('inaktiv'))}</span>`}</strong><span class="kipfeil" aria-hidden="true">›</span></a>
+        <a class="zeile kartentitel kartenlink" href="/status/ring/${g.nr}/bearbeiten" aria-label="${esc(tx('Ring bearbeiten'))}"><strong>${esc(ringName(g))}${aktiv ? '' : T` <span class="kimarke">${esc(g.inaktiv_grund ? tx('inaktiv · {0}', ringGrund(g.inaktiv_grund)) : tx('inaktiv'))}</span>`}</strong><span class="kipfeil" aria-hidden="true">›</span></a>
         <p class="leise zeile ringmeta"><span class="umbruch">${g.app_agent ? esc(tx('App: {0}', pebbleVersion(g.app_agent))) : ''}</span><span>${esc(tx('seit: {0}', datumKurz(g.start)))}</span></p>
-        <span class="balken ringgross ${stufeKlasse(p)}"><i data-anteil="${Math.min(100, p)}"></i></span>
+        <span class="balken ringgross mehrteilig" role="img" aria-label="${esc(RING_TEILE.map(([k, name]) => tx('{0}: {1}', tx(name), stunden(g.anteile?.[k] || 0))).join(', '))}">${ringTeile(g)}</span>
         <p><strong>${esc(tx('{0} von {1}', stunden(g.sekunden), stunden(g.kapazitaet_sekunden)))}</strong> · ${Math.floor(p)} %</p>
         ${aktiv && prog ? T`<p class="leise">${esc(tx('Bei gleichbleibender Nutzung (Ø {0} je Tag, letzte {1} Tage): 80 % {2} · 100 % {3}', stunden(prog.sekunden_je_tag), Math.round(prog.basis_tage), wann(prog.datum80), wann(prog.datum100)))}</p>` : ''}
       </div>
-      <div class="kacheln">${kachel(tx('Gesamt'), g.sekunden, g.anzahl)}${kachel(tx('Notizen'), g.diktat.sekunden, g.diktat.anzahl)}${kachel(tx('Planungen'), g.planung.sekunden, g.planung.anzahl)}</div>
-      <p class="leise">${esc(tx('Tastendrücke: Halten {0} · Klick + Halten {1}', g.halten, g.klick_halten))}</p>
-      <div class="kacheln paar">${klein(tx('Fehlaufnahmen'), tx('keine Sprache'), g.fehlaufnahmen, g.anzahl)}${klein(tx('Gelöscht'), tx('im Papierkorb oder entfernt'), g.geloescht, g.anzahl)}</div>
+      <div class="kacheln paar">${RING_TEILE.map(([k, name]) => kachel(tx(name), g.anteile?.[k] || 0, g.anteile_anzahl?.[k] || 0, 'f-' + k)).join('')}</div>
+      <div class="kacheln paar">${kachel(tx('Halten'), g.halten_sekunden || 0, g.halten)}${kachel(tx('Klick + Halten'), g.klick_halten_sekunden || 0, g.klick_halten)}</div>
       <h2>${esc(tx('Aufnahmezeit'))}</h2>
       <div class="karte" id="rverlauf"></div>
       ${d.ringe.length > 1 ? T`<h2>${esc(tx('Ringe im Vergleich'))}</h2>${vergleich}` : ''}
+      <p id="ringglobal" hidden><a class="karte kartenlink zeile" href="/status/statistik"><span><strong>${esc(tx('Ring-Lebensdauer aller Installationen'))}</strong><br><span class="leise">${esc(tx('Vergleich mit allen Installationen'))}</span></span><span class="kipfeil" aria-hidden="true">›</span></a></p>
 `;
     setzeBalken(seite);
     setzeWortlage(seite);
     zeigeRingVerlauf(verlauf);
+    // Link zur globalen Statistik nur, wenn dieser Build sie kennt.
+    api('/api/statistik').then((st) => { const el = document.getElementById('ringglobal'); if (el && st.verfuegbar) el.hidden = false; }).catch(() => {});
   };
   aktuell.neuLaden = laden;
   await laden();
 }
 
-// Ring bearbeiten: Beschreibung und Kapazität.
+// Gründe für „inaktiv“ in der Reihenfolge der Auswahl.
+const RING_GRUENDE = [['verloren', 'Ring verloren'], ['defekt', 'Ring defekt'], ['batterie', 'Batterie leer'], ['sonstiges', 'Sonstiger Grund']];
+const ringGrund = (g) => { const x = RING_GRUENDE.find(([k]) => k === g); return x ? tx(x[1]) : ''; };
+
+// Fenster „Ring inaktiv setzen“: Grund wählen (verloren, defekt, Batterie leer, sonstiger); speichert sofort.
+function ringInaktivFenster(g, danach) {
+  const dlg = document.createElement('dialog');
+  dlg.className = 'formblatt';
+  dlg.innerHTML = T`<h2>${esc(tx('Ring inaktiv setzen'))}</h2>
+    <p class="leise">${esc(ringName(g))} · ${esc(tx('Warum wird der Ring nicht mehr benutzt?'))}</p>
+    <div class="grundliste">${RING_GRUENDE.map(([k, t]) => T`<button type="button" class="mehrpunkt" data-grund="${k}">${esc(tx(t))}</button>`).join('')}</div>
+    <div class="leiste"><button type="button" class="btn" data-zu>${esc(tx('Abbrechen'))}</button></div>`;
+  document.body.append(dlg);
+  const zu = () => { dlg.close(); dlg.remove(); };
+  dlg.addEventListener('cancel', () => dlg.remove());
+  dlg.addEventListener('click', async (ev) => {
+    if (ev.target === dlg || ev.target.closest('[data-zu]')) return zu();
+    const b = ev.target.closest('[data-grund]');
+    if (!b) return;
+    dlg.querySelectorAll('button').forEach((x) => { x.disabled = true; });
+    try {
+      await api(`/api/ring/${g.nr}/aktiv`, { method: 'PUT', body: { aktiv: false, grund: b.dataset.grund } });
+      zu();
+      melde(tx('Ring inaktiv: {0}', ringGrund(b.dataset.grund)));
+      await ladeZaehler();
+      if (danach) await danach();
+    } catch (f) { dlg.querySelectorAll('button').forEach((x) => { x.disabled = false; }); melde(f.message); }
+  });
+  dlg.showModal();
+}
+
+// Ring bearbeiten: Beschreibung und Kapazität; aktiv/inaktiv über eigene Knöpfe (speichern sofort).
 async function zeigeRingBearbeiten(nr) {
   const d = await api(`/api/ring?ring=${encodeURIComponent(nr)}`);
   const g = d.ring;
+  const kapWert = Math.round((g.kapazitaet_sekunden / 3600) * 100) / 100;
   seite.innerHTML = T`<p><a class="btn klein" href="/status/ring?ring=${g.nr}">← ${esc(tx('Ring'))}</a></p><h1>${esc(tx('Ring {0} bearbeiten', g.nr))}</h1>
     <dl><dt>${esc(tx('Ring-ID'))}</dt><dd>${esc(g.hardware_id || tx('ohne ID'))}</dd><dt>${esc(tx('Kennung'))}</dt><dd class="umbruch">${esc(g.kennung || tx('noch keine Aufnahme mit Kennung'))}</dd></dl>
     <p class="leise hilfe">${esc(tx('Die Ring-ID sind die letzten drei Zeichen der Kennung; beides kommt vom Ring und ist nicht änderbar.'))}</p>
     <label for="rbeschr">${esc(tx('Beschreibung'))}</label><input id="rbeschr" maxlength="60" autocomplete="off" value="${esc(g.beschreibung || '')}">
     <p class="leise hilfe">${esc(tx('Freier Text, z. B. die Farbe des Rings (höchstens 60 Zeichen).'))}</p>
-    <label for="rkap">${esc(tx('Kapazität (Stunden Aufnahme)'))}</label><input id="rkap" type="number" min="1" max="1000" step="0.5" value="${Math.round((g.kapazitaet_sekunden / 3600) * 100) / 100}">
-    <label class="schalter"><input type="checkbox" id="raktiv"${g.ende ? '' : ' checked'}> ${esc(tx('Ring aktiv'))}</label>
-    <p class="leise hilfe">${esc(tx('Inaktive Ringe fehlen nur in der Seitenleiste. Sie zählen, warnen und melden sich wie jeder andere.'))}</p>
-    <div class="leiste"><button class="btn haupt" id="rsichern">${esc(tx('Speichern'))}</button><a class="btn" href="/status/ring?ring=${g.nr}">${esc(tx('Abbrechen'))}</a></div>`;
+    <label for="rkap">${esc(tx('Kapazität (Stunden Aufnahme)'))}</label><input id="rkap" type="number" min="1" max="1000" step="0.5" value="${kapWert}">
+    <div class="leiste"><button class="btn haupt" id="rsichern">${esc(tx('Speichern'))}</button><a class="btn" href="/status/ring?ring=${g.nr}">${esc(tx('Abbrechen'))}</a></div>
+    <h2>${esc(tx('Status'))}</h2>
+    ${g.ende ? T`<p><strong>${esc(tx('Inaktiv seit {0}', datumKurz(g.ende)))}</strong>${g.inaktiv_grund ? ` · ${esc(ringGrund(g.inaktiv_grund))}` : ''}</p>
+      <div class="leiste"><button class="btn" id="raktivieren">${esc(tx('Aktiv setzen'))}</button></div>`
+    : T`<p>${esc(tx('Aktiv'))}</p><div class="leiste"><button class="btn" id="rinaktiv">${esc(tx('Inaktiv setzen'))}</button></div>`}
+    <p class="leise hilfe">${esc(tx('Inaktive Ringe fehlen in der Seitenleiste und warnen nicht mehr; ihre Nutzung bleibt in der Auswertung.'))}</p>`;
+  const beschr = document.getElementById('rbeschr'), kap = document.getElementById('rkap');
+  const geaendert = () => beschr.value.trim() !== (g.beschreibung || '') || Number(kap.value) !== kapWert;
+  const zurueck = async () => { geheZu(`/status/ring?ring=${g.nr}`, true); };
+  const weiterOhneSpeichern = () => !geaendert() || confirm(tx('Ungespeicherte Änderungen verwerfen?'));
+  const inaktiv = document.getElementById('rinaktiv');
+  if (inaktiv) inaktiv.onclick = () => { if (weiterOhneSpeichern()) ringInaktivFenster(g, zurueck); };
+  const aktivieren = document.getElementById('raktivieren');
+  if (aktivieren) aktivieren.onclick = async () => {
+    if (!weiterOhneSpeichern() || !confirm(tx('{0} wieder aktiv setzen?', ringName(g)))) return;
+    aktivieren.disabled = true;
+    try {
+      await api(`/api/ring/${g.nr}/aktiv`, { method: 'PUT', body: { aktiv: true } });
+      melde(tx('Ring wieder aktiv'));
+      await ladeZaehler();
+      await zurueck();
+    } catch (f) { aktivieren.disabled = false; melde(f.message); }
+  };
   document.getElementById('rsichern').onclick = async (ev) => {
-    const kap = Number(document.getElementById('rkap').value);
-    if (!(kap >= 1 && kap <= 1000)) return melde(tx('Kapazität 1–1000 Stunden'));
+    const k = Number(kap.value);
+    if (!(k >= 1 && k <= 1000)) return melde(tx('Kapazität 1–1000 Stunden'));
     ev.target.disabled = true;
     try {
-      await api(`/api/ring/${g.nr}`, { method: 'PUT', body: { kapazitaet_stunden: kap, beschreibung: document.getElementById('rbeschr').value.trim(), aktiv: document.getElementById('raktiv').checked } });
+      await api(`/api/ring/${g.nr}`, { method: 'PUT', body: { kapazitaet_stunden: k, beschreibung: beschr.value.trim() } });
       melde(tx('Gespeichert'));
       await ladeZaehler();
-      geheZu(`/status/ring?ring=${g.nr}`, true);
+      await zurueck();
     } catch (f) { ev.target.disabled = false; melde(f.message); }
   };
 }
@@ -3755,7 +3837,7 @@ async function zeigeEinstellungen() {
   const d = await ladeEinstellungen();
   if (aktuell?.name !== 'einstellungen') return;
   // Joplin-Zugang wird unter Status → Joplin eingerichtet; hier steht nur der Schalter.
-  d.felder = d.felder.filter((f) => (f.gruppe !== 'Joplin' || f.key === 'JOPLIN_ENABLED') && f.gruppe !== 'Benachrichtigungen' && !Object.values(KI_GRUPPEN).includes(f.gruppe));
+  d.felder = d.felder.filter((f) => (f.gruppe !== 'Joplin' || f.key === 'JOPLIN_ENABLED') && f.gruppe !== 'Benachrichtigungen' && f.gruppe !== 'Statistik' && !Object.values(KI_GRUPPEN).includes(f.gruppe));
   const gruppen = [...new Set(d.felder.map((f) => f.gruppe))];
   const wert = (f) => (f.art === 'multi' ? esc(f.wert === 'keine' ? tx('keine') : (f.wert || '').split(',').map((c) => wahlText(f, c)).join(', ')) : f.art === 'secret' ? (f.gesperrt ? tx('aus der Umgebung') : f.gesetzt ? tx('gesetzt') : T('<span class="leise">leer</span>')) : f.wert ? esc(f.key === 'WHISPER_MODEL' ? d.whisper?.modelle.find((m) => m.id === f.wert)?.name || f.wert : f.art === 'choice' ? wahlText(f, f.wert) : f.wert) : T('<span class="leise">leer</span>'));
   const zeile = (f) => T`<div class="konfzeile">
@@ -4247,6 +4329,97 @@ async function zeigeJoplin() {
 }
 
 // Benachrichtigungen: Web-Push auf diesem Gerät ein/aus und je Kanal (persönliche Einstellungen NOTIFY_*).
+// Anonyme Statistik: ein/aus (persönlich) und der eigene Anteil am nächsten Monatsbericht.
+async function zeigeStatistik() {
+  seite.innerHTML = T`<p class="leer">Lädt …</p>`;
+  const laden = async () => {
+    const st = await api('/api/statistik');
+    if (aktuell?.name !== 'statistik') return;
+    const zurueck = T`<p><a class="btn klein" href="/status">← ${esc(tx('Status'))}</a></p>`;
+    if (!st.verfuegbar) {
+      seite.innerHTML = T`${zurueck}<h1>${esc(tx('Anonyme Statistik'))}</h1><p class="leise">${esc(tx('In diesem Build nicht verfügbar; es wird nichts gesendet.'))}</p>`;
+      return;
+    }
+    const daten = st.aktiv ? T`<div id="lebensdauer"><p class="leer">${esc(tx('Lädt …'))}</p></div>`
+      : T`<p class="leise">${esc(st.admin ? tx('Die Daten aller Installationen siehst du, sobald diese Installation selbst sendet.') : tx('Diese Installation sendet keine Statistik – die Daten aller Installationen sind deshalb nicht sichtbar.'))}</p>`;
+    // Ein- und Ausschalten gilt für die ganze Installation – nur Admins; Nutzer sehen nur die Auswertung.
+    seite.innerHTML = st.admin ? T`${zurueck}<h1>${esc(tx('Anonyme Statistik'))}</h1>
+      <form class="einstellungen" novalidate><fieldset><label class="schalter"><input type="checkbox" name="aktiv"${st.aktiv ? ' checked' : ''}> ${esc(tx('Anonyme Statistik senden'))}</label>
+        <p class="leise hilfe">${esc(tx('Es werden nur anonyme Daten zur Gesamtnutzungszeit der Ringe gesendet.'))} ${esc(tx('Gilt für alle Nutzer dieser Installation.'))}</p></fieldset>
+        <div class="leiste"><button class="btn haupt" type="submit">${esc(tx('Speichern'))}</button></div></form>
+      <h2>${esc(tx('Ring-Lebensdauer aller Installationen'))}</h2>${daten}`
+      : T`${zurueck}<h1>${esc(tx('Ring-Lebensdauer aller Installationen'))}</h1>${daten}`;
+    if (st.aktiv) zeigeGlobaleLebensdauer(document.getElementById('lebensdauer'));
+    const form = seite.querySelector('form');
+    if (form) form.onsubmit = async (ev) => {
+      ev.preventDefault();
+      const knopf = form.querySelector('[type=submit]');
+      knopf.disabled = true;
+      try {
+        await api('/api/statistik', { method: 'PUT', body: { aktiv: form.aktiv.checked } });
+        melde(tx('Gespeichert'));
+        await laden();
+      } catch (f2) { knopf.disabled = false; melde(f2.message); }
+    };
+  };
+  aktuell.neuLaden = laden;
+  await laden();
+}
+
+// Ring-Lebensdauer aller Installationen (anonyme Summen, Server hält sie 6 h): je Status Balken Min–Max, Strich bei Ø.
+async function zeigeGlobaleLebensdauer(el) {
+  let g;
+  try { g = await api('/api/statistik/lebensdauer'); } catch (f) { el.innerHTML = T`<p class="leise">${esc(f.message)}</p>`; return; }
+  const NAMEN = { batterie: tx('Batterie leer'), defekt: tx('Ring defekt'), verloren: tx('Ring verloren'), sonstiges: tx('Sonstiger Grund'), aktiv: tx('Noch aktiv') };
+  const h = (v) => stunden(v * 3600);
+  const l = g.lebensdauer || [];
+  if (!l.length) { el.innerHTML = T`<p class="leer">${esc(tx('Noch keine Ringe gemeldet.'))}</p>`; return; }
+  const eigene = g.eigene || [];
+  el.innerHTML = T`<p class="leise">${esc(tx('Aufnahmezeit je Ring: Balken vom kürzesten bis zum längsten Ring, farbiger Strich beim Durchschnitt, schwarzer Strich = deine Ringe.'))}</p>
+    ${l.map((x) => { const span = x.max_h - x.min_h, lage = (v) => span > 0 ? ((v - x.min_h) / span) * 100 : 50, pos = lage(x.schnitt_h), name = NAMEN[x.status] ?? x.status;
+      const mein = eigene.filter((e) => e.status === x.status);
+      return T`<div class="wortblock"><div class="zeile"><strong>${esc(name)}</strong><span class="leise">${esc(tx('{0} Ringe', x.ringe))}</span></div>
+      <div class="wortskala" role="img" aria-label="${esc(tx('{0}: Min {1}, Ø {2}, Max {3}', name, h(x.min_h), h(x.schnitt_h), h(x.max_h)))}">
+        <span class="wortschnitt" data-pos="${pos}">${esc(tx('Ø {0}', h(x.schnitt_h)))}</span>
+        <span class="wortbalken"><i data-pos="${pos}"></i>${mein.map((e) => T`<i class="eigen" data-pos="${lage(e.stunden)}" title="${esc(tx('Dein Ring {0}: {1}', e.ring, h(e.stunden)))}"></i>`).join('')}</span>
+        <span class="wortgrenzen"><span>${esc(tx('Min {0}', h(x.min_h)))}</span><span>${esc(tx('Max {0}', h(x.max_h)))}</span></span></div>
+      ${mein.length ? T`<p class="leise klein">${esc(tx('Deine Ringe: {0}', mein.map((e) => h(e.stunden)).join(' · ')))}</p>` : ''}</div>`; }).join('')}
+    ${g.stand ? T`<p class="leise">${esc(tx('Stand: {0}', zeit(g.stand)))}</p>` : ''}`;
+  setzeWortlage(el);
+}
+
+// Rückmeldung an den Entwickler: Kommentar oder Fehler mit App-Version, auf Wunsch mit E-Mail-Adresse.
+async function zeigeRueckmeldung() {
+  let art = 'kommentar';
+  seite.innerHTML = T`<p><a class="btn klein" href="/status">← ${esc(tx('Status'))}</a></p><h1>${esc(tx('Rückmeldung senden'))}</h1>
+    <form novalidate id="rform">
+      <nav class="btn-group" aria-label="${esc(tx('Art'))}"><button type="button" class="btn aktiv" data-art="kommentar" aria-pressed="true">${esc(tx('Kommentar'))}</button><button type="button" class="btn" data-art="fehler" aria-pressed="false">${esc(tx('Fehler melden'))}</button></nav>
+      <label for="rtext">${esc(tx('Text'))}</label><textarea id="rtext" rows="7" maxlength="4000" required></textarea>
+      <p class="leise hilfe" id="rhilfe">${esc(tx('Was gefällt dir, was fehlt? Höchstens 4000 Zeichen.'))}</p>
+      <label for="rmail">${esc(tx('E-Mail für eine Antwort (optional)'))}</label><input id="rmail" type="email" maxlength="200" autocomplete="email" placeholder="name@beispiel.de">
+      <div class="leiste"><button class="btn haupt" type="submit">${esc(tx('Senden'))}</button><a class="btn" href="/status">${esc(tx('Abbrechen'))}</a></div></form>`;
+  const form = document.getElementById('rform');
+  form.querySelectorAll('[data-art]').forEach((b) => { b.onclick = () => {
+    art = b.dataset.art;
+    form.querySelectorAll('[data-art]').forEach((x) => { x.classList.toggle('aktiv', x === b); x.setAttribute('aria-pressed', x === b ? 'true' : 'false'); });
+    document.getElementById('rhilfe').textContent = art === 'fehler' ? tx('Was hast du gemacht, was ist passiert, was hättest du erwartet? Höchstens 4000 Zeichen.') : tx('Was gefällt dir, was fehlt? Höchstens 4000 Zeichen.');
+  }; });
+  form.onsubmit = async (ev) => {
+    ev.preventDefault();
+    const text = document.getElementById('rtext').value.trim();
+    if (!text) return melde(tx('Bitte einen Text eingeben'));
+    const knopf = form.querySelector('[type=submit]');
+    knopf.disabled = true;
+    try {
+      const email = document.getElementById('rmail').value.trim();
+      if (email && !document.getElementById('rmail').checkValidity()) { knopf.disabled = false; return melde(tx('E-Mail-Adresse ungültig')); }
+      await api('/api/rueckmeldung', { method: 'POST', body: { art, text, email } });
+      melde(tx('Danke! Rückmeldung gesendet'));
+      geheZu('/status', true);
+    } catch (f) { knopf.disabled = false; melde(f.message); }
+  };
+}
+
 async function zeigeBenachrichtigungen() {
   seite.innerHTML = T`${statusReiter('benachrichtigungen')}<p class="leer">Lädt …</p>`;
   const laden = async () => {
@@ -5287,11 +5460,62 @@ async function zeigeVerbinden() {
   aufraeumen = () => { seite.onclick = null; };
 }
 
+// Rücksprung nach der Anmeldung (?weiter=/pfad): nur Pfade dieser Adresse.
+const eigenerPfad = (p) => {
+  if (typeof p !== 'string' || !p.startsWith('/') || /[\x00-\x20\\]/.test(p)) return false;
+  try { return new URL(p, location.origin).origin === location.origin && !p.startsWith('//'); } catch { return false; }
+};
+const springeWeiter = (p) => (p.startsWith('/verbinden?') ? geheZu(p, true) : location.replace(p));
+
+// Erste Einrichtung: Knopf „Einrichten“ (nur der erste Browser, nur 5 Minuten nach dem Start), sonst Hinweis auf Neustart.
+function zeigeEinrichtenKnopf(s) {
+  const offen = s.einrichtung === 'offen';
+  seite.innerHTML = T`<div class="mitte"><h1>${esc(tx('Einrichtung'))}</h1>
+    <p>${esc(s.einrichtung === 'gesperrt' ? tx('Der Dienst läuft im Einrichtungsassistenten.') : s.ersteinrichtung ? tx('Diese Installation ist noch nicht eingerichtet.') : tx('Es gibt noch keinen Passkey für den Admin.'))}</p>
+    ${offen ? T`<p class="leise">${esc(tx('Möglich in den ersten 5 Minuten nach dem Start des Dienstes, nur in einem Browser.'))}</p>
+      <p><button class="btn haupt" id="einrichten">${esc(tx('Einrichten'))}</button></p>
+      <p aria-live="polite"><span class="leise">${esc(tx('Noch möglich für'))}</span> <strong id="einrichtrest"></strong></p>
+      <span class="balken"><i id="einrichtbalken"></i></span>`
+    : T`<div class="hinweis warn">${esc(s.einrichtung === 'gesperrt' ? tx('Die Einstellungen sind ungültig. Den Link aus dem Log des Dienstes öffnen (pebble ersteinrichtung).') : s.einrichtung === 'vergeben' ? tx('Die Einrichtung wurde schon in einem anderen Browser begonnen. Für einen neuen Versuch den Dienst neu starten.') : tx('Die Einrichtung ist nur in den ersten 5 Minuten nach dem Start möglich. Bitte den Dienst neu starten (z. B. systemctl restart pebble-webhook oder den Container neu starten) und diese Seite neu laden.'))}</div>
+      <p><button class="btn" id="neuladen">${esc(tx('Neu laden'))}</button></p>`}</div>`;
+  const restEl = document.getElementById('einrichtrest');
+  if (restEl) {
+    const ende = Date.now() + (s.einrichtung_rest || 0) * 1000, balken = document.getElementById('einrichtbalken');
+    const tick = () => {
+      if (!restEl.isConnected) return clearInterval(uhr);
+      const r = Math.max(0, Math.round((ende - Date.now()) / 1000));
+      restEl.textContent = tx('{0} min', `${Math.floor(r / 60)}:${String(r % 60).padStart(2, '0')}`);
+      balken.style.width = `${(r / 300) * 100}%`;
+      if (r <= 0) { clearInterval(uhr); location.reload(); }
+    };
+    const uhr = setInterval(tick, 1000);
+    tick();
+  }
+  const nl = document.getElementById('neuladen');
+  if (nl) nl.onclick = () => location.reload();
+  const k = document.getElementById('einrichten');
+  if (k) k.onclick = async () => {
+    k.disabled = true;
+    try {
+      if (s.ersteinrichtung) {
+        const r = await api('/api/ersteinrichtung/start', { method: 'POST' });
+        location.replace(T`/ersteinrichtung?code=${encodeURIComponent(r.code)}`);
+      } else {
+        const r = await api('/api/auth/ersteinrichten', { method: 'POST' });
+        location.replace(r.weiter);
+      }
+    } catch (f) { melde(f.message); setTimeout(() => location.reload(), 2500); }
+  };
+}
+
 async function zeigeAnmelden() {
+  const ziel = new URLSearchParams(location.search).get('weiter');
+  if (eigenerPfad(ziel)) try { sessionStorage.setItem('nach-anmeldung', ziel); } catch { /* dann zur Startseite */ }
   const s = await api('/api/sitzung').catch(() => null);
-  if (s?.angemeldet) return geheZu('/', true);
+  if (s?.angemeldet) return eigenerPfad(ziel) ? springeWeiter(ziel) : geheZu('/', true);
+  // Noch nicht eingerichtet (kein Passkey bzw. Einrichtungsassistent): „Einrichten“ nur in den ersten 5 Minuten nach dem Start.
+  if (s && (s.ersteinrichtung || !s.eingerichtet) && s.einrichtung) return zeigeEinrichtenKnopf(s);
   seite.innerHTML = T`<div class="mitte"><h1>Anmelden</h1>
-    ${s && !s.eingerichtet ? T('<div class="hinweis warn">Noch kein Passkey eingerichtet. Auf dem Server <code>pebble-webhook enroll</code> ausführen und den Einmal-Link öffnen.</div>') : ''}
     ${s?.neue_adresse ? T`<div class="hinweis warn">Neue Adresse: Passkeys gelten nur für die alte. Als Admin mit deinem Wiederherstellungscode anmelden und einen neuen Passkey anlegen; alle anderen lädt der Admin danach unter Nutzer neu ein.</div>
       <form class="einstellungen" id="codeanmeldung" novalidate><div class="namenfeld"><label for="wcode-an">Wiederherstellungscode (Admin)</label><input id="wcode-an" autocomplete="off" placeholder="XXXXX-XXXXX-XXXXX-XXXXX-XXXXXX" required></div>
         <div class="leiste"><button class="btn haupt" type="submit">Weiter zum Passkey</button></div></form>` : ''}
@@ -5343,7 +5567,8 @@ async function zeigeAnmelden() {
       starteLive();
       let weiter = '/';
       try { weiter = sessionStorage.getItem('nach-anmeldung') || '/'; sessionStorage.removeItem('nach-anmeldung'); } catch { /* Startseite */ }
-      geheZu(weiter.startsWith('/verbinden?') ? weiter : '/', true);
+      if (eigenerPfad(weiter) && weiter !== '/') springeWeiter(weiter);
+      else geheZu('/', true);
     } catch (f) {
       ev.target.disabled = false;
       melde(f.name === 'NotAllowedError' ? tx('Anmeldung abgebrochen') : f.message);

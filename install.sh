@@ -196,8 +196,12 @@ case "$MODE" in
             || { echo "checksum mismatch" >&2; exit 1; }
         [ "$(grep -cE " (pebble-webhook-linux-$ARCH|install.sh)\$" "$TMP/SHA256SUMS")" = 2 ] || { echo "checksums missing" >&2; exit 1; }
         if [ -n "$CACHE" ] && id pebble >/dev/null 2>&1; then
-            chmod 0644 "$TMP/pebble-webhook-linux-$ARCH" "$TMP/install.sh" "$TMP/SHA256SUMS"
-            runuser -u pebble -- sh -c 'umask 027; mkdir -p "$1" && cp "$2"/pebble-webhook-linux-* "$2/install.sh" "$2/SHA256SUMS" "$1/"' _ "$CACHE" "$TMP" || true
+            # $TMP is root-only: root reads, pebble writes (same as the cache read above).
+            if runuser -u pebble -- sh -c 'umask 027; mkdir -p "$1"' _ "$CACHE"; then
+                for f in "pebble-webhook-linux-$ARCH" install.sh SHA256SUMS; do
+                    runuser -u pebble -- sh -c 'umask 027; cat > "$1"' _ "$CACHE/$f" < "$TMP/$f" || true
+                done
+            fi
             runuser -u pebble -- find "$DATA_DIR/releases" -mindepth 1 -maxdepth 1 -type d -mtime +30 -exec rm -rf {} + 2>/dev/null || true
         fi
         install -m 0755 "$TMP/pebble-webhook-linux-$ARCH" "$TMP/pebble-webhook"
@@ -512,12 +516,13 @@ if [ -n "${FROM_REQUEST:-}" ]; then
 fi
 echo "Installed: pebble-webhook $NEW"
 if [ "$(curl -fsS http://127.0.0.1:"$(grep -oP '^LISTEN=.*:\K[0-9]+' /etc/pebble-webhook/env || echo 8080)"/healthz 2>/dev/null)" = "ersteinrichtung" ]; then
-    LINK="$(/usr/local/bin/pebble ersteinrichtung 2>/dev/null | grep -o 'http://.*' || true)"
+    PORT_E="$(grep -oP '^LISTEN=.*:\K[0-9]+' /etc/pebble-webhook/env || echo 8080)"
     HOST="$(hostname -I 2>/dev/null | awk '{print $1}')"
     echo
-    echo "Not configured yet. Open the setup wizard in a browser:"
+    echo "Not configured yet. Within the next 5 minutes open"
     echo
-    echo "  ${LINK/<server>/${HOST:-<server>}}"
+    echo "  http://${HOST:-<server>}:$PORT_E"
     echo
-    echo "Best through your HTTPS reverse proxy (replace http://host:port with your public address)."
+    echo "in a browser (best through your HTTPS reverse proxy) and choose \"Einrichten\"."
+    echo "Too late? Restart the service (systemctl restart pebble-webhook) for another 5 minutes."
 fi

@@ -9,6 +9,37 @@ Version numbers X.Y.Z:
 
 Own builds show X.Y.Z.A: **A** is a local build counter (one per deployed change, starting at 1 for every new X.Y.Z); it never appears in Git or releases, so one version can collect several changes.
 
+## [Unreleased]
+
+## [4.6.0] - 2026-11-27
+
+### New
+- Ring edit: "Set inactive" with reason (lost, defective, battery empty, other) and "Set active".
+- Question to set an unused ring inactive after 14 days while another ring is in use.
+- Ring usage page: multi-coloured bar (notes, plannings, misfires, deleted) with matching cards; hold and click + hold as cards.
+- Ring usage page links to the ring lifetime of all installations.
+- Statistics page shows the ring lifetime of all installations (cached for 6 hours) with your own rings, only while this installation sends.
+- Statistics are sent once at start and when switched on (at most hourly), including inactive rings with reason and date.
+- Anonymous monthly statistics (app version, app ID, hash and usage of active rings), switched by admins for the whole installation.
+- Send feedback: comment or bug report from the status page, with app version and optional email for a reply.
+- First setup without a link: "Set up" on the start page within 5 minutes after the start.
+- `/admin` leads admins to an operator's own admin page (`ADMIN_LINK`).
+
+### Changed
+- Inactive rings no longer warn or send push notifications.
+- Menu link "Usage" is always visible, also without an active ring.
+- An inactive ring that sends a recording again becomes active automatically.
+- Sign-in page accepts a return path (`?weiter=`).
+- Service worker serves the app shell only for app pages.
+- Statistics and feedback are sent encrypted for the receiver.
+- Setup wizard and first passkey no longer print a link.
+- New installations transcribe locally with Whisper; recordings stay on the server.
+- README: local Whisper, own AI providers and encrypted storage.
+- Docs: device code has 6 digits (was described as 4).
+
+### Fixed
+- Installer: downloaded release is stored in the local cache again.
+
 ## [4.5.0] - 2026-11-26
 
 ### New

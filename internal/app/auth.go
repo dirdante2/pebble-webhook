@@ -273,6 +273,9 @@ func (s *System) public(next http.HandlerFunc) http.HandlerFunc {
 func (s *System) handleSession(w http.ResponseWriter, r *http.Request) {
 	setUp, _ := s.DB.AnyPasskey()
 	out := map[string]any{"angemeldet": false, "eingerichtet": setUp, "neue_adresse": s.adminNeedsPasskey()}
+	if !setUp {
+		out["einrichtung"], out["einrichtung_rest"] = s.setupWin.state(), s.setupWin.rest()
+	}
 	sess, ok := s.sessionOf(r)
 	if !ok {
 		writeJSON(w, 200, out)
