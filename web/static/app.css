@@ -126,6 +126,11 @@ textarea { min-height: 9rem; resize: vertical; }
 .ringkarte p { margin: .3rem 0; }
 .umbruch { overflow-wrap: anywhere; }
 .ringbalken { display: block; padding: .5rem .2rem .3rem; color: inherit; text-decoration: none; font-size: .85rem; }
+.menuefuss .ringbalken { margin: 0 -.5rem; padding: .5rem .5rem .45rem; border-radius: 8px; cursor: pointer; }
+.menuefuss .ringbalken:hover, .menuefuss .ringbalken:focus-visible { background: var(--bg); color: var(--text); }
+.menuefuss .ringbalken.aktiv { background: var(--bg); color: var(--text); box-shadow: inset 3px 0 var(--akzent); }
+.ringpfeil { width: .9rem; height: .9rem; margin-left: .2rem; vertical-align: -.15rem; color: var(--leise); }
+.ringbalken:hover .ringpfeil { color: var(--akzent); }
 .ringtext { display: flex; justify-content: space-between; gap: .5rem; flex-wrap: wrap; }
 .ringbalken .balken, .balken.ringgross { margin: .3rem 0 0; }
 .balken.ringgross { height: .8rem; }
@@ -536,7 +541,6 @@ dialog.menue { margin: 0; inset: 0 auto 0 0; width: min(19rem, 85vw); max-width:
 dialog.menue::backdrop { background: rgb(0 0 0 / .45); }
 dialog.menue[open] { animation: menueRein .18s ease-out; }
 @keyframes menueRein { from { transform: translateX(-100%); } }
-.menuekopf { display: flex; align-items: center; gap: .5rem; padding: .6rem .75rem .6rem 1.1rem; border-bottom: 1px solid var(--linie); }
 .menuegruppe { padding: .35rem 0; }
 .menuegruppe + .menuegruppe { border-top: 1px solid var(--linie); }
 .menuehaupt, .menueunter { display: flex; align-items: center; gap: .5rem; color: var(--text); text-decoration: none; }
@@ -551,8 +555,28 @@ dialog.menue[open] { display: flex; flex-direction: column; }
 #nav { display: flex; flex-direction: column; flex: 1 0 auto; }
 .menuefuss { position: sticky; bottom: calc(-1rem - env(safe-area-inset-bottom)); margin-top: auto; display: grid; gap: .4rem; padding: .7rem 1.1rem calc(1rem + env(safe-area-inset-bottom)); margin-bottom: calc(-1rem - env(safe-area-inset-bottom));
   border-top: 1px solid var(--linie); background: var(--flaeche); font-size: .85rem; }
-.menuefusszeile { display: flex; align-items: center; justify-content: space-between; gap: .5rem; }
 .menuefuss a { color: var(--leise); text-decoration: none; }
+/* Fuß: Name mit Zahnrad (Link zu den Benutzereinstellungen), Abmelden rechts */
+.nutzerzeile { display: flex; align-items: center; gap: .25rem; }
+.nutzerzeile .nutzerknopf { flex: 1; min-width: 0; width: auto; margin-right: 0; }
+.nutzerknopf.aktiv { color: var(--akzent); }
+.abmeldeknopf { display: inline-flex; align-items: center; justify-content: center; width: 2.4rem; height: 2.4rem; margin-right: -.5rem; border: 0; border-radius: 8px;
+  background: none; color: var(--schlecht); cursor: pointer; flex: none; }
+.abmeldeknopf:hover, .abmeldeknopf:focus-visible { background: var(--bg); }
+.abmeldeknopf svg { width: 1.2rem; height: 1.2rem; }
+.nutzerknopf { display: flex; align-items: center; gap: .55rem; width: calc(100% + 1rem); min-height: 2.6rem; padding: .3rem .5rem; margin: 0 -.5rem; border: 0; border-radius: 8px;
+  background: none; font: inherit; font-size: .98rem; font-weight: 650; color: var(--text); cursor: pointer; text-align: left; }
+.nutzerknopf:hover, .nutzerknopf:focus-visible { background: var(--bg); }
+.menuefuss a.nutzerknopf { color: var(--text); text-decoration: none; }
+.menuefuss a.nutzerknopf.aktiv { color: var(--akzent); }
+.nutzerknopf svg { width: 1.2rem; height: 1.2rem; flex: none; }
+.nutzerknopf > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fusszeile { display: flex; align-items: center; justify-content: space-between; gap: .5rem; }
+.fussversion { font-size: .8rem; }
+.fussspende { display: inline-flex; align-items: center; gap: .3rem; padding: .2rem .45rem; margin-right: -.45rem; border-radius: 6px; font-size: .8rem; }
+.fussspende svg { width: .95rem; height: .95rem; flex: none; }
+.menuefuss a.fussspende:hover, .menuefuss a.fussspende:focus-visible { background: var(--bg); color: var(--akzent); }
+
 .tagverwaltung { padding-top: .2rem; padding-bottom: .2rem; }
 .tagzeile { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: .6rem; padding: .55rem 0; font-size: .88rem; }
 .tagzeile + .tagzeile { border-top: 1px solid var(--linie); }
@@ -570,7 +594,6 @@ a.tagchip { text-decoration: none; }
   body.mitmenue { padding-left: 17rem; }
   body.mitmenue .menueknopf { display: none; }
   dialog.menue:not(:modal) { position: fixed; inset: 0 auto 0 0; z-index: 6; width: 17rem; max-width: none; animation: none; }
-  dialog.menue:not(:modal) [data-menue-zu] { display: none; }
 }
 /* Desktop: Suchleiste mittig im Kopf statt über die ganze Breite */
 @media (min-width: 760px) {
@@ -605,11 +628,7 @@ a.tagchip { text-decoration: none; }
   .btn-group.unter.reiter4 .btn { margin: 0; border-radius: 10px; }
 }
 
-.themeknopf { display: inline-flex; align-items: center; justify-content: center; width: 2.2rem; height: 2.2rem; border-radius: 50%; color: var(--leise); }
-.themeknopf:hover, .themeknopf:focus-visible { color: var(--akzent); background: var(--bg); }
-.themeknopf svg { width: 1.3rem; height: 1.3rem; }
 .menueunter.mehr { width: 100%; border: 0; background: none; font: inherit; font-size: .95rem; color: var(--akzent); cursor: pointer; text-align: left; }
-.menueunter.abmelden { width: 100%; border: 0; background: none; font: inherit; font-size: .95rem; color: var(--schlecht); cursor: pointer; text-align: left; padding-left: 1.1rem; }
 .lpende { margin-left: auto; flex: none; display: inline-flex; align-items: center; gap: .4rem; }
 .neupunkt { width: .6rem; height: .6rem; border-radius: 50%; background: #d9c36a; flex: none; }
 @media (prefers-color-scheme: dark) { :root:not([data-modus="hell"]) .neupunkt { background: #a8923f; } }
@@ -932,3 +951,48 @@ a.kartenlink strong { min-width: 0; overflow-wrap: anywhere; }
 .anbieterkarte { margin-bottom: .6rem; overflow-wrap: anywhere; }
 .anbieterkarte .zeile { flex-wrap: nowrap; align-items: flex-start; }
 .anbieterkarte details { margin-top: .4rem; }
+
+/* Statistik „Erweitert“: gesendetes JSON mit Kommentaren */
+details.erweitert { margin-top: 1.5rem; }
+details.erweitert summary { cursor: pointer; font-weight: 600; }
+pre.jsonc { margin: .6rem 0 0; padding: .7rem .8rem; border-radius: 10px; background: var(--bg); border: 1px solid var(--linie); font-size: .78rem; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
+pre.jsonc .jkommentar { color: var(--leise); font-style: italic; }
+pre.jsonc .jschluessel { color: var(--akzent); }
+
+/* Datei-Auswahl wie die übrigen Felder und Knöpfe */
+input[type=file] { width: 100%; box-sizing: border-box; padding: .4rem; border: 1px dashed var(--linie); border-radius: 10px; background: var(--flaeche); color: var(--leise); font: inherit; font-size: .9rem; cursor: pointer; }
+input[type=file]:focus-visible { outline: none; border-color: var(--akzent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--akzent) 22%, transparent); }
+input[type=file]::file-selector-button { margin-right: .75rem; min-height: 2.3rem; padding: .35rem .9rem; border: 1px solid var(--akzent); border-radius: 10px; background: var(--akzent); color: var(--akzent-text); font: inherit; font-weight: 600; cursor: pointer; }
+input[type=file]:disabled { opacity: .6; cursor: default; }
+
+/* Ersteinrichtung: Fortschrittsleiste (klebt unter dem Kopf), je Schritt ein Block */
+.erschritte { position: sticky; z-index: 4; background: var(--bg); margin: 0 -1rem; padding: .5rem 1rem .3rem; border-bottom: 1px solid var(--linie); }
+.erschritte ol { display: flex; gap: 4px; list-style: none; margin: 0; padding: 0; }
+.erschritte li { flex: 1 1 0; min-width: 0; margin: 0; }
+.erblock { display: block; width: 100%; min-height: 2.2rem; padding: .2rem .15rem; border: 1px solid var(--linie); border-radius: 6px; background: var(--flaeche); color: var(--leise); font: inherit; font-size: .72rem; font-weight: 600; cursor: pointer; }
+.erblock span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.erblock.erledigt { background: color-mix(in srgb, var(--akzent) 22%, var(--flaeche)); border-color: color-mix(in srgb, var(--akzent) 45%, var(--linie)); color: var(--text); }
+.erblock.aktiv { background: var(--akzent); border-color: var(--akzent); color: var(--akzent-text); }
+.erblock:disabled { cursor: default; opacity: .75; }
+.erstand { margin: .35rem 0 0; font-size: .85rem; color: var(--leise); }
+.erform h2 { margin-top: 1rem; }
+.erleiste { justify-content: space-between; }
+.erleiste [type=submit] { margin-left: auto; min-width: 8rem; }
+.einstellungen .mitknopf select { flex: 1; min-width: 0; }
+.wahlliste { display: flex; flex-direction: column; gap: .4rem; margin: .5rem 0; }
+.wahlzeile { display: flex; align-items: flex-start; gap: .6rem; margin: 0; padding: .6rem .75rem; border: 1px solid var(--linie); border-radius: 10px; background: var(--flaeche); font-weight: 400; cursor: pointer; }
+.wahlzeile.an { border-color: var(--akzent); }
+.wahlzeile input { margin-top: .2rem; }
+.wahlzeile strong { display: block; }
+.wahlzeile .leise { display: block; font-size: .85rem; }
+.erneu { margin-top: .8rem; }
+details.erweitert { margin: .9rem 0 0; font-size: inherit; }
+details.erweitert > summary { font-size: .9rem; }
+.kizeile.erzeile { grid-template-columns: minmax(0, 1fr) auto; cursor: default; }
+.kizeile.erzeile .btn { grid-area: stift; }
+.erstatistik { font-size: .78rem; margin: 1.8rem 0 0; font-weight: 400; color: var(--leise); }
+p.erstatistik { margin: .2rem 0 0; }
+.erstatistik input { width: .9rem; height: .9rem; }
+.erblock .erkurz { display: none; }
+@media (max-width: 560px) { .erblock:not(.aktiv) .erlang { display: none; } .erblock:not(.aktiv) .erkurz { display: block; } .erschritte li:has(.aktiv) { flex: 3 1 0; } }
+.erleiste [hidden] { display: none; }

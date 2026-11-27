@@ -548,7 +548,47 @@ func (a *App) telemetryFlush(ctx context.Context) {
 
 // handleTelemetry: ob die Statistik in diesem Build verfügbar und für den Nutzer eingeschaltet ist.
 func (a *App) handleTelemetry(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, 200, map[string]any{"verfuegbar": telemetryAvailable(), "aktiv": a.telemetryOn(), "admin": a.isAdmin()})
+	admin := a.isAdmin()
+	out := map[string]any{"verfuegbar": telemetryAvailable(), "aktiv": a.telemetryOn(), "admin": admin}
+	if !telemetryAvailable() {
+		writeJSON(w, 200, out)
+		return
+	}
+	// Vorschau „Erweitert“: genau das, was gesendet wird – Admins die ganze Installation, Nutzer nur ihre Ringe.
+	id, err := a.System.appID()
+	if err != nil {
+		writeErr(w, 500, "speicher", "Datenbankfehler")
+		return
+	}
+	apps := []*App{a}
+	if admin {
+		apps = a.System.Apps()
+	}
+	m := telemetryMonth{AppID: id, Version: telemetryVersion(a.System.Version), Channel: a.System.updateChannel(), Month: time.Now().Format("2006-01"), Rings: []telemetryRing{}}
+	events := []telemetryEvent{}
+	for _, x := range apps {
+		rings, err := x.telemetryRings()
+		if err != nil {
+			writeErr(w, 500, "speicher", "Datenbankfehler")
+			return
+		}
+		m.Rings = append(m.Rings, rings...)
+		all, err := x.DB.Rings()
+		if err != nil {
+			writeErr(w, 500, "speicher", "Datenbankfehler")
+			return
+		}
+		for _, g := range all {
+			if g.EndedAt == 0 {
+				continue
+			}
+			if ev, ok, err := x.ringEventOf(g); err == nil && ok {
+				events = append(events, ev)
+			}
+		}
+	}
+	out["bericht"], out["ereignisse"] = m, events
+	writeJSON(w, 200, out)
 }
 
 // Ring-Lebensdauer aller Installationen (Summen des Empfängers, öffentlich), 6 h zwischengespeichert.

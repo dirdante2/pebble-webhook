@@ -4,6 +4,25 @@ Summarised notes for **beta** and **stable** releases. Each section lists only w
 
 A tag `vX.Y.Z-stable` (stable; before 1.33.5 `vX.Y.Z`) or `vX.Y.Z-beta` (beta) needs a section `## [X.Y.Z]` or `## [X.Y.Z-beta]` here; the release workflow uses it as the release notes.
 
+## [4.7.0] - 2026-11-27
+
+### Account
+- Own settings page "Account" with tabs Overview, Pebble app, Push, Calendar, Theme: passkeys, apps and access, recovery code.
+- Any number of named API tokens; "Connect app" guided per app, tokens created and filled in right there.
+- New recovery code re-encrypts all own data with a new key, with progress bar.
+
+### AI providers
+- OpenRouter as recommended provider (connect your account instead of an API key).
+- New providers xAI Grok, Google Gemini and Meta Muse with web search, images and transcription.
+
+### Setup
+- Wizard in 6 steps with AI providers, key choice (one shared or separate system key) and summary.
+
+### Changed
+- Breaking: all external addresses under /api/v1/ (Pebble webhook, calendar, MCP, OAuth); old addresses gone.
+- Pebble test events only confirm the connection; a card shows the latest test until confirmed.
+- Sidebar: name with gear leads to Account settings, sign-out beside it; version and donate link in one line.
+
 ## [4.6.1] - 2026-11-27
 
 Stable release of 4.6.0 plus:

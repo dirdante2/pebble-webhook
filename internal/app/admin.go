@@ -263,6 +263,10 @@ func (s *System) handleUserEdit(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusConflict, "letzter_admin", "Der letzte Admin bleibt Admin")
 		return
 	}
+	if in.Gesperrt != nil && *in.Gesperrt && schluessel.HasPending(s.Cfg.KeyDir, u.ID) {
+		writeErr(w, http.StatusConflict, "umschluesselung", "Die Daten werden gerade neu verschlüsselt – danach sperren")
+		return
+	}
 	if in.Gesperrt != nil && *in.Gesperrt && (u.ID == me.uid || lastAdmin) {
 		writeErr(w, http.StatusConflict, "selbst", "Den eigenen Zugang und den letzten Admin kann man nicht sperren")
 		return
@@ -328,6 +332,10 @@ func (s *System) handleUserDelete(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusConflict, "selbst", "Den eigenen Zugang und den letzten Admin kann man nicht löschen")
 		return
 	}
+	if schluessel.HasPending(s.Cfg.KeyDir, u.ID) {
+		writeErr(w, http.StatusConflict, "umschluesselung", "Die Daten werden gerade neu verschlüsselt – danach löschen")
+		return
+	}
 	s.closeUser(u.ID, "")
 	if err := s.DB.DeleteUser(u.ID); err != nil {
 		writeErr(w, 500, "speicher", "Nutzer nicht gelöscht")
@@ -362,29 +370,42 @@ func (a *App) handleAPIToken(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, "speicher", "Datenbankfehler")
 		return
 	}
-	out := map[string]any{"aktiv": len(toks) > 0}
-	if len(toks) > 0 {
-		out["angelegt"], out["zuletzt"] = toks[0].CreatedAt, toks[0].LastUsedAt
+	out := []map[string]any{}
+	for _, t := range toks {
+		out = append(out, map[string]any{"id": t.ID, "name": t.Label, "angelegt": t.CreatedAt, "zuletzt": t.LastUsedAt})
 	}
-	writeJSON(w, 200, out)
+	writeJSON(w, 200, map[string]any{"tokens": out})
 }
 
+// handleAPITokenNew legt ein weiteres API-Token an (je App oder Skript eines, mit eigenem Namen); der Klartext
+// steht nur in dieser Antwort.
 func (a *App) handleAPITokenNew(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Name string `json:"name"`
+	}
+	readJSON(r, &in)
+	name := store.Preview(strings.TrimSpace(in.Name), 40)
+	if name == "" {
+		writeErr(w, 400, "name", "Bitte einen Namen für das Token eingeben (z. B. die App)")
+		return
+	}
 	token := store.NewID() + store.NewID()
-	if err := a.System.DB.DeleteTokens(a.UserID, store.TokenAPI); err != nil {
+	t := store.UserToken{ID: store.NewID(), UserID: a.UserID, Kind: store.TokenAPI, Label: name}
+	if err := a.System.DB.AddToken(t, store.Hash(token)); err != nil {
 		writeErr(w, 500, "speicher", "Datenbankfehler")
 		return
 	}
-	if err := a.System.DB.AddToken(store.UserToken{UserID: a.UserID, Kind: store.TokenAPI, Label: "API-Token"}, store.Hash(token)); err != nil {
-		writeErr(w, 500, "speicher", "Datenbankfehler")
-		return
-	}
-	writeJSON(w, 200, map[string]any{"token": token})
+	writeJSON(w, 200, map[string]any{"id": t.ID, "name": name, "token": token})
 }
 
 func (a *App) handleAPITokenDelete(w http.ResponseWriter, r *http.Request) {
-	if err := a.System.DB.DeleteTokens(a.UserID, store.TokenAPI); err != nil {
+	ok, err := a.System.DB.DeleteToken(a.UserID, store.TokenAPI, r.PathValue("id"))
+	if err != nil {
 		writeErr(w, 500, "speicher", "Datenbankfehler")
+		return
+	}
+	if !ok {
+		writeErr(w, 404, "fehlt", "Token nicht gefunden")
 		return
 	}
 	writeJSON(w, 200, map[string]any{"ok": true})

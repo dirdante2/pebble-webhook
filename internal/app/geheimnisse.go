@@ -158,6 +158,56 @@ func (s *System) bindSystemKey(key []byte, u *store.User) error {
 	return s.saveSystemKeyInfo(systemKeyInfo{Art: "nutzer", UID: u.ID, Wrap: wrap, KeyID: schluessel.SystemKeyID(key)})
 }
 
+// Wahl aus dem Einrichtungsassistenten: „code“ = mehrere Admins, der Systemschlüssel bekommt einen eigenen Code.
+// Er entsteht beim ersten Start mit Nutzer und wartet (verschlüsselt in der DB des ersten Admins) bis zur Anzeige
+// auf der Willkommensseite neben dessen Wiederherstellungscode.
+const (
+	systemKeyChoiceKV    = "systemschluessel_wahl"
+	systemCodePendingKey = "systemcode_offen"
+)
+
+// applySystemKeyChoice setzt die Wahl „eigener Code“ einmalig um (nach ensureSystemKey).
+func (s *System) applySystemKeyChoice() {
+	if v, _ := s.DB.Get(systemKeyChoiceKV); v != "code" {
+		return
+	}
+	info, ok := s.systemKeyInfo()
+	if !ok {
+		return
+	}
+	if info.Art == "code" {
+		s.DB.Set(systemKeyChoiceKV, "")
+		return
+	}
+	key, err := schluessel.SystemKey(s.Cfg.KeyDir, false)
+	if err != nil {
+		return
+	}
+	owner, _ := s.app(info.UID)
+	if owner == nil {
+		logf("Systemschlüssel: eigener Code wartet – Admin %d nicht geöffnet", info.UID)
+		return
+	}
+	code, err := schluessel.NewCode()
+	if err != nil {
+		return
+	}
+	wrap, err := schluessel.WrapSystemCode(code, key)
+	if err != nil {
+		return
+	}
+	if err := owner.DB.Set(systemCodePendingKey, code); err != nil {
+		logf("Systemschlüssel: Code nicht gespeichert: %v", err)
+		return
+	}
+	if err := s.saveSystemKeyInfo(systemKeyInfo{Art: "code", Wrap: wrap, KeyID: schluessel.SystemKeyID(key)}); err != nil {
+		owner.DB.Set(systemCodePendingKey, "")
+		return
+	}
+	s.DB.Set(systemKeyChoiceKV, "")
+	logf("Systemschlüssel: eigener Wiederherstellungscode erzeugt (Wahl der Einrichtung)")
+}
+
 // ensureSystemKey (beim Start, nach Nutzer-Änderungen): Systemschlüssel anlegen, falls es keinen gibt, und
 // eingewickelt halten – an einen aktiven Admin, solange kein eigener Code gewählt ist.
 func (s *System) ensureSystemKey() {

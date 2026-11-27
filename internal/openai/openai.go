@@ -30,10 +30,17 @@ type Client struct {
 	Plugin         bool // Websuche als OpenRouter-Web-Plugin (sonst an der Adresse erkannt)
 	ProviderSearch bool
 	SearchURL      string
+	// Dialect: Anbieter-Art (openai, xai, muse, gemini, openrouter, dienst, lokal) – wo sich die APIs unterscheiden
+	// (Websuche, Denkaufwand, Bilder, Transkription, gemeldete Kosten).
+	Dialect string
+	Name    string // Name des Zugangs für Meldungen
 }
 
 // label: Name des Gegenübers in Fehlermeldungen.
 func (c *Client) label() string {
+	if c.Name != "" {
+		return c.Name
+	}
 	if c.Chat {
 		return i18n.T("KI-Dienst")
 	}
@@ -97,14 +104,27 @@ func (c *Client) send(req *http.Request, out any) error {
 
 // Transcribe schickt eine Aufnahme (name: Dateiname mit Endung) zur Transkription und liefert den Text und die
 // abgerechnete Dauer in Sekunden (-1, wenn die Antwort keine Dauer nennt).
-func (c *Client) Transcribe(ctx context.Context, model, name string, audio []byte, mime, language, prompt string) (string, float64, error) {
+// Dazu die Kosten, die der Anbieter meldet (nil = keine Angabe).
+func (c *Client) Transcribe(ctx context.Context, model, name string, audio []byte, mime, language, prompt string) (string, float64, *float64, error) {
+	switch c.Dialect {
+	case "xai":
+		return c.transcribeXAI(ctx, model, name, audio, mime, language, prompt)
+	case "gemini":
+		return c.transcribeChat(ctx, model, audio, mime, language, prompt)
+	}
+	text, seconds, cost, err := c.transcribeMultipart(ctx, model, name, audio, mime, language, prompt)
+	return text, seconds, cost, err
+}
+
+// transcribeMultipart: /audio/transcriptions im OpenAI-Format (OpenAI, OpenRouter, kompatible Dienste).
+func (c *Client) transcribeMultipart(ctx context.Context, model, name string, audio []byte, mime, language, prompt string) (string, float64, *float64, error) {
 	var body bytes.Buffer
 	w := multipart.NewWriter(&body)
 	w.WriteField("model", model)
 	w.WriteField("response_format", "json")
 	if language != "" {
-		// Ältere Modelle kennen nur `language`, neuere erwarten `languages[]`.
-		if strings.HasPrefix(model, "gpt-4o") || strings.HasPrefix(model, "whisper") {
+		// Ältere OpenAI-Modelle kennen nur `language`, neuere erwarten `languages[]`; andere Dienste `language`.
+		if (c.Dialect != "" && c.Dialect != "openai") || strings.HasPrefix(model, "gpt-4o") || strings.HasPrefix(model, "whisper") {
 			w.WriteField("language", language)
 		} else {
 			w.WriteField("languages[]", language)
@@ -123,54 +143,146 @@ func (c *Client) Transcribe(ctx context.Context, model, name string, audio []byt
 
 	req, err := http.NewRequestWithContext(ctx, "POST", c.Base+"/audio/transcriptions", &body)
 	if err != nil {
-		return "", -1, err
+		return "", -1, nil, err
 	}
 	req.Header.Set("Content-Type", w.FormDataContentType())
 	var out struct {
-		Text  string `json:"text"`
-		Usage *struct {
-			Type    string  `json:"type"`
-			Seconds float64 `json:"seconds"`
-		} `json:"usage"`
+		Text  string          `json:"text"`
+		Usage json.RawMessage `json:"usage"`
 	}
 	if err := c.send(req, &out); err != nil {
-		return "", -1, err
+		return "", -1, nil, err
 	}
+	var usage struct {
+		Type    string  `json:"type"`
+		Seconds float64 `json:"seconds"`
+	}
+	json.Unmarshal(out.Usage, &usage)
 	seconds := -1.0
-	if out.Usage != nil && out.Usage.Type == "duration" {
-		seconds = out.Usage.Seconds
+	// OpenAI: type „duration“; OpenRouter nennt die Sekunden ohne type (Tokens-Abrechnung hat type „tokens“).
+	if usage.Seconds > 0 && (usage.Type == "duration" || usage.Type == "") {
+		seconds = usage.Seconds
 	}
-	return strings.TrimSpace(out.Text), seconds, nil
+	return strings.TrimSpace(out.Text), seconds, reportedCost(out.Usage), nil
 }
 
-// Image erzeugt ein Bild (Images-API) und liefert es als WebP. quality: low | medium | high; size z. B. 1536x1024.
-func (c *Client) Image(ctx context.Context, model, prompt, size, quality string) ([]byte, error) {
-	if c.Chat {
-		return nil, i18n.Errorf("Bilder erzeugen gibt es nur mit OpenAI")
+// Image erzeugt ein Bild (Images-API) und liefert die Bilddaten (Format je Anbieter: WebP, PNG oder JPEG) und die
+// Kosten, die der Anbieter meldet (nil = keine Angabe). quality: low | medium | high; size z. B. 1536x1024.
+func (c *Client) Image(ctx context.Context, model, prompt, size, quality string) ([]byte, *float64, error) {
+	body := map[string]any{"model": model, "prompt": prompt, "n": 1}
+	path := "/images/generations"
+	switch c.Dialect {
+	case "openai", "":
+		if c.Chat {
+			return nil, nil, i18n.Errorf("%s erzeugt keine Bilder", c.label())
+		}
+		body["size"], body["quality"], body["output_format"], body["output_compression"] = size, quality, "webp", 80
+	case "xai":
+		body["response_format"], body["aspect_ratio"] = "b64_json", aspectRatio(size)
+	case "muse":
+		body["response_format"], body["size"], body["output_format"] = "b64_json", size, "webp"
+	case "gemini":
+		body["response_format"], body["size"] = "b64_json", size
+		body["extra_body"] = map[string]any{"aspect_ratio": aspectRatio(size)}
+	case "openrouter":
+		path = "/images"
+		body["response_format"], body["aspect_ratio"] = "b64_json", aspectRatio(size)
+	default:
+		return nil, nil, i18n.Errorf("%s erzeugt keine Bilder", c.label())
 	}
-	body, _ := json.Marshal(map[string]any{"model": model, "prompt": prompt, "n": 1, "size": size, "quality": quality,
-		"output_format": "webp", "output_compression": 80})
-	req, err := http.NewRequestWithContext(ctx, "POST", c.Base+"/images/generations", bytes.NewReader(body))
+	data, _ := json.Marshal(body)
+	req, err := http.NewRequestWithContext(ctx, "POST", c.Base+path, bytes.NewReader(data))
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	var out struct {
 		Data []struct {
 			B64 string `json:"b64_json"`
 		} `json:"data"`
+		Usage json.RawMessage `json:"usage"`
 	}
 	if err := c.send(req, &out); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if len(out.Data) == 0 || out.Data[0].B64 == "" {
-		return nil, i18n.Errorf("OpenAI hat kein Bild geliefert")
+		return nil, nil, i18n.Errorf("%s hat kein Bild geliefert", c.label())
 	}
-	img, err := base64.StdEncoding.DecodeString(out.Data[0].B64)
+	b64 := out.Data[0].B64
+	if i := strings.Index(b64, ";base64,"); strings.HasPrefix(b64, "data:") && i > 0 {
+		b64 = b64[i+len(";base64,"):]
+	}
+	img, err := base64.StdEncoding.DecodeString(b64)
 	if err != nil {
-		return nil, i18n.Errorf("OpenAI-Bild nicht lesbar: %w", err)
+		return nil, nil, i18n.Errorf("Bild von %s nicht lesbar: %w", c.label(), err)
 	}
-	return img, nil
+	return img, reportedCost(out.Usage), nil
+}
+
+// aspectRatio: Seitenverhältnis aus einer Größe „BxH“ (Anbieter, die nur Verhältnisse kennen).
+func aspectRatio(size string) string {
+	switch size {
+	case "1024x1024":
+		return "1:1"
+	case "1024x1536":
+		return "2:3"
+	case "1536x1024":
+		return "3:2"
+	}
+	return "auto"
+}
+
+// reportedCost: Kosten, die ein Anbieter selbst im usage-Block meldet – OpenRouter `cost` (USD), xAI
+// `cost_in_usd_ticks` (1 USD = 10^10 Ticks); nil = keine Angabe.
+func reportedCost(raw json.RawMessage) *float64 {
+	if len(raw) == 0 {
+		return nil
+	}
+	var u struct {
+		Cost  *float64 `json:"cost"`
+		Ticks *float64 `json:"cost_in_usd_ticks"`
+	}
+	if json.Unmarshal(raw, &u) != nil {
+		return nil
+	}
+	if u.Cost != nil {
+		return u.Cost
+	}
+	if u.Ticks != nil {
+		v := *u.Ticks / 1e10
+		return &v
+	}
+	return nil
+}
+
+// addCost zählt gemeldete Kosten zusammen (nil bleibt nil, solange nichts gemeldet ist).
+func addCost(sum, add *float64) *float64 {
+	if add == nil {
+		return sum
+	}
+	v := *add
+	if sum != nil {
+		v += *sum
+	}
+	return &v
+}
+
+// effort: Denkaufwand in der Sprache des Anbieters („standard“/leer = Vorgabe des Modells).
+func (c *Client) effort(e string) string {
+	if e == "" || e == "standard" {
+		return ""
+	}
+	switch c.Dialect {
+	case "muse":
+		if e == "none" {
+			return "minimal"
+		}
+	case "xai", "gemini":
+		if e == "none" || e == "minimal" {
+			return "low" // Grok 4.7 und Gemini 4 denken immer
+		}
+	}
+	return e
 }
 
 type Request struct {
@@ -211,6 +323,7 @@ type Result struct {
 	Calls        int      // ausgeführte eigene Werkzeugaufrufe
 	Incomplete   string   // Grund, wenn die Antwort abgeschnitten wurde
 	Cost         *float64 // USD nach den Preisen des Eintrags (Router); nil = nicht berechnet
+	ReportedCost *float64 // USD, wie der Anbieter sie meldet (OpenRouter, xAI); nil = keine Angabe
 	Provider     string   // Name des Eintrags, der geantwortet hat (Router)
 	Model        string   // sein Modell (Router)
 }
@@ -247,13 +360,13 @@ func (c *Client) respondResponses(ctx context.Context, r Request) (*Result, erro
 	if r.MaxOutputTokens > 0 {
 		body["max_output_tokens"] = r.MaxOutputTokens
 	}
-	if r.ReasoningEffort != "" {
-		body["reasoning"] = map[string]any{"effort": r.ReasoningEffort}
+	if e := c.effort(r.ReasoningEffort); e != "" {
+		body["reasoning"] = map[string]any{"effort": e}
 	}
 	var tools []any
 	if r.WebSearch {
 		tool := map[string]any{"type": "web_search"}
-		if r.SearchContext != "" {
+		if r.SearchContext != "" && c.Dialect != "xai" { // xAI kennt keine Suchtiefe
 			tool["search_context_size"] = r.SearchContext
 		}
 		tools = append(tools, tool)
@@ -295,10 +408,11 @@ func (c *Client) respondResponses(ctx context.Context, r Request) (*Result, erro
 		total.InputTokens += res.InputTokens
 		total.OutputTokens += res.OutputTokens
 		total.Searches += res.Searches
+		total.ReportedCost = addCost(total.ReportedCost, res.ReportedCost)
 		total.Citations = append(total.Citations, res.Citations...)
 		if !useFunctions || len(calls) == 0 {
 			if res.Text == "" {
-				return nil, i18n.Errorf("OpenAI hat keinen Text geliefert (%s)", res.Incomplete)
+				return nil, i18n.Errorf("%s hat keinen Text geliefert (%s)", c.label(), res.Incomplete)
 			}
 			total.Text, total.Incomplete = res.Text, res.Incomplete
 			return total, nil
@@ -332,11 +446,8 @@ func (c *Client) respondOnce(ctx context.Context, body map[string]any) (*Result,
 		IncompleteDetails *struct {
 			Reason string `json:"reason"`
 		} `json:"incomplete_details"`
-		Output []json.RawMessage `json:"output"`
-		Usage  struct {
-			InputTokens  int `json:"input_tokens"`
-			OutputTokens int `json:"output_tokens"`
-		} `json:"usage"`
+		Output    []json.RawMessage `json:"output"`
+		Usage     json.RawMessage   `json:"usage"`
 		ToolUsage *struct {
 			WebSearch *struct {
 				NumRequests int `json:"num_requests"`
@@ -346,7 +457,15 @@ func (c *Client) respondOnce(ctx context.Context, body map[string]any) (*Result,
 	if err := c.send(req, &out); err != nil {
 		return nil, nil, nil, err
 	}
-	res := &Result{InputTokens: out.Usage.InputTokens, OutputTokens: out.Usage.OutputTokens}
+	var usage struct {
+		InputTokens  int `json:"input_tokens"`
+		OutputTokens int `json:"output_tokens"`
+		ServerTools  *struct {
+			WebSearchCalls int `json:"web_search_calls"`
+		} `json:"server_side_tool_usage_details"` // xAI
+	}
+	json.Unmarshal(out.Usage, &usage)
+	res := &Result{InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens, ReportedCost: reportedCost(out.Usage)}
 	if out.Status == "incomplete" {
 		res.Incomplete = "unbekannt"
 		if out.IncompleteDetails != nil {
@@ -392,7 +511,7 @@ func (c *Client) respondOnce(ctx context.Context, body map[string]any) (*Result,
 		case "message":
 			for _, part := range item.Content {
 				if part.Type == "refusal" {
-					return nil, nil, nil, i18n.Errorf("OpenAI hat die Anfrage abgelehnt: %s", part.Refusal)
+					return nil, nil, nil, i18n.Errorf("%s hat die Anfrage abgelehnt: %s", c.label(), part.Refusal)
 				}
 				if part.Type != "output_text" {
 					continue
@@ -409,12 +528,15 @@ func (c *Client) respondOnce(ctx context.Context, body map[string]any) (*Result,
 	}
 	// Abgerechnet wird nach dem größeren der beiden Zähler: lieber zu hoch als zu niedrig.
 	res.Searches = counted
-	if out.ToolUsage != nil && out.ToolUsage.WebSearch != nil && out.ToolUsage.WebSearch.NumRequests > counted {
+	if out.ToolUsage != nil && out.ToolUsage.WebSearch != nil && out.ToolUsage.WebSearch.NumRequests > res.Searches {
 		res.Searches = out.ToolUsage.WebSearch.NumRequests
+	}
+	if usage.ServerTools != nil && usage.ServerTools.WebSearchCalls > res.Searches {
+		res.Searches = usage.ServerTools.WebSearchCalls
 	}
 	res.Text = strings.TrimSpace(text.String())
 	if res.Text == "" && len(calls) == 0 {
-		return nil, nil, nil, i18n.Errorf("OpenAI hat keinen Text geliefert (Status %s, %s)", out.Status, res.Incomplete)
+		return nil, nil, nil, i18n.Errorf("%s hat keinen Text geliefert (Status %s, %s)", c.label(), out.Status, res.Incomplete)
 	}
 	return res, items, calls, nil
 }

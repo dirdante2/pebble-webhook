@@ -35,6 +35,8 @@ type chatToolCall struct {
 		Name      string `json:"name"`
 		Arguments string `json:"arguments"`
 	} `json:"function"`
+	// ExtraContent: Gemini legt hier die Denk-Signatur ab; sie muss in der nächsten Runde unverändert zurück.
+	ExtraContent json.RawMessage `json:"extra_content,omitempty"`
 }
 
 // respondChat: wie Respond, über /chat/completions. Werkzeuge (eigene und SearXNG) laufen in einer Schleife;
@@ -76,6 +78,11 @@ func (c *Client) respondChat(ctx context.Context, r Request) (*Result, error) {
 	if r.MaxOutputTokens > 0 {
 		body["max_tokens"] = r.MaxOutputTokens
 	}
+	if c.Dialect == "gemini" {
+		if e := c.effort(r.ReasoningEffort); e != "" {
+			body["reasoning_effort"] = e
+		}
+	}
 	if r.Schema != nil {
 		body["response_format"] = map[string]any{"type": "json_schema",
 			"json_schema": map[string]any{"name": r.SchemaName, "schema": r.Schema, "strict": true}}
@@ -100,6 +107,7 @@ func (c *Client) respondChat(ctx context.Context, r Request) (*Result, error) {
 		}
 		total.InputTokens += msg.usage[0]
 		total.OutputTokens += msg.usage[1]
+		total.ReportedCost = addCost(total.ReportedCost, msg.cost)
 		// Websuche des Anbieters: je Aufruf eine Suche (OpenRouter rechnet je Anfrage ab; andere, wenn sie Quellen liefern).
 		if plugin || (provider && len(msg.citations) > 0) {
 			total.Searches++
@@ -122,7 +130,11 @@ func (c *Client) respondChat(ctx context.Context, r Request) (*Result, error) {
 			total.Citations = found.cited(text, total.Citations)
 			return total, nil
 		}
-		messages = append(messages, map[string]any{"role": "assistant", "content": msg.Content, "tool_calls": msg.ToolCalls})
+		assistant := map[string]any{"role": "assistant", "content": msg.Content, "tool_calls": msg.ToolCalls}
+		if len(msg.ReasoningDetails) > 0 && string(msg.ReasoningDetails) != "null" {
+			assistant["reasoning_details"] = msg.ReasoningDetails
+		}
+		messages = append(messages, assistant)
 		for _, tc := range msg.ToolCalls {
 			var out string
 			switch {
@@ -164,6 +176,8 @@ type chatMessage struct {
 	Content     string         `json:"content"`
 	Refusal     string         `json:"refusal"`
 	ToolCalls   []chatToolCall `json:"tool_calls"`
+	// ReasoningDetails: Denkschritte (OpenRouter) – gehen in der Werkzeugschleife unverändert zurück.
+	ReasoningDetails json.RawMessage `json:"reasoning_details,omitempty"`
 	Annotations []struct {
 		Type        string `json:"type"`
 		URLCitation struct {
@@ -173,6 +187,7 @@ type chatMessage struct {
 	} `json:"annotations"`
 
 	usage     [2]int
+	cost      *float64 // vom Anbieter gemeldet (OpenRouter)
 	finish    string
 	citations []Citation
 }
@@ -191,8 +206,9 @@ func (c *Client) chatOnce(ctx context.Context, body map[string]any) (*chatMessag
 			FinishReason string      `json:"finish_reason"`
 		} `json:"choices"`
 		Usage struct {
-			PromptTokens     int `json:"prompt_tokens"`
-			CompletionTokens int `json:"completion_tokens"`
+			PromptTokens     int      `json:"prompt_tokens"`
+			CompletionTokens int      `json:"completion_tokens"`
+			Cost             *float64 `json:"cost"`
 		} `json:"usage"`
 		Citations     []string `json:"citations"` // Perplexity
 		SearchResults []struct {
@@ -212,6 +228,7 @@ func (c *Client) chatOnce(ctx context.Context, body map[string]any) (*chatMessag
 		return nil, i18n.Errorf("%s hat die Anfrage abgelehnt: %s", c.label(), m.Refusal)
 	}
 	m.usage = [2]int{out.Usage.PromptTokens, out.Usage.CompletionTokens}
+	m.cost = out.Usage.Cost
 	m.finish = ch.FinishReason
 	for i := range m.ToolCalls {
 		m.ToolCalls[i].Type = "function"

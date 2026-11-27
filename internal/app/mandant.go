@@ -60,6 +60,9 @@ type System struct {
 	locked map[int64]string // Nutzer, deren Daten nicht geöffnet sind → Grund (gesperrt, Schlüssel fehlt …)
 	runCtx context.Context  // Lebensdauer der Worker (für später geöffnete Nutzer)
 
+	rekeyMu sync.Mutex
+	rekey   map[int64]*rekeyState // Neuverschlüsselung je Nutzer (neuer Wiederherstellungscode)
+
 	setupWin *setupWindow // „Einrichten“ ohne Passkey in den ersten 5 Minuten nach dem Start
 }
 
@@ -111,7 +114,7 @@ func NewSystem(cfg *config.Config, db *store.System, ai AI, version string, note
 		notes = func(*config.Config) Notes { return nil }
 	}
 	s := &System{Cfg: cfg, DB: db, AI: ai, Version: version, NewNotes: notes, Whisper: whisper.New(cfg.DataDir), rate: map[string][]int64{},
-		cer: map[string]ceremony{}, apps: map[int64]*App{}, locked: map[int64]string{}, setupWin: newSetupWindow()}
+		cer: map[string]ceremony{}, apps: map[int64]*App{}, locked: map[int64]string{}, rekey: map[int64]*rekeyState{}, setupWin: newSetupWindow()}
 	s.SetKI(cfg)
 	if err := s.initAuth(); err != nil {
 		return nil, err
@@ -146,6 +149,8 @@ func (s *System) OpenUsers() error {
 	}
 	s.movePrivateSettings(users)
 	s.ensureSystemKey()
+	s.applySystemKeyChoice()
+	s.resumeRekeys(users)
 	return nil
 }
 
@@ -209,6 +214,10 @@ func (s *System) openUser(u *store.User) (*App, error) {
 	if u.LockedAt > 0 {
 		s.setLocked(u.ID, lockedByAdmin)
 		return nil, errors.New("vom Admin gesperrt")
+	}
+	if schluessel.HasPending(s.Cfg.KeyDir, u.ID) {
+		s.setLocked(u.ID, lockedRekey)
+		return nil, errors.New("Neuverschlüsselung läuft oder ist unterbrochen")
 	}
 	dek, err := schluessel.Read(s.Cfg.KeyDir, u.ID, u.KeyID)
 	if err != nil {

@@ -46,6 +46,15 @@ type ProviderType struct {
 	Search   bool                      `json:"suche"`             // eigene Websuche („Suche des Anbieters“)
 	Plugin   bool                      `json:"-"`                 // Websuche als OpenRouter-Web-Plugin
 	Models   map[string][]CatalogModel `json:"modelle,omitempty"` // feste Auswahl je Bereich (erstes = Vorgabe); leer = frei
+	// Suggest: vorgeschlagenes Modell je Bereich bei freier Auswahl (nur Vorbelegung, wird nicht erzwungen).
+	Suggest map[string]string `json:"vorschlag,omitempty"`
+	// PricesOptional: Preise je Eintrag sind freiwillig; ohne sie gelten die Kosten, die der Anbieter selbst meldet,
+	// sonst bleiben sie unbekannt.
+	PricesOptional bool `json:"preise_optional,omitempty"`
+	// ReportsCost: der Anbieter meldet die Kosten jeder Anfrage selbst (Monatslimit wirkt auch ohne Preise).
+	ReportsCost bool `json:"meldet_kosten,omitempty"`
+	// OAuth: Konto des Nutzers verbinden statt Schlüssel einfügen ("openrouter" = OAuth PKCE von OpenRouter).
+	OAuth string `json:"oauth,omitempty"`
 }
 
 // HasModel: Modell steht in der festen Auswahl des Bereichs.
@@ -65,6 +74,11 @@ var ProviderTypes = func() []ProviderType {
 	}
 	big := []CatalogModel{text[2], text[1], text[0]}
 	return []ProviderType{
+		{ID: "openrouter", Name: "OpenRouter", Text: "Ein Konto für viele Modelle (Claude, Grok, Gemini, GPT u. a.), mit Websuche; verbinden mit deinem OpenRouter-Konto statt API-Schlüssel.",
+			API: APIChat, URL: "https://openrouter.ai/api/v1", FixedURL: true, Key: KeyRequired, Cloud: true, Plugin: true, PricesOptional: true, ReportsCost: true, OAuth: "openrouter",
+			Areas: []string{AreaTranscribe, AreaTitle, AreaDictation, AreaResearch, AreaImage}, Search: true,
+			Suggest: map[string]string{AreaTranscribe: "openai/whisper-large-v3", AreaTitle: "google/gemini-2.5-flash",
+				AreaDictation: "anthropic/claude-sonnet-4.5", AreaResearch: "anthropic/claude-sonnet-4.5", AreaImage: "openai/gpt-image-2"}},
 		{ID: "openai", Name: "OpenAI", Text: "OpenAI mit eigener Websuche und Bildern.", API: APIResponses, URL: "https://api.openai.com/v1",
 			Key: KeyRequired, Cloud: true, Areas: []string{AreaTranscribe, AreaTitle, AreaDictation, AreaResearch, AreaImage}, Search: true,
 			Models: map[string][]CatalogModel{
@@ -79,6 +93,35 @@ var ProviderTypes = func() []ProviderType {
 					{ID: "gpt-image-2", Name: "GPT Image 2", PriceImage: 0.02},
 					{ID: "gpt-image-1.5", Name: "GPT Image 1.5", PriceImage: 0.04},
 				},
+			}},
+		{ID: "xai", Name: "xAI Grok", Text: "Grok von xAI mit eigener Websuche, Bildern und Transkription (API-Schlüssel von console.x.ai).",
+			API: APIResponses, URL: "https://api.x.ai/v1", FixedURL: true, Key: KeyRequired, Cloud: true, PricesOptional: true, ReportsCost: true,
+			Areas: []string{AreaTranscribe, AreaTitle, AreaDictation, AreaResearch, AreaImage}, Search: true,
+			Models: map[string][]CatalogModel{
+				AreaTranscribe: {{ID: "grok-voice-transcribe-2.0", Name: "Grok Voice Transcribe 2.0"}},
+				AreaTitle:      {{ID: "grok-4.3", Name: "Grok 4.3 (schnell)"}, {ID: "grok-4.7", Name: "Grok 4.7 (groß)"}},
+				AreaDictation:  {{ID: "grok-4.3", Name: "Grok 4.3 (schnell)"}, {ID: "grok-4.7", Name: "Grok 4.7 (groß)"}},
+				AreaResearch:   {{ID: "grok-4.7", Name: "Grok 4.7 (groß)"}, {ID: "grok-4.3", Name: "Grok 4.3 (schnell)"}},
+				AreaImage:      {{ID: "grok-imagine-image-2.0", Name: "Grok Imagine Image 2.0"}, {ID: "grok-imagine-image", Name: "Grok Imagine Image"}},
+			}},
+		{ID: "gemini", Name: "Google Gemini", Text: "Gemini von Google mit Bildern und Transkription (API-Schlüssel aus Google AI Studio); Websuche über SearXNG.",
+			API: APIChat, URL: "https://generativelanguage.googleapis.com/v1beta/openai", FixedURL: true, Key: KeyRequired, Cloud: true, PricesOptional: true,
+			Areas: []string{AreaTranscribe, AreaTitle, AreaDictation, AreaResearch, AreaImage},
+			Models: map[string][]CatalogModel{
+				AreaTranscribe: {{ID: "gemini-3.5-flash-lite", Name: "Gemini 3.5 Flash-Lite"}, {ID: "gemini-4-hydrogen", Name: "Gemini 4 Hydrogen"}},
+				AreaTitle:      {{ID: "gemini-3.5-flash-lite", Name: "Gemini 3.5 Flash-Lite (schnell)"}, {ID: "gemini-4-hydrogen", Name: "Gemini 4 Hydrogen"}},
+				AreaDictation:  {{ID: "gemini-4-hydrogen", Name: "Gemini 4 Hydrogen"}, {ID: "gemini-4-carbon", Name: "Gemini 4 Carbon (groß)"}, {ID: "gemini-3.5-flash-lite", Name: "Gemini 3.5 Flash-Lite (schnell)"}},
+				AreaResearch:   {{ID: "gemini-4-hydrogen", Name: "Gemini 4 Hydrogen"}, {ID: "gemini-4-carbon", Name: "Gemini 4 Carbon (groß)"}},
+				AreaImage:      {{ID: "gemini-3.1-flash-image", Name: "Gemini 3.1 Flash Image"}, {ID: "gemini-nano-banana-2.1", Name: "Nano Banana 2.1"}, {ID: "gemini-3-pro-image", Name: "Gemini 3 Pro Image"}},
+			}},
+		{ID: "muse", Name: "Meta Muse", Text: "Muse von Meta mit eigener Websuche und Bildern (API-Schlüssel von dev.meta.ai).",
+			API: APIResponses, URL: "https://api.meta.ai/v1", FixedURL: true, Key: KeyRequired, Cloud: true, PricesOptional: true,
+			Areas: []string{AreaTitle, AreaDictation, AreaResearch, AreaImage}, Search: true,
+			Models: map[string][]CatalogModel{
+				AreaTitle:     {{ID: "muse-spark-1.3", Name: "Muse Spark 1.3"}},
+				AreaDictation: {{ID: "muse-spark-1.3", Name: "Muse Spark 1.3"}},
+				AreaResearch:  {{ID: "muse-spark-1.3", Name: "Muse Spark 1.3"}},
+				AreaImage:     {{ID: "muse-image-1.0", Name: "Muse Image 1.0"}},
 			}},
 		{ID: "dienst", Name: "Dienst (OpenAI-kompatibel)", Text: "Beliebiger OpenAI-kompatibler Dienst, z. B. OpenRouter, Groq, Gemini, Mistral, Perplexity.",
 			API: APIChat, Key: KeyOptional, Cloud: true, Areas: append([]string{AreaTranscribe}, textAreas...), Search: true},

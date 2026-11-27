@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -122,8 +123,19 @@ func (a *System) handleHook(w http.ResponseWriter, r *http.Request) {
 	app.acceptHook(w, r, body, delivery, trigger, isTest)
 }
 
-// acceptHook speichert eine geprüfte Aufnahme beim Nutzer.
+// acceptHook speichert eine geprüfte Aufnahme beim Nutzer. Ein Test-Event bestätigt nur die Verbindung: es wird kein
+// Eintrag, keine Aufnahme, keine Auswertung und nichts für Ring oder Statistik – nur Zeitpunkt und Geste des letzten
+// Tests (Seite Pebble-App) und ein Live-Hinweis an die offene Web-App.
 func (a *App) acceptHook(w http.ResponseWriter, r *http.Request, body []byte, delivery, trigger string, isTest bool) {
+	if isTest || trigger == "test-event" {
+		b, _ := json.Marshal(pebbleTest{At: store.Now(), Trigger: trigger, Agent: store.Preview(strings.TrimSpace(r.Header.Get("User-Agent")), 120)})
+		if err := a.DB.Set(pebbleTestKey, string(b)); err != nil {
+			logf("hook: Test-Event: %v", err)
+		}
+		a.hub.send("pebble-test")
+		hookReply(w, http.StatusOK, "Test angekommen")
+		return
+	}
 	known, err := a.DB.DeliveryKnown(delivery)
 	if err != nil {
 		logf("hook: Datenbank: %v", err)
@@ -141,16 +153,12 @@ func (a *App) acceptHook(w http.ResponseWriter, r *http.Request, body []byte, de
 		return
 	}
 	now := store.Now()
-	j := &store.Job{ID: store.NewID(), DeliveryID: delivery, Source: "pebble", Trigger: trigger, IsTest: isTest || fields["test"] == "true",
+	j := &store.Job{ID: store.NewID(), DeliveryID: delivery, Source: "pebble", Trigger: trigger,
 		ReceivedAt: now, RecordedAt: now, PebbleText: strings.TrimSpace(fields["transcription"]), State: store.StateNew}
 	if ms, err := strconv.ParseInt(fields["recordedAt"], 10, 64); err == nil && ms > 0 {
 		j.RecordedAt = ms
 	}
 	switch {
-	case j.IsTest || trigger == "test-event":
-		// Test-Event: nur anzeigen, nichts verarbeiten.
-		j.IsTest, j.Mode, j.State = true, "test", store.StateDone
-		j.Transcript, j.TranscriptSource, j.Title = j.PebbleText, "pebble", a.T("Test-Event")
 	case trigger == "single-click-hold":
 		j.Mode = a.Cfg.TriggerSingle
 	case trigger == "double-click-hold":
@@ -160,7 +168,7 @@ func (a *App) acceptHook(w http.ResponseWriter, r *http.Request, body []byte, de
 		j.FailedAt = now
 		j.Mode, j.Failed, j.Error = "unbekannt", true, a.Tf("Unbekannte Geste „%s“ – keine Aktion zugeordnet", store.Preview(trigger, 60))
 	}
-	if !j.IsTest && len(audio) == 0 && j.PebbleText == "" {
+	if len(audio) == 0 && j.PebbleText == "" {
 		hookReply(w, http.StatusBadRequest, "weder Audio noch Transkript")
 		return
 	}
@@ -320,3 +328,13 @@ func (a *App) readAudio(path string) ([]byte, error) {
 	}
 	return schluessel.OpenAudio(a.audioKey, name, data)
 }
+
+// pebbleTest: letzter Test der Verbindung aus der Pebble-App (nur Bestätigung, kein Eintrag).
+type pebbleTest struct {
+	At        int64  `json:"zeit"`
+	Trigger   string `json:"geste"`
+	Agent     string `json:"app,omitempty"`
+	Confirmed bool   `json:"bestaetigt,omitempty"` // Hinweis „Test angekommen“ vom Nutzer bestätigt
+}
+
+const pebbleTestKey = "pebble-test"

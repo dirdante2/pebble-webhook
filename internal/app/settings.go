@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"crypto/subtle"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -319,10 +320,16 @@ func (s *SetupServer) Handler() http.Handler {
 	mux.HandleFunc("POST /api/ersteinrichtung/start", s.handleSetupStart)
 	mux.HandleFunc("GET /api/ersteinrichtung", s.handleGet)
 	mux.HandleFunc("POST /api/ersteinrichtung/openai", s.handleCheckOpenAI)
+	mux.HandleFunc("POST /api/ersteinrichtung/verbinden/openrouter/start", s.handleSetupConnectStart)
+	mux.HandleFunc("POST /api/ersteinrichtung/verbinden/openrouter/fertig", s.handleSetupConnectDone)
+	mux.HandleFunc("POST /api/ki/verbinden/rueckgabe", handleKIConnectReturn)
+	mux.HandleFunc("POST /api/ki/verbinden/abholen", handleKIConnectPoll)
 	mux.HandleFunc("POST /api/ersteinrichtung", s.handleSave)
 	mux.HandleFunc("POST /api/ersteinrichtung/backup", s.handleBackupUpload)
 	mux.HandleFunc("POST /api/ersteinrichtung/backup/wiederherstellen", s.handleBackupRestore)
-	mux.HandleFunc("/", staticHandler(s.lang))
+	shell := staticHandler(s.lang)
+	mux.HandleFunc("GET "+pathConnectOpenRouter, serveShell(shell))
+	mux.HandleFunc("/", shell)
 	// Meldungen des Assistenten in der Sprache der Seite.
 	inner := securityHeaders(mux)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -381,26 +388,28 @@ func (s *SetupServer) handleGet(w http.ResponseWriter, r *http.Request) {
 	}
 	users, _ := s.DB.Users()
 	resp := map[string]any{"felder": settingsView(values, true, scopeAll), "version": s.Version, "eingerichtet": len(users) > 0,
-		"whisper": whisperInfo(whisper.New(s.Boot.DataDir))}
+		"whisper": whisperInfo(whisper.New(s.Boot.DataDir)), "arten": config.ProviderTypes, "docker": inDocker()}
 	if s.LoadErr != nil && s.LoadErr != ErrNotConfigured {
 		resp["fehler"] = strings.TrimPrefix(s.LoadErr.Error(), "Konfiguration: ")
 	}
 	writeJSON(w, 200, resp)
 }
 
-// handleCheckOpenAI prüft einen API-Schlüssel mit einem Abruf der Modell-Liste.
+// handleCheckOpenAI prüft einen Anbieter: KI-Anbieter mit einem Abruf der Modell-Liste (die Modelle gehen an die
+// Auswahl im Assistenten), SearXNG mit einer Probesuche.
 func (s *SetupServer) handleCheckOpenAI(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Code    string `json:"code"`
 		Key     string `json:"key"`
 		BaseURL string `json:"base_url"`
+		Art     string `json:"art"`
 	}
 	if readJSON(r, &in) != nil || r.Header.Get("X-App") != "1" || !s.codeOK(r, in.Code) {
 		writeErr(w, http.StatusForbidden, "code", "Nicht erlaubt")
 		return
 	}
 	// Der in der Umgebung gesetzte Schlüssel geht nur an die Adresse aus der Umgebung bzw. an OpenAI selbst.
-	if v, locked := config.EnvLocked("OPENAI_API_KEY"); locked && in.Key == "" {
+	if v, locked := config.EnvLocked("OPENAI_API_KEY"); locked && in.Key == "" && (in.Art == "" || in.Art == "openai") {
 		base := strings.TrimRight(strings.TrimSpace(in.BaseURL), "/")
 		envBase := strings.TrimRight(strings.TrimSpace(os.Getenv("OPENAI_BASE_URL")), "/")
 		if base != "" && base != envBase && base != "https://api.openai.com/v1" {
@@ -409,15 +418,38 @@ func (s *SetupServer) handleCheckOpenAI(w http.ResponseWriter, r *http.Request) 
 		}
 		in.Key = v
 	}
-	err := checkOpenAI(r.Context(), in.BaseURL, in.Key)
-	writeJSON(w, 200, map[string]any{"ok": err == nil, "fehler": errText(err)})
+	base := strings.TrimRight(strings.TrimSpace(in.BaseURL), "/")
+	if t := config.ProviderTypeByID(in.Art); t != nil && (base == "" || t.FixedURL) && t.URL != "" {
+		base = t.URL
+	}
+	if in.Art == "searxng" {
+		err := checkSearx(r.Context(), base)
+		writeJSON(w, 200, map[string]any{"ok": err == nil, "fehler": errText(err)})
+		return
+	}
+	if in.Art == "" {
+		err := checkOpenAI(r.Context(), base, in.Key)
+		writeJSON(w, 200, map[string]any{"ok": err == nil, "fehler": errText(err)})
+		return
+	}
+	if base == "" {
+		writeJSON(w, 200, map[string]any{"ok": false, "fehler": i18n.T("Adresse fehlt")})
+		return
+	}
+	models, err := listModels(r.Context(), base, in.Key)
+	writeJSON(w, 200, map[string]any{"ok": err == nil, "fehler": errText(err), "modelle": models})
 }
 
 func (s *SetupServer) handleSave(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		Code  string            `json:"code"`
-		Name  string            `json:"name"`
-		Werte map[string]string `json:"werte"`
+		Code     string                      `json:"code"`
+		Name     string                      `json:"name"`
+		Werte    map[string]string           `json:"werte"`
+		Zugaenge []config.AIAccess           `json:"zugaenge"` // nil = nicht im Assistenten gewählt (Vorgaben)
+		Bereiche map[string][]config.AIEntry `json:"bereiche"`
+		// Systemschlüssel: „nutzer“ = an den Code des ersten Admins gebunden (ein Admin), „code“ = eigener Code
+		// (mehrere Admins). Leer = Vorgabe (nutzer).
+		Systemschluessel string `json:"systemschluessel"`
 	}
 	if readJSON(r, &in) != nil || r.Header.Get("X-App") != "1" || !s.codeOK(r, in.Code) {
 		writeErr(w, http.StatusForbidden, "code", "Der Einrichtungs-Code fehlt oder ist falsch")
@@ -439,7 +471,19 @@ func (s *SetupServer) handleSave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	merged := mergeSettings(old, in.Werte, scopeAll)
-	if len(users) == 0 {
+	if in.Zugaenge != nil && in.Bereiche != nil && len(users) == 0 { // eingerichtete Installation: KI bleibt, wie sie ist
+		// OpenAI-Schlüssel aus der Umgebung (Docker): gilt für OpenAI-Anbieter ohne eigenen Schlüssel.
+		if v, locked := config.EnvLocked("OPENAI_API_KEY"); locked {
+			for i := range in.Zugaenge {
+				if in.Zugaenge[i].Kind == "openai" && in.Zugaenge[i].Key == "" {
+					in.Zugaenge[i].Key = v
+				}
+			}
+		}
+		acc, _ := json.Marshal(in.Zugaenge)
+		areas, _ := json.Marshal(in.Bereiche)
+		merged["KI_ZUGAENGE"], merged["KI_BEREICHE"] = string(acc), string(areas)
+	} else if len(users) == 0 {
 		setupDefaults(merged)
 	}
 	if _, err := config.FromValues(s.Boot, func(k string) string { return merged[k] }); err != nil {
@@ -461,6 +505,9 @@ func (s *SetupServer) handleSave(w http.ResponseWriter, r *http.Request) {
 		}
 	} else {
 		uid = users[0].ID
+	}
+	if len(users) == 0 && in.Systemschluessel == "code" {
+		s.DB.Set(systemKeyChoiceKV, "code")
 	}
 	s.DB.Set(setupCodeKey, "")
 	resp := map[string]any{"ok": true, "adresse": merged["PUBLIC_URL"]}

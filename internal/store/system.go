@@ -767,6 +767,16 @@ func (s *System) DeleteTokens(uid int64, kind string) error {
 	return err
 }
 
+// DeleteToken entfernt einen Zugang des Nutzers über seine Id; false = gibt es nicht (oder gehört einem anderen).
+func (s *System) DeleteToken(uid int64, kind, id string) (bool, error) {
+	res, err := s.DB.Exec(`DELETE FROM user_tokens WHERE user_id = ? AND kind = ? AND id = ?`, uid, kind, id)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
+}
+
 // DeleteGrant entfernt alle Zugänge einer OAuth-Freigabe des Nutzers.
 func (s *System) DeleteGrant(uid int64, grantID string) error {
 	_, err := s.DB.Exec(`DELETE FROM user_tokens WHERE user_id = ? AND grant_id = ?`, uid, grantID)

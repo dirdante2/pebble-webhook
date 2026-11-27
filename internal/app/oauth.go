@@ -136,7 +136,7 @@ func (d *oauthData) prune(now time.Time) {
 	}
 }
 
-func (a *System) mcpURL() string { return a.Cfg.PublicURL + "/mcp" }
+func (a *System) mcpURL() string { return a.Cfg.PublicURL + pathMCP }
 
 func oauthCORS(w http.ResponseWriter) {
 	h := w.Header()
@@ -168,10 +168,10 @@ func (a *System) handleAuthServerMeta(w http.ResponseWriter, r *http.Request) {
 	base := a.Cfg.PublicURL
 	writeJSON(w, 200, map[string]any{
 		"issuer":                                base,
-		"authorization_endpoint":                base + "/oauth/authorize",
-		"token_endpoint":                        base + "/oauth/token",
-		"registration_endpoint":                 base + "/oauth/register",
-		"revocation_endpoint":                   base + "/oauth/revoke",
+		"authorization_endpoint":                base + pathOAuth + "/authorize",
+		"token_endpoint":                        base + pathOAuth + "/token",
+		"registration_endpoint":                 base + pathOAuth + "/register",
+		"revocation_endpoint":                   base + pathOAuth + "/revoke",
 		"response_types_supported":              []string{"code"},
 		"grant_types_supported":                 []string{"authorization_code", "refresh_token"},
 		"code_challenge_methods_supported":      []string{"S256"},
@@ -593,7 +593,7 @@ func (a *System) mcpAuth(next userHandler) http.HandlerFunc {
 		oauthCORS(w)
 		h := r.Header.Get("Authorization")
 		deny := func(desc string) {
-			v := fmt.Sprintf(`Bearer resource_metadata="%s/.well-known/oauth-protected-resource"`, a.Cfg.PublicURL)
+			v := fmt.Sprintf(`Bearer resource_metadata="%s/.well-known/oauth-protected-resource%s"`, a.Cfg.PublicURL, pathMCP)
 			if desc != "" {
 				v += fmt.Sprintf(`, error="invalid_token", error_description="%s"`, desc)
 			}

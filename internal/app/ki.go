@@ -27,7 +27,7 @@ func NewAI(ai config.AI, ledger openai.Ledger) *openai.Router {
 			}
 			t := acc.Type()
 			cl := openai.New(acc.Key, acc.URL)
-			cl.Chat, cl.Plugin = t.API == config.APIChat, t.Plugin
+			cl.Chat, cl.Plugin, cl.Dialect, cl.Name = t.API == config.APIChat, t.Plugin, t.ID, acc.Name
 			for _, x := range e.Search {
 				if x == "anbieter" {
 					cl.ProviderSearch = t.Search
@@ -37,7 +37,7 @@ func NewAI(ai config.AI, ledger openai.Ledger) *openai.Router {
 			}
 			r.Areas[area] = append(r.Areas[area], &openai.Step{ID: e.ID, Name: acc.Name, Client: cl, Model: e.Model,
 				PriceIn: orZero(e.PriceIn), PriceOut: orZero(e.PriceOut), PriceSearch: orZero(e.PriceSearch), PriceMinute: orZero(e.PriceMinute),
-				PriceImage: orZero(e.PriceImage), Limit: e.LimitMonth})
+				PriceImage: orZero(e.PriceImage), Limit: e.LimitMonth, NoPrices: acc.Cloud() && !hasPrices(area, e)})
 		}
 	}
 	return r
@@ -127,14 +127,20 @@ func (s *System) handleAISave(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	s.saveAI(w, in.Zugaenge, in.Bereiche, in.Werte, nil)
+}
+
+// saveAI schreibt Zugänge und Bereiche (ganz) samt einzelnen Feldern, prüft wie beim Start und übernimmt sie –
+// ohne Neustart, wenn sich nur KI und Whisper ändern. extra ergänzt die Antwort.
+func (s *System) saveAI(w http.ResponseWriter, zugaenge []config.AIAccess, bereiche map[string][]config.AIEntry, werte map[string]string, extra map[string]any) {
 	old, err := s.DB.Settings()
 	if err != nil {
 		writeErr(w, 500, "speicher", "Datenbankfehler")
 		return
 	}
-	merged := mergeSettings(old, in.Werte, scopeSystem)
-	acc, _ := json.Marshal(in.Zugaenge)
-	areas, _ := json.Marshal(in.Bereiche)
+	merged := mergeSettings(old, werte, scopeSystem)
+	acc, _ := json.Marshal(zugaenge)
+	areas, _ := json.Marshal(bereiche)
 	merged["KI_ZUGAENGE"], merged["KI_BEREICHE"] = string(acc), string(areas)
 	boot := config.Bootstrap{Listen: s.Cfg.Listen, DataDir: s.Cfg.DataDir, MediaDir: s.Cfg.MediaDir, BackupDir: s.Cfg.BackupDir, KeyDir: s.Cfg.KeyDir}
 	cfg, err := config.FromValues(boot, func(k string) string { return merged[k] })
@@ -153,7 +159,11 @@ func (s *System) handleAISave(w http.ResponseWriter, r *http.Request) {
 			restart = true
 		}
 	}
-	writeJSON(w, 200, map[string]any{"ok": true, "neustart": restart})
+	out := map[string]any{"ok": true, "neustart": restart}
+	for k, v := range extra {
+		out[k] = v
+	}
+	writeJSON(w, 200, out)
 	if restart {
 		restartSoon()
 		return
@@ -210,7 +220,7 @@ func listModels(ctx context.Context, base, key string) ([]string, error) {
 	}
 	models := []string{}
 	for _, m := range out.Data {
-		models = append(models, m.ID)
+		models = append(models, strings.TrimPrefix(m.ID, "models/")) // Gemini: „models/gemini-…“
 	}
 	sort.Strings(models)
 	return models, nil
@@ -242,6 +252,17 @@ func checkSearx(ctx context.Context, base string) error {
 		return i18n.Errorf("SearXNG-Antwort nicht lesbar: %w", err)
 	}
 	return nil
+}
+
+// hasPrices: Eintrag trägt die Preise, die sein Bereich zum Rechnen braucht.
+func hasPrices(area string, e config.AIEntry) bool {
+	switch area {
+	case config.AreaTranscribe:
+		return e.PriceMinute != nil
+	case config.AreaImage:
+		return e.PriceImage != nil
+	}
+	return e.PriceIn != nil && e.PriceOut != nil
 }
 
 // orZero: Preis eines Eintrags (lokale Einträge haben keinen).

@@ -286,13 +286,18 @@ func (a *AI) check() (errs []string) {
 			if e.LimitMonth < 0 || math.IsNaN(e.LimitMonth) {
 				errs = append(errs, label+i18n.T(": Limit ist keine Zahl ab 0"))
 			}
+			// Ohne Preise und ohne gemeldete Kosten bleibt der Verbrauch unbekannt – ein Limit würde nie greifen.
+			if acc != nil && acc.Type() != nil && e.LimitMonth > 0 && acc.Type().PricesOptional && !acc.Type().ReportsCost && !entryHasPrices(area, e) {
+				errs = append(errs, label+i18n.T(": Monatslimit braucht Preise (dieser Anbieter meldet keine Kosten)"))
+			}
 			for _, p := range []*float64{e.PriceIn, e.PriceOut, e.PriceMinute, e.PriceSearch, e.PriceImage} {
 				if p != nil && (*p < 0 || math.IsNaN(*p) || *p > 1_000_000) {
 					errs = append(errs, label+i18n.T(": Preis ist keine Zahl ab 0"))
 					break
 				}
 			}
-			cloud := acc != nil && acc.Cloud()
+			// Preise nötig bei Cloud-Anbietern, außer sie sind freiwillig (Kosten meldet der Anbieter oder bleiben offen).
+			cloud := acc != nil && acc.Cloud() && !acc.Type().PricesOptional
 			switch {
 			case !cloud:
 			case area == AreaTranscribe && e.PriceMinute == nil:
@@ -308,7 +313,7 @@ func (a *AI) check() (errs []string) {
 					errs = append(errs, label+i18n.T(": Websuche gibt es nur bei Auswertung und Webrecherche"))
 				case s == "anbieter" && (acc == nil || acc.Type() == nil || !acc.Type().Search):
 					errs = append(errs, label+i18n.T(": ein lokales Modell sucht nicht selbst im Web – SearXNG wählen oder ohne Websuche"))
-				case s == "anbieter" && e.PriceSearch == nil:
+				case s == "anbieter" && e.PriceSearch == nil && cloud:
 					errs = append(errs, label+i18n.T(": Preis je Websuche fehlt"))
 				case s != "anbieter" && (a.Access(s) == nil || a.Access(s).Type() == nil || a.Access(s).Type().API != APISearxng):
 					errs = append(errs, label+i18n.T(": Websuche über einen unbekannten SearXNG-Zugang"))
@@ -351,12 +356,19 @@ func (a *AI) normalize() {
 					log.Printf("KI: Modell %s (%s) nicht mehr in der Auswahl – ersetzt durch %s", e.Model, area, def.ID)
 				}
 				e.Model = def.ID
+				// Katalog ohne Preise (freiwillige Preise): nichts eintragen – 0 hieße „kostenlos“ statt „unbekannt“.
+				set := func(dst **float64, v float64) {
+					if v > 0 || !acc.Type().PricesOptional {
+						*dst = &v
+					}
+				}
 				if area == AreaTranscribe {
-					e.PriceMinute = &def.PriceMinute
+					set(&e.PriceMinute, def.PriceMinute)
 				} else if area == AreaImage {
-					e.PriceImage = &def.PriceImage
+					set(&e.PriceImage, def.PriceImage)
 				} else {
-					e.PriceIn, e.PriceOut = &def.PriceIn, &def.PriceOut
+					set(&e.PriceIn, def.PriceIn)
+					set(&e.PriceOut, def.PriceOut)
 				}
 			}
 			if acc := a.Access(e.Access); acc == nil || !acc.Cloud() {
@@ -368,4 +380,15 @@ func (a *AI) normalize() {
 		}
 		a.Areas[area] = list
 	}
+}
+
+// entryHasPrices: Eintrag trägt die Preise, die sein Bereich zum Rechnen braucht.
+func entryHasPrices(area string, e AIEntry) bool {
+	switch area {
+	case AreaTranscribe:
+		return e.PriceMinute != nil
+	case AreaImage:
+		return e.PriceImage != nil
+	}
+	return e.PriceIn != nil && e.PriceOut != nil
 }

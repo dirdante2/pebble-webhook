@@ -763,15 +763,21 @@ func (a *App) removeJob(j *store.Job) error {
 	return a.DB.DeleteJob(j.ID)
 }
 
-// Purge löscht leere Aufnahmen (keine Sprache erkannt) nach EMPTY_RETENTION_HOURS endgültig, samt Datei.
-// Fehlgeschlagene Aufträge bleiben: ein Fehler (z. B. der KI-API) wird behoben und der Eintrag neu
-// ausgewertet; löschen nur von Hand.
+// Purge löscht leere Aufnahmen (keine Sprache erkannt) nach EMPTY_RETENTION_HOURS endgültig, samt Datei; ebenso
+// Test-Events aus der Zeit, als sie noch Einträge wurden (seit 4.6.1.11 entsteht dafür keiner mehr). Fehlgeschlagene Aufträge bleiben: ein Fehler (z. B. der KI-API) wird behoben und der
+// Eintrag neu ausgewertet; löschen nur von Hand.
 func (a *App) Purge() {
 	jobs, err := a.DB.FailedJobs()
 	if err != nil {
 		logf("Aufräumen: %v", err)
 		return
 	}
+	tests, err := a.DB.TestJobs()
+	if err != nil {
+		logf("Aufräumen: %v", err)
+		return
+	}
+	jobs = append(jobs, tests...)
 	for _, j := range jobs {
 		at := a.purgeAt(j)
 		if at == 0 || store.Now() < at {
@@ -781,7 +787,7 @@ func (a *App) Purge() {
 			logf("Aufräumen: Auftrag %s: %v", j.ID, err)
 			continue
 		}
-		logf("Auftrag %s (%s, ohne Sprache) nach %d h gelöscht", j.ID, j.Mode, a.Cfg.EmptyRetentionHours)
+		logf("Auftrag %s (%s, ohne Sprache oder Test) nach %d h gelöscht", j.ID, j.Mode, a.Cfg.EmptyRetentionHours)
 	}
 }
 
@@ -802,7 +808,13 @@ func (a *App) destroyJob(j *store.Job) error {
 
 // purgeAt liefert den Zeitpunkt, zu dem eine leere Aufnahme gelöscht wird (0 = nie, auch für alle anderen).
 func (a *App) purgeAt(j *store.Job) int64 {
-	if !j.Failed || !j.Empty || j.FailedAt == 0 || a.Cfg.EmptyRetentionHours <= 0 {
+	if a.Cfg.EmptyRetentionHours <= 0 {
+		return 0
+	}
+	if j.IsTest { // früherer Test-Event-Eintrag: wie eine leere Aufnahme, ab Eingang
+		return j.ReceivedAt + int64(a.Cfg.EmptyRetentionHours)*3600_000
+	}
+	if !j.Failed || !j.Empty || j.FailedAt == 0 {
 		return 0
 	}
 	return j.FailedAt + int64(a.Cfg.EmptyRetentionHours)*3600_000

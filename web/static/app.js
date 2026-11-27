@@ -131,7 +131,8 @@ async function api(pfad, opt = {}) {
   try { daten = await antwort.json(); } catch (e) { /* leer */ }
   if (!antwort.ok) {
     if (antwort.status === 401 && !pfad.startsWith('/api/auth/')) { try { localStorage.setItem('angemeldet', '0'); } catch { /* nur Startabkürzung */ } geheZu('/anmelden', true); }
-    if (antwort.status === 423 && aktuell?.name !== 'wiederherstellen') geheZu('/wiederherstellen', true);
+    if (antwort.status === 423 && daten?.grund === 'umschluesselung') { if (aktuell?.name !== 'zugangCode') geheZu('/konto/code', true); }
+    else if (antwort.status === 423 && aktuell?.name !== 'wiederherstellen') geheZu('/wiederherstellen', true);
     throw new ApiFehler(antwort.status, daten?.code || '', daten?.fehler || T`Fehler ${antwort.status}`);
   }
   return daten;
@@ -486,6 +487,7 @@ async function nachAnmeldung() {
   const s = await api('/api/sitzung');
   if (ich.id && s.id !== ich.id) await vergissGeraet();
   merkeIch(s);
+  return s;
 }
 
 // ---------- Router ----------
@@ -520,13 +522,12 @@ const routen = [
   [/^\/status\/gedaechtnis\/begriff\/neu$/, 'gedaechtnisBearbeiten', () => zeigeBegriffBearbeiten('')],
   [/^\/status\/gedaechtnis\/begriff\/([0-9a-f]+)\/bearbeiten$/, 'gedaechtnisBearbeiten', zeigeBegriffBearbeiten],
   [/^\/pebble$/, 'pebble', zeigePebble],
-  [/^\/status\/geraet$/, 'geraetNeu', zeigeGeraetNeu],
   [/^\/status\/tags$/, 'tagsVerwalten', zeigeTagsVerwalten],
-  [/^\/status\/darstellung$/, 'darstellung', zeigeDarstellung],
+  [/^\/konto\/theme$/, 'darstellung', zeigeDarstellung],
+  [/^\/status\/darstellung$/, 'umzug', () => geheZu('/konto/theme', true)],
   [/^\/status\/joplin$/, 'joplin', zeigeJoplin],
-  [/^\/status\/benachrichtigungen$/, 'benachrichtigungen', zeigeBenachrichtigungen],
-  [/^\/status\/kalender$/, 'kalender', zeigeKalender],
-  [/^\/status\/mcp$/, 'mcp', zeigeMcpAnleitung],
+  [/^\/konto\/benachrichtigungen$/, 'benachrichtigungen', zeigeBenachrichtigungen],
+  [/^\/status\/benachrichtigungen$/, 'umzug', () => geheZu('/konto/benachrichtigungen', true)],
   [/^\/anmelden$/, 'anmelden', zeigeAnmelden],
   [/^\/verbinden$/, 'verbinden', zeigeVerbinden],
   [/^\/ersteinrichtung$/, 'ersteinrichtung', zeigeErsteinrichtung],
@@ -541,10 +542,18 @@ const routen = [
   [/^\/status\/einstellungen\/bearbeiten$/, 'einstellungenBearbeiten', () => geheZu('/status/einstellungen', true)],
   [/^\/status\/einstellungen\/([A-Z_]+)$/, 'einstellungBearbeiten', zeigeEinstellungBearbeiten],
   [/^\/einrichten$/, 'einrichten', zeigeEinrichten],
+  [/^\/api\/v1\/ai\/connect\/openrouter$/, 'kiVerbunden', zeigeKiVerbunden],
   [/^\/willkommen$/, 'willkommen', zeigeWillkommen],
   [/^\/wiederherstellen$/, 'wiederherstellen', zeigeWiederherstellen],
-  [/^\/status\/zugang$/, 'zugang', zeigeZugang],
-  [/^\/status\/zugang\/code$/, 'zugangCode', zeigeNeuerCode],
+  [/^\/konto$/, 'konto', zeigeKonto],
+  [/^\/konto\/code$/, 'zugangCode', zeigeNeuerCode],
+  [/^\/konto\/geraet$/, 'geraetNeu', zeigeGeraetNeu],
+  [/^\/konto\/verbinden$/, 'mcp', zeigeMcpAnleitung],
+  [/^\/konto\/token$/, 'tokenNeu', zeigeTokenNeu],
+  [/^\/konto\/mcp$/, 'umzug', () => geheZu('/konto/verbinden', true)],
+  [/^\/konto\/kalender$/, 'kalender', zeigeKalender],
+  // Frühere Adressen (vor der Seite Benutzer).
+  [/^\/status\/(zugang|zugang\/code|geraet|mcp|kalender)$/, 'umzug', () => geheZu({ zugang: '/konto', 'zugang/code': '/konto/code', geraet: '/konto/geraet', mcp: '/konto/verbinden', kalender: '/konto/kalender' }[location.pathname.slice(8)] + location.search, true)],
   [/^\/admin\/nutzer$/, 'nutzer', zeigeNutzer],
   [/^\/admin\/nutzer\/neu$/, 'nutzerNeu', zeigeNutzerNeu],
   [/^\/admin\/nutzer\/einladung\/([0-9a-f]{16})$/, 'einladung', zeigeEinladung],
@@ -592,7 +601,7 @@ async function zeige() {
     if (name === 'eintrag' || name === 'planung') { if (vorher === 'suche') herkunft = null; else if (vorher === 'liste') herkunft = T`/liste/${vorherArg}`; else if (vorher === 'listen') herkunft = vorherArg ? T`/listen/gruppe/${vorherArg}` : '/listen'; else if (!DETAIL.includes(vorher)) herkunft = null; }
     if (name !== 'verlauf' && !(name === 'suche' && aktuell.zurueck)) window.scrollTo(0, 0);
     sucheMarkieren(name === 'eintrag' || name === 'planung' ? sucheHerkunft : null);
-    const offen = name === 'anmelden' || name === 'einrichten' || name === 'ersteinrichtung';
+    const offen = name === 'anmelden' || name === 'einrichten' || name === 'ersteinrichtung' || name === 'kiVerbunden';
     menueKnopf.hidden = offen;
     if (menue.open && menue.matches(':modal')) menue.close();
     menueModus();
@@ -845,7 +854,8 @@ const besuche = (() => {
   let gesendet = 0;
   const melde = async (anmeldung) => {
     // Ohne Sitzung (Anmelde- und Einrichtungsseiten) nichts melden; die Anmeldung selbst meldet sich danach.
-    if (!anmeldung && ['anmelden', 'einrichten', 'ersteinrichtung'].includes(aktuell?.name)) return false;
+    // Beim Laden steht aktuell noch nicht fest: dann zählt der Pfad (sonst schickt ein 401 die Passkey-Einrichtung zur Anmeldung).
+    if (!anmeldung && (['anmelden', 'einrichten', 'ersteinrichtung', 'kiVerbunden'].includes(aktuell?.name) || /^\/(anmelden|einrichten|ersteinrichtung|api\/v1\/ai\/connect\/openrouter)$/.test(location.pathname))) return false;
     gesendet = Date.now();
     const b = lies();
     try {
@@ -1799,7 +1809,7 @@ function eintragHtml(e, offline) {
 
   const details = [];
   if (e.zuordnung) details.push([tx('Zuordnung'), ZUORDNUNG[e.zuordnung] || e.zuordnung]);
-  if (e.transkript_quelle) details.push([tx('Transkript von'), { openai: tx('OpenAI'), lokal: tx('Whisper (lokal)'), 'openai-ausweich': tx('OpenAI (lokal gescheitert)'), pebble: tx('Pebble'), text: tx('getippt'), nutzer: tx('von Hand korrigiert') }[e.transkript_quelle] || e.transkript_quelle]);
+  if (e.transkript_quelle) details.push([tx('Transkript von'), { openai: tx('Cloud-Anbieter'), lokal: tx('Whisper (lokal)'), 'openai-ausweich': tx('Cloud-Anbieter (lokal gescheitert)'), pebble: tx('Pebble'), text: tx('getippt'), nutzer: tx('von Hand korrigiert') }[e.transkript_quelle] || e.transkript_quelle]);
   // KI-Anfragen dieses Auftrags aus dem Protokoll: je Schritt Anbieter, Modell, rohe Tokens und Kosten (0 $ bleibt weg).
   // Ältere Aufträge haben kein Protokoll, dort steht nur der gespeicherte Betrag.
   if (e.ki_anfragen?.length) for (const q of e.ki_anfragen) details.push([kiZweck(q), kiVerbrauch(q)]);
@@ -2825,17 +2835,15 @@ function transkriptionKarte(t) {
 async function zeigeStatus() {
   seite.innerHTML = T`${statusReiter('status')}<p class="leer">Lädt …</p>`;
   const laden = async (vorab) => {
-    let s, g, o, sy;
+    let s, sy;
     try {
-      [s, g, o, sy] = await Promise.all([apiAbgelegt('/api/status', vorab), apiAbgelegt('/api/geraete', vorab), apiAbgelegt('/api/oauth/apps', vorab).catch(() => ({ apps: [] })), apiAbgelegt('/api/status/system', vorab).catch(() => null), vorab || ladeZaehler()]);
+      [s, sy] = await Promise.all([apiAbgelegt('/api/status', vorab), apiAbgelegt('/api/status/system', vorab).catch(() => null), vorab || ladeZaehler()]);
     } catch (f) {
       if (vorab) return;
       if (f instanceof NetzFehler) { if (aktuell?.name === 'status') seite.innerHTML = T('<p class="leer">Offline – der Status ist noch nicht gespeichert.</p>'); return; }
       throw f;
     }
     if (aktuell?.name !== 'status') return;
-    const abo = await pushAbo().catch(() => null);
-    const pushDa = 'PushManager' in window;
     // Speicher: zugeklappt je Ablage Name, belegt und Balken; aufgeklappt Pfad und frei/gesamt.
     const balken = (p) => T`<meter class="balken${p.knapp ? ' knapp' : ''}" min="0" max="${p.gesamt}" value="${p.gesamt - p.frei}" aria-label="${esc(tx('{0} von {1} belegt', groesse(p.gesamt - p.frei), groesse(p.gesamt)))}"></meter>`;
     // Eigene Ablage: ein Balken über den ganzen Mount – Akzent = eigener Anteil, grau = übrige Nutzer und Sonstiges,
@@ -2923,27 +2931,9 @@ async function zeigeStatus() {
       ${(s.speicher || []).length ? speicher(s.speicher, s.aufraeumen, s.speicher_nutzer) : ''}
       ${system(sy)}
       ${s.probleme.length ? T`<h2>Aufträge mit Fehlern</h2>${s.fehlgeschlagen ? T('<div class="leiste"><button class="btn gefahr" data-a="fehler-weg">Alle fehlerhaften löschen</button></div>') : ''}${s.probleme.map(karte).join('')}` : ''}
-      <h2>Benachrichtigungen</h2>
-      ${!pushDa ? T('<p class="leise">Dieser Browser unterstützt keine Benachrichtigungen. Auf dem iPhone die App erst zum Home-Bildschirm hinzufügen.</p>')
-    : T`<p>${abo ? tx('Auf diesem Gerät eingeschaltet.') : tx('Auf diesem Gerät ausgeschaltet.')} <span class="leise">Geräte mit Benachrichtigung: ${s.push_abos}</span></p>
-        <div class="leiste"><a class="btn" href="/status/benachrichtigungen">Einstellen</a></div>`}
-      <h2>Geräte (Passkeys)</h2>
-      ${g.geraete.map((d) => T`<div class="karte"><div class="zeile"><span><strong>${esc(d.name)}</strong>${d.dieses ? T(' <span class="badge neutral">dieses Gerät</span>') : ''}</span>
-        ${g.geraete.length > 1 && !d.dieses ? T`<button class="btn klein gefahr" data-geraet="${esc(d.id)}">Entfernen</button>` : ''}</div>
-        <div class="leise">angelegt ${zeit(d.angelegt)}${d.zuletzt ? T` · zuletzt angemeldet ${zeit(d.zuletzt)}` : ''}</div></div>`).join('')}
-      <div class="leiste"><a class="btn" href="/status/geraet">Weiteres Gerät hinzufügen</a></div>
-      <h2>Verbundene Apps (MCP)</h2>
-      ${o.apps.length ? o.apps.map((x) => T`<div class="karte"><div class="zeile"><span><strong>${esc(x.name)}</strong></span><button class="btn klein gefahr" data-app="${esc(x.id)}">Trennen</button></div>
-        <div class="leise">verbunden ${zeit(x.angelegt)}${x.zuletzt ? T` · zuletzt genutzt ${zeit(x.zuletzt)}` : ''}</div></div>`).join('') : T('<p class="leise">Keine. Claude, ChatGPT & Co. verbinden sich über die Adresse <code>/mcp</code> dieses Dienstes und fragen hier nach Freigabe.</p>')}
-      <div class="leiste"><a class="btn" href="/status/mcp">${esc(tx('App verbinden (MCP-Server hinzufügen)'))}</a></div>
-      <h2>${esc(tx('Kalender-Abo'))}</h2>
-      <a class="karte" href="/status/kalender"><strong>${esc(tx('Termine in Google, Apple oder Outlook abonnieren'))}</strong><br><span class="leise">${esc(tx('Link und Anleitung'))}</span></a>
       ${s.statistik ? T`<h2>${esc(tx('Statistik und Rückmeldung'))}</h2>
       <a class="karte" href="/status/statistik"><strong>${esc(tx(istAdmin() ? 'Anonyme Statistik' : 'Ring-Lebensdauer aller Installationen'))}</strong><br><span class="leise">${esc(tx(istAdmin() ? 'Ein- oder ausschalten, Ring-Lebensdauer aller Installationen' : 'Vergleich mit allen Installationen'))}</span></a>
       <a class="karte" href="/status/rueckmeldung"><strong>${esc(tx('Rückmeldung senden'))}</strong><br><span class="leise">${esc(tx('Kommentar oder Fehler an den Entwickler'))}</span></a>` : ''}
-      <h2>Zugang und Sicherheit</h2>
-      <a class="karte" href="/status/zugang"><strong>API-Token und Wiederherstellungscode</strong><br><span class="leise">Maschinenzugang für Skripte, Code für deine verschlüsselten Daten</span></a>
-      <div class="leiste"><button class="btn gefahr" data-a="abmelden">Abmelden</button></div>
       ${spendenLink ? T`<section class="spendenbereich"><p><strong>${esc(tx('Gefällt dir die App?'))}</strong> <span class="leise">${esc(tx('Sie ist kostenlos und quelloffen. Wer mag, unterstützt die Entwicklung mit einer kleinen Spende auf Ko-fi.'))}</span></p>
         ${spendenKnopf()}</section>` : ''}`;
     setzeWortlage(seite);
@@ -2953,22 +2943,12 @@ async function zeigeStatus() {
     const b = ev.target.closest('button');
     if (!b) return;
     try {
-      if (b.dataset.app) {
-        if (!confirm(tx('App trennen? Sie verliert sofort den Zugriff und muss neu freigegeben werden.'))) return;
-        await api(T`/api/oauth/apps/${b.dataset.app}`, { method: 'DELETE' });
-        return laden();
-      }
       if (b.dataset.import || b.dataset.importAlle) {
         b.disabled = true;
         const r = await api('/api/audio-unbekannt/import', { method: 'POST', body: b.dataset.importAlle ? { alle: true } : { datei: b.dataset.import } });
         melde(tx('{0} Aufnahme(n) importiert – werden ausgewertet', r.importiert));
         verlaufStand = null;
         await ladeZaehler();
-        return laden();
-      }
-      if (b.dataset.geraet) {
-        if (!confirm(tx('Gerät entfernen? Es kann sich danach nicht mehr anmelden.'))) return;
-        await api(T`/api/geraete/${b.dataset.geraet}`, { method: 'DELETE' });
         return laden();
       }
       if (b.dataset.aufraeumen) {
@@ -2991,7 +2971,6 @@ async function zeigeStatus() {
           return laden();
         }
         case 'pruefen': b.disabled = true; await api('/api/status?pruefen=1'); melde(tx('Joplin geprüft')); return laden();
-        case 'abmelden': await abmelden(); return geheZu('/anmelden', true);
       }
     } catch (f) { b.disabled = false; melde(f.message); }
   };
@@ -3254,17 +3233,32 @@ function zeigeSpeicherkarte() {
     <a class="btn" href="/status">${esc(tx('Speicher ansehen'))}</a>`;
 }
 
+let alteAdressen = [], pebbleTest = null;
 function zeigeRingkarte() {
   const karte = document.getElementById('ringkarte');
   const r = ringInfo;
-  const hinweise = r?.hinweise || [], upd = r?.app_update, fragen = r?.frage_inaktiv || [];
-  karte.hidden = !r || (!r.fehler && !hinweise.length && !upd && !fragen.length);
+  const hinweise = r?.hinweise || [], upd = r?.app_update, fragen = r?.frage_inaktiv || [], alt = alteAdressen;
+  karte.hidden = (!r || (!r.fehler && !hinweise.length && !upd && !fragen.length)) && !alt.length && !pebbleTest;
   if (karte.hidden) return;
-  if (r.fehler) {
+  if (r?.fehler) {
     karte.innerHTML = T`<div><strong>${esc(tx('Ring-Auswertung'))}</strong><p class="leise">${esc(tx('Fehler: {0}', r.fehler))}</p></div>`;
     return;
   }
   const teile = [];
+  // Test aus der Pebble-App angekommen: steht oben auf allen Seiten, bis der Nutzer bestätigt.
+  if (pebbleTest) {
+    teile.push(T`<div><strong>${esc(tx('Test von der Pebble-App angekommen'))}</strong>
+      <p>${esc(tx('Die Verbindung steht ({0}). Aufnahmen kommen jetzt an.', zeit(pebbleTest.zeit)))}</p>
+      ${pebbleTest.app ? T`<p class="leise umbruch">${esc(pebbleVersion(pebbleTest.app))}</p>` : ''}</div>
+      <div class="leiste"><button type="button" class="btn haupt" data-pebbletest-ok>${esc(tx('OK'))}</button></div>`);
+  }
+  // Alte Adresse noch in Benutzung (Pebble-App, Kalender-Abo, MCP): neue Adresse eintragen.
+  for (const a of alt) {
+    teile.push(T`<div><strong>${esc(tx('Adresse geändert: {0}', tx(a.name)))}</strong>
+      <p>${esc(tx('Die frühere Adresse gilt nicht mehr, wurde aber zuletzt {0} noch aufgerufen ({1}×). Bitte dort die neue Adresse eintragen:', zeit(a.zuletzt), a.anzahl))}</p>
+      <p class="umbruch"><code>${esc(a.neu)}</code></p></div>
+      <div class="leiste"><button type="button" class="btn haupt" data-alt-ok="${esc(a.alt)}">${esc(tx('Erledigt'))}</button></div>`);
+  }
   if (upd) {
     teile.push(T`<div><strong>${esc(tx('Pebble-App aktualisiert'))}</strong>
       <p class="umbruch">${esc(pebbleVersion(upd.alt))} → ${esc(pebbleVersion(upd.neu))}</p>
@@ -3294,6 +3288,8 @@ function zeigeRingkarte() {
   knopf('[data-ring-ok]', (b) => api('/api/ring/bestaetigt', { method: 'POST', body: { ring: Number(b.dataset.ringOk) } }));
   knopf('[data-ring-nein]', (b) => api(`/api/ring/${b.dataset.ringNein}/frage-abgelehnt`, { method: 'POST' }));
   knopf('[data-ring-appok]', () => api('/api/ring/bestaetigt', { method: 'POST', body: { app_update: true } }));
+  knopf('[data-pebbletest-ok]', () => api('/api/pebble/test/ok', { method: 'POST' }));
+  knopf('[data-alt-ok]', (b) => api('/api/alte-adressen/ok', { method: 'POST', body: { alt: b.dataset.altOk } }));
   knopf('[data-ring-plus]', (b) => api('/api/ring/bestaetigt', { method: 'POST', body: { plus: true, ring: Number(b.dataset.ringPlus) } }));
 }
 
@@ -3301,8 +3297,10 @@ function zeigeRingkarte() {
 function ringBalkenHtml() {
   const r = ringInfo?.balken; // aktiver Ring mit der höchsten Nutzung; inaktive stehen nicht in der Seitenleiste
   // Kein aktiver Ring (alle inaktiv oder noch keiner): der Link zur Ring-Nutzung bleibt trotzdem da.
-  if (!r) return T`<a class="ringbalken" href="/status/ring"><span class="ringtext"><span>${esc(tx('Nutzung'))}</span><span class="leise">${esc(tx('kein aktiver Ring'))}</span></span></a>`;
-  return T`<a class="ringbalken ${stufeKlasse(r.prozent)}" href="/status/ring?ring=${r.nr}"><span class="ringtext"><span>${esc(tx('Nutzung'))}</span><span>${esc(stunden(r.sekunden))}</span></span><span class="balken"><i data-anteil="${Math.min(100, r.prozent)}"></i></span></a>`;
+  const an = aktuell?.name === 'ring' ? ' aktiv" aria-current="page' : '';
+  const pfeil = T('<svg class="ringpfeil" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>');
+  if (!r) return T`<a class="ringbalken${an}" href="/status/ring"><span class="ringtext"><span>${esc(tx('Nutzung'))}</span><span class="leise">${esc(tx('kein aktiver Ring'))}${pfeil}</span></span></a>`;
+  return T`<a class="ringbalken ${stufeKlasse(r.prozent)}${an}" href="/status/ring?ring=${r.nr}"><span class="ringtext"><span>${esc(tx('Nutzung'))}</span><span>${esc(stunden(r.sekunden))}${pfeil}</span></span><span class="balken"><i data-anteil="${Math.min(100, r.prozent)}"></i></span></a>`;
 }
 // Strich und Beschriftung im Wortbalken an ihre Stelle (Prozent aus data-pos); Beschriftung bleibt im Rahmen.
 const setzeWortlage = (wurzel) => wurzel.querySelectorAll('.wortskala [data-pos]').forEach((el) => {
@@ -3675,6 +3673,80 @@ async function warteAufNeustart() {
   return false;
 }
 
+// ---------- Konto verbinden (OAuth, bisher OpenRouter) ----------
+// Das Fenster der Freigabe öffnet sofort beim Klick (sonst blockt der Browser es) und bekommt die Adresse, sobald der
+// Server den Ablauf angelegt hat. OpenRouter leitet danach auf /api/v1/ai/connect/openrouter; die Seite reicht code und state an das
+// Fenster weiter, das die Verbindung begonnen hat (BroadcastChannel, sonst localStorage-Ereignis).
+async function kiVerbindungStarten(pfad, body) {
+  const fenster = window.open('about:blank', 'ki-verbinden', 'popup,width=520,height=760');
+  try {
+    const r = await api(pfad, { method: 'POST', body });
+    if (fenster && !fenster.closed) fenster.location.href = r.url; else window.open(r.url, '_blank');
+    return r;
+  } catch (f) { fenster?.close(); throw f; }
+}
+// Wartet auf den Code: Nachricht der Rücksprung-Seite (gleicher Browser) oder Abholen beim Server (der Rücksprung
+// legt ihn dort ab – nötig, wenn das Fenster in einem anderen Speicher läuft, z. B. iOS-Web-App). Ablehnung → Fehler,
+// nach 15 Minuten '' (abgelaufen).
+function kiVerbindungAbwarten(state) {
+  return new Promise((resolve, reject) => {
+    const kanal = 'BroadcastChannel' in window ? new BroadcastChannel('ki-verbinden') : null;
+    let aus = false;
+    const ende = () => { aus = true; kanal?.close(); window.removeEventListener('storage', speicher); clearInterval(uhr); clearTimeout(frist); };
+    const fertig = (x) => {
+      if (aus || !x || (x.state && x.state !== state)) return;
+      if (x.fehler) { ende(); reject(new Error(tx('OpenRouter hat den Zugang nicht freigegeben.'))); return; }
+      if (!x.code || x.state !== state) return;
+      ende();
+      resolve(x.code);
+    };
+    const speicher = (e) => { if (e.key === 'ki-verbinden' && e.newValue) try { fertig(JSON.parse(e.newValue)); } catch { /* fremder Wert */ } };
+    if (kanal) kanal.onmessage = (e) => fertig(e.data);
+    window.addEventListener('storage', speicher);
+    const uhr = setInterval(async () => {
+      try { const r = await api('/api/ki/verbinden/abholen', { method: 'POST', body: { state } }); if (r.code) fertig({ state, code: r.code }); } catch { /* weiter warten */ }
+    }, 2500);
+    const frist = setTimeout(() => { if (!aus) { ende(); resolve(''); } }, 15 * 60 * 1000);
+  });
+}
+// Status → KI: OpenRouter-Konto verbinden (zugang = vorhandener Zugang, dessen Schlüssel erneuert wird); false = abgebrochen.
+async function kiOpenRouterVerbinden(zugang) {
+  const st = await kiVerbindungStarten('/api/ki/verbinden/openrouter/start', {});
+  const oauthCode = st.von_hand ? (prompt(tx('Code von OpenRouter einfügen')) || '').trim() : await kiVerbindungAbwarten(st.state);
+  if (!oauthCode) return false;
+  await kiNachSpeichern(await api('/api/ki/verbinden/openrouter/fertig', { method: 'POST', body: { code: oauthCode, state: st.state, zugang } }));
+  melde(tx('Mit OpenRouter verbunden'));
+  return true;
+}
+
+// Rücksprung von OpenRouter: Code weiterreichen, Fenster schließen.
+function zeigeKiVerbunden() {
+  const q = new URLSearchParams(location.search);
+  const code = q.get('code') || '', state = q.get('state') || '';
+  const nachricht = code ? { code, state } : { state, fehler: q.get('error') || 'abgelehnt' };
+  try { const k = new BroadcastChannel('ki-verbinden'); k.postMessage(nachricht); k.close(); } catch { /* ohne BroadcastChannel */ }
+  try { localStorage.setItem('ki-verbinden', JSON.stringify({ ...nachricht, t: Date.now() })); localStorage.removeItem('ki-verbinden'); } catch { /* privat */ }
+  // Auch beim Server ablegen: das ursprüngliche Fenster holt ihn dort ab, falls es die Nachricht nicht erreicht.
+  if (code && state) api('/api/ki/verbinden/rueckgabe', { method: 'POST', body: { state, code } }).catch(() => {});
+  seite.innerHTML = code ? T`<div class="mitte"><h1>${tx('Verbunden')}</h1><p>${tx('Die Freigabe ist angekommen. Dieses Fenster schließt sich gleich; weiter geht es im ursprünglichen Fenster.')}</p></div>`
+    : T`<div class="mitte"><h1>${tx('Nicht verbunden')}</h1><p>${tx('OpenRouter hat keine Freigabe geschickt. Fenster schließen und neu verbinden.')}</p></div>`;
+  if (code) setTimeout(() => window.close(), 1200);
+}
+
+// Ersteinrichtung in Schritten: Fortschrittsleiste oben (immer sichtbar, je Schritt ein Block), nur das Nötigste
+// sichtbar, der Rest mit Vorgaben unter „Erweitert“. Gespeichert wird erst im letzten Schritt.
+const ER_SCHRITTE = [
+  { id: 'start', name: 'Start', titel: 'Willkommen' },
+  { id: 'ki', name: 'KI', titel: 'Transkription und KI' },
+  { id: 'dienste', name: 'Dienste', titel: 'YouTube und Joplin' },
+  { id: 'grenzen', name: 'Grenzwerte', titel: 'Fristen und Grenzwerte' },
+  { id: 'updates', name: 'Updates', titel: 'Updates und Backups' },
+  { id: 'fertig', name: 'Fertig', titel: 'Zusammenfassung' },
+];
+const KONFIG_STATISTIK = 'TELEMETRY';
+const ER_BEREICHE = ['kurztitel', 'auswertung', 'recherche', 'bilder'];
+const ER_TITEL = { kurztitel: 'kurztitel', auswertung: 'auswertung', recherche: 'webrecherche', bilder: 'bilder' };
+
 async function zeigeErsteinrichtung() {
   const code = new URLSearchParams(location.search).get('code') || '';
   seite.innerHTML = T('<p class="leer">Lädt …</p>');
@@ -3685,16 +3757,326 @@ async function zeigeErsteinrichtung() {
     seite.innerHTML = T`<h1>Ersteinrichtung</h1><div class="hinweis schlecht">${esc(f.message)}</div>`;
     return;
   }
+  const F = Object.fromEntries(d.felder.map((f) => [f.key, f]));
+  const werte = Object.fromEntries(d.felder.map((f) => [f.key, f.wert ?? '']));
   // Öffentliche Adresse: vorgeschlagen ist die, unter der der Assistent gerade läuft (falls https).
-  for (const f of d.felder) if (f.key === 'PUBLIC_URL' && !f.wert && location.protocol === 'https:') f.wert = location.origin;
+  if (!werte.PUBLIC_URL && location.protocol === 'https:') werte.PUBLIC_URL = location.origin;
   // Sprache: die Seite läuft schon in der gewählten (Browser, ?lang= oder gespeichert); Umschalten lädt neu.
-  for (const f of d.felder) if (f.key === 'LANGUAGE') f.wert = SPRACHE;
+  werte.LANGUAGE = SPRACHE;
+  // Whisper: Vorgabe das große Modell (large-v3-turbo), sonst das größte, das in den freien RAM passt.
+  if (!d.eingerichtet && d.whisper && F.WHISPER_MODEL && werte.WHISPER_MODEL === F.WHISPER_MODEL.vorgabe) {
+    const passt = d.whisper.modelle.filter((m) => !d.whisper.ram_verfuegbar || m.ram_mb * 1024 * 1024 <= d.whisper.ram_verfuegbar);
+    werte.WHISPER_MODEL = (passt.find((m) => m.id === 'turbo') || passt[passt.length - 1] || d.whisper.modelle.find((m) => m.id === 'turbo'))?.id || werte.WHISPER_MODEL;
+  }
+  const ki = { zugaenge: [], wahl: { transkription: { zugang: d.whisper?.engine === false ? 'pebble' : 'whisper' }, ausweich: { zugang: '' } } };
+  for (const b of ER_BEREICHE) ki.wahl[b] = { zugang: '', websuche: [] };
+  // OpenAI-Schlüssel aus der Umgebung (Docker): OpenAI steht schon als Anbieter bereit.
+  const envOpenAI = !!F.OPENAI_API_KEY?.gesperrt;
+  let name = '', schritt = 0, weitester = 0, neu = null, fehler = '', schluessel = 'nutzer';
+  // Stand nach dem Sprachwechsel (Seite lädt neu) – ohne Geheimnisse.
+  try {
+    const st = JSON.parse(sessionStorage.getItem('ersteinrichtung') || 'null');
+    if (st?.code === code) {
+      Object.assign(werte, st.werte, { LANGUAGE: SPRACHE });
+      name = st.name || '';
+      schluessel = st.schluessel || schluessel;
+      if (st.ki) {
+        Object.assign(ki, st.ki);
+        // Anbieter mit Schlüssel gehen beim Sprachwechsel nicht mit: ihre Einträge fallen weg, neu verbinden.
+        const fehlt = Object.values(ki.wahl).map((w) => w.zugang).filter((id) => id && id !== 'whisper' && id !== 'pebble' && !ki.zugaenge.some((z) => z.id === id));
+        if (fehlt.length) { [...new Set(fehlt)].forEach((id) => anbieterWeg(id)); setTimeout(() => melde(tx('Anbieter mit Schlüssel bitte nach dem Sprachwechsel neu hinzufügen.')), 500); }
+      }
+    }
+  } catch { /* kein Stand */ }
+  sessionStorage.removeItem('ersteinrichtung');
+  const geheim = (k) => F[k]?.art === 'secret';
+  const art = (z) => kiArt(d, z);
+  const zugang = (id) => ki.zugaenge.find((z) => z.id === id);
+  const erlaubt = (b) => ki.zugaenge.filter((z) => art(z)?.bereiche?.includes(b));
+  const searx = () => ki.zugaenge.filter((z) => art(z)?.api === 'searxng');
+  if (envOpenAI && !ki.zugaenge.length) neuerAnbieter({ id: kiNeueID(), name: 'OpenAI', art: 'openai', adresse: '', schluessel: '', env: true });
+
+  // Ein Anbieter kommt dazu: leere Bereiche, die er bedienen kann, übernimmt er mit der Vorgabe seiner Modellauswahl.
+  function neuerAnbieter(z) {
+    ki.zugaenge.push(z);
+    const a = art(z) || {};
+    if (a.api === 'searxng') {
+      for (const b of ['auswertung', 'recherche']) { const w = ki.wahl[b]; if (w.zugang && !art(zugang(w.zugang))?.suche && !w.websuche.includes(z.id)) w.websuche.push(z.id); }
+      return;
+    }
+    for (const b of ER_BEREICHE) {
+      const w = ki.wahl[b];
+      if (w.zugang || !a.bereiche?.includes(b)) continue;
+      ki.wahl[b] = vorgabe(b, z);
+    }
+  }
+  function vorgabe(slot, z) {
+    const a = art(z) || {}, b = slot === 'ausweich' ? 'transkription' : slot;
+    const vorschlag = a.vorschlag?.[b] || '';
+    const e = { zugang: z.id, modell: a.modelle?.[b]?.[0]?.id || vorschlag, websuche: [] };
+    if (b === 'auswertung' || b === 'recherche') e.websuche = a.suche ? ['anbieter'] : searx().map((x) => x.id);
+    kiPreiseAusKatalog({ zugaenge: ki.zugaenge, arten: d.arten }, b, e);
+    return e;
+  }
+  function anbieterWeg(id) {
+    ki.zugaenge = ki.zugaenge.filter((z) => z.id !== id);
+    for (const [b, w] of Object.entries(ki.wahl)) {
+      if (w.zugang === id) ki.wahl[b] = b === 'transkription' ? { zugang: 'whisper' } : { zugang: '', websuche: [] };
+      if (w.websuche) w.websuche = w.websuche.filter((x) => x !== id);
+    }
+  }
+
+  // --- Bausteine ---
+  const hilfe = (f) => (f.hilfe ? T`<p class="leise hilfe">${esc(tx(f.hilfe))}</p>` : '');
+  const feld = (k, { label } = {}) => {
+    const f = F[k];
+    if (!f) return '';
+    const id = `f-${k}`, w = werte[k] ?? '';
+    const titel = T`<label for="${id}">${esc(label || tx(f.name))}${f.pflicht ? ' *' : ''}</label>`;
+    if (f.art === 'choice' && f.auswahl?.length === 2 && f.auswahl.includes('aktiv')) {
+      return T`<div class="feld"><label class="schalter"><input type="checkbox" data-schalter="${k}"${w === 'aktiv' ? ' checked' : ''}> ${esc(label || tx(f.name))}</label>${hilfe(f)}</div>`;
+    }
+    if (f.art === 'choice') return T`<div class="feld">${titel}<select id="${id}" data-w="${k}">${f.auswahl.map((c) => T`<option value="${esc(c)}"${c === w ? ' selected' : ''}>${esc(wahlText(f, c))}</option>`).join('')}</select>${hilfe(f)}</div>`;
+    if (f.art === 'secret') {
+      const platz = f.gesperrt ? tx('aus der Umgebung gesetzt') : '';
+      return T`<div class="feld">${titel}<input type="password" id="${id}" data-w="${k}" value="${esc(w)}" placeholder="${platz}"${f.gesperrt ? ' disabled' : ''} autocomplete="off" spellcheck="false">${hilfe(f)}</div>`;
+    }
+    const modus = f.art === 'int' ? ' inputmode="numeric"' : f.art === 'num' ? ' inputmode="decimal"' : '';
+    return T`<div class="feld">${titel}<input type="${f.art === 'url' ? 'url' : 'text'}" id="${id}" data-w="${k}" value="${esc(w)}"${modus}${f.gesperrt ? ' disabled' : ''} autocomplete="off" spellcheck="false">${hilfe(f)}</div>`;
+  };
+  const felder = (keys) => keys.map((k) => feld(k)).join('');
+  const erweitert = (inhalt, titel = tx('Erweitert')) => (inhalt.trim() ? T`<details class="erweitert"><summary>${esc(titel)}</summary>${inhalt}</details>` : '');
+
+  // Modell, Preise und Websuche eines KI-Eintrags (slot: Bereich oder „ausweich“ für die Transkription).
+  function eintrag(slot) {
+    const b = slot === 'ausweich' ? 'transkription' : slot;
+    const e = ki.wahl[slot], z = zugang(e.zugang), a = art(z);
+    if (!z) return '';
+    const zahl = (k, n) => T`<label for="ke-${slot}-${k}">${esc(tx(n))} *</label><input type="text" id="ke-${slot}-${k}" data-slot="${slot}" data-k="${k}" inputmode="decimal" value="${e[k] ?? ''}" autocomplete="off">`;
+    const katalog = a?.modelle?.[b];
+    let html = katalog
+      ? T`<label for="ke-${slot}-modell">Modell</label><select id="ke-${slot}-modell" data-slot="${slot}" data-k="modell">${katalog.map((m) => T`<option value="${esc(m.id)}"${m.id === e.modell ? ' selected' : ''}>${esc(tx(m.name))}${kiPreisText(m) ? ` · ${esc(kiPreisText(m))}` : ''}</option>`).join('')}</select>`
+      : T`<label for="ke-${slot}-modell">Modell *</label><input type="text" id="ke-${slot}-modell" data-slot="${slot}" data-k="modell" value="${esc(e.modell || '')}" list="ke-${slot}-liste" autocomplete="off" spellcheck="false">
+        <datalist id="ke-${slot}-liste">${(z.modelle || []).map((m) => T`<option value="${esc(m)}">`).join('')}</datalist>
+        ${z.modelle ? '' : T`<p class="leise hilfe">${tx('Modellvorschläge nach „Prüfen“ beim Anbieter.')}</p>`}`;
+    if (a?.cloud && !katalog && !a.preise_optional) {
+      if (b === 'transkription') html += zahl('preis_minute', 'Preis (USD je Minute)');
+      else if (b === 'bilder') html += zahl('preis_bild', 'Preis (USD je Bild)');
+      else html += zahl('preis_ein', 'Preis Eingabe (USD je 1 Mio. Tokens)') + zahl('preis_aus', 'Preis Ausgabe (USD je 1 Mio. Tokens)');
+    }
+    if (b === 'auswertung' || b === 'recherche') {
+      const sx = searx();
+      html += T`<p class="feldname">${tx('Websuche')}</p><div class="mehrfach">
+        ${a?.suche ? T`<label class="schalter"><input type="checkbox" data-slot="${slot}" data-suche="anbieter"${e.websuche?.includes('anbieter') ? ' checked' : ''}> ${tx('Suche des Anbieters')}</label>` : ''}
+        ${sx.map((x) => T`<label class="schalter"><input type="checkbox" data-slot="${slot}" data-suche="${esc(x.id)}"${e.websuche?.includes(x.id) ? ' checked' : ''}> ${esc(x.name)}</label>`).join('')}</div>
+        ${!a?.suche && !sx.length ? T`<p class="leise hilfe">${tx('Ein lokales Modell sucht nicht selbst im Web; dafür einen SearXNG-Anbieter hinzufügen.')}</p>` : ''}
+        ${a?.cloud && !katalog && !a.preise_optional && e.websuche?.includes('anbieter') ? zahl('preis_suche', 'Preis Websuche (USD je Aufruf)') : ''}`;
+    }
+    return html;
+  }
+
+  // --- Schritte ---
+  const SEITEN = {
+    start: () => T`<p class="leise">Ein paar Angaben, dann ist die App bereit. Alles lässt sich später unter Status → Konfiguration ändern.</p>
+      ${feld('LANGUAGE')}
+      ${d.eingerichtet ? '' : T`<div class="feld"><label for="f-name">Dein Name *</label><input id="f-name" data-name="1" value="${esc(name)}" autocomplete="given-name" maxlength="40"><p class="leise hilfe">Du bist der erste Nutzer und Admin. Weitere Nutzer lädst du später ein.</p></div>`}
+      ${feld('PUBLIC_URL')}
+      ${d.eingerichtet ? '' : T`<fieldset><legend>${tx('Verschlüsselung')}</legend>
+        <p class="leise">${tx('Notizen, Listen und Aufnahmen liegen immer verschlüsselt, je Nutzer mit eigenem Schlüssel. Ein zweiter Schlüssel schützt die Geheimnisse des Systems (API-Schlüssel, Benachrichtigungen) im Backup.')}</p>
+        <div class="wahlliste">
+          <label class="wahlzeile${schluessel === 'nutzer' ? ' an' : ''}"><input type="radio" name="er-schluessel" value="nutzer"${schluessel === 'nutzer' ? ' checked' : ''}><span><strong>${tx('Nur ich bin Admin')}</strong><span class="leise">${tx('Ein gemeinsamer Code: dein Wiederherstellungscode stellt auch das System wieder her.')}</span></span></label>
+          <label class="wahlzeile${schluessel === 'code' ? ' an' : ''}"><input type="radio" name="er-schluessel" value="code"${schluessel === 'code' ? ' checked' : ''}><span><strong>${tx('Mehrere Admins')}</strong><span class="leise">${tx('Getrennte Schlüssel (Pflicht bei mehreren Admins): das System bekommt einen eigenen Code.')}</span></span></label>
+        </div><p class="leise hilfe">${tx('Die Codes siehst du nach dem Anlegen deines Passkeys – einmalig, zum Notieren.')}</p></fieldset>`}
+      ${erweitert(felder(['TRUSTED_PROXY']))}`,
+
+    ki: () => {
+      // Schon eingerichtet (ungültige Einstellungen reparieren): KI bleibt, wie sie ist – geändert unter Status → KI.
+      if (d.eingerichtet) return T`<p class="hinweis">${tx('KI-Anbieter und Transkription bleiben unverändert; ändern unter Status → KI.')}</p>`;
+      const t = ki.wahl.transkription;
+      const trans = ki.zugaenge.filter((z) => art(z)?.bereiche?.includes('transkription'));
+      const wm = d.whisper?.modelle.find((m) => m.id === werte.WHISPER_MODEL);
+      const option = (wert, titel, text) => T`<label class="wahlzeile${t.zugang === wert ? ' an' : ''}"><input type="radio" name="er-trans" value="${esc(wert)}"${t.zugang === wert ? ' checked' : ''}><span><strong>${esc(titel)}</strong>${text ? T`<span class="leise">${esc(text)}</span>` : ''}</span></label>`;
+      const whisperTeil = t.zugang === 'whisper' && d.whisper ? T`<div class="feld"><label for="f-WHISPER_MODEL">${tx('Whisper-Modell')}</label>
+          <div class="mitknopf"><select id="f-WHISPER_MODEL" data-w="WHISPER_MODEL">${d.whisper.modelle.map((m) => T`<option value="${esc(m.id)}"${m.id === werte.WHISPER_MODEL ? ' selected' : ''}>${esc(m.name)} · ${groesse(m.bytes)}</option>`).join('')}</select>
+          <button type="button" class="btn klein" data-hilfe="whisper" aria-expanded="false">${tx('Hilfe')}</button></div>
+          <p class="leise hilfe">${tx('Größer = genauer, aber langsamer und mehr RAM. Wird nach der Einrichtung geladen.')}</p>
+          <div id="er-whisperhilfe" hidden>${whisperTabelle(d.whisper, { gewaehlt: werte.WHISPER_MODEL })}</div></div>
+        ${trans.length ? T`<label class="schalter"><input type="checkbox" data-ausweich="1"${ki.wahl.ausweich.zugang ? ' checked' : ''}> ${tx('Scheitert Whisper, übernimmt ein Cloud-Anbieter')}</label>
+          ${ki.wahl.ausweich.zugang ? T`<select data-ausweichzugang="1" aria-label="${esc(tx('Ausweich-Anbieter'))}">${trans.map((z) => T`<option value="${esc(z.id)}"${z.id === ki.wahl.ausweich.zugang ? ' selected' : ''}>${esc(z.name)}</option>`).join('')}</select>${eintrag('ausweich')}` : ''}` : ''}
+        ${erweitert(felder(['WHISPER_KEEP_MINUTES']))}` : '';
+      const textBereich = ER_BEREICHE.some((b) => erlaubt(b).length);
+      return T`<fieldset><legend>${tx('KI-Anbieter')}</legend>
+        <p class="leise">${tx('Für Titel, Auswertung, Einsortieren und Recherche braucht die App einen KI-Anbieter. Am einfachsten ist OpenRouter: ein Konto für viele Modelle, verbunden ohne API-Schlüssel. Daneben gehen OpenAI, Grok, Gemini und Muse mit API-Schlüssel, ein OpenAI-kompatibler Dienst oder ein lokales Modell. Ohne Anbieter werden Aufnahmen nur in Text umgewandelt.')}</p>
+        ${ki.zugaenge.length ? T`<div class="karte kizeilen">${ki.zugaenge.map((z) => T`<div class="kizeile erzeile"><span class="kizeilename">${esc(z.name)}</span><span class="leise">${esc(tx(art(z)?.name || z.art))}</span>
+          <button type="button" class="btn klein" data-weg="${esc(z.id)}">${tx('Entfernen')}</button></div>`).join('')}</div>` : ''}
+        ${neu ? neuForm() : ki.zugaenge.some((z) => art(z)?.oauth) ? T`<div class="leiste"><button type="button" class="btn" data-neu="1">${tx('Weiteren Anbieter hinzufügen')}</button></div>`
+          : T`<div class="leiste"><button type="button" class="btn haupt" data-schnell="1">${tx('Mit OpenRouter verbinden')}</button><button type="button" class="btn" data-neu="1">${tx('Anderen Anbieter hinzufügen')}</button></div>
+            <p class="leise hilfe">${tx('Empfohlen: Mit OpenRouter funktionieren alle Funktionen – Auswertung, Websuche, Bilder und Transkription.')}</p>`}
+        </fieldset>
+
+        <fieldset><legend>${tx('Transkription')}</legend><p class="leise">${tx('Wer die Aufnahmen in Text umwandelt.')}</p>
+        <div class="wahlliste">
+          ${d.whisper?.engine === false ? '' : option('whisper', tx('Whisper auf diesem Server'), tx('Die Aufnahme verlässt den Server nicht.') + (wm ? ` ${wm.name}` : ''))}
+          ${trans.map((z) => option(z.id, z.name, tx('Cloud-Anbieter'))).join('')}
+          ${option('pebble', tx('Aus – Text der Pebble-App übernehmen'), tx('Keine eigene Transkription.'))}
+        </div>
+        ${whisperTeil}${zugang(t.zugang) ? eintrag('transkription') : ''}</fieldset>
+        ${ER_BEREICHE.map((b) => {
+          const s = KI_SEITEN[ER_TITEL[b]], w = ki.wahl[b], moeglich = erlaubt(b);
+          return T`<fieldset><legend>${esc(tx(s.titel))}</legend><p class="leise">${esc(tx(s.text))}</p>
+            ${moeglich.length ? T`<label for="er-b-${b}">${tx('Anbieter')}</label><select id="er-b-${b}" data-bereich="${b}"><option value="">${tx('Aus')}</option>${moeglich.map((z) => T`<option value="${esc(z.id)}"${z.id === w.zugang ? ' selected' : ''}>${esc(z.name)}</option>`).join('')}</select>
+            ${eintrag(b)}` : T`<p class="hinweis">${b === 'bilder' ? tx('Füge oben einen Anbieter mit Bildern hinzu (OpenRouter, OpenAI, Grok, Gemini oder Muse).') : tx('Füge oben einen KI-Anbieter hinzu, um diesen Bereich zu nutzen.')}</p>`}</fieldset>`;
+        }).join('')}
+        ${textBereich ? erweitert(felder([...(ki.zugaenge.some((z) => ['openai', 'xai', 'muse', 'gemini'].includes(z.art)) ? ['OPENAI_PLAN_REASONING_EFFORT'] : []), 'RESEARCH_LIMIT_USD', 'RESEARCH_MAX_OUTPUT_TOKENS'])) : ''}`;
+    },
+
+    dienste: () => T`<p class="leise">Beides ist freiwillig und lässt sich später einrichten.</p>
+      <fieldset><legend>YouTube</legend>${feld('YOUTUBE_API_KEY', { label: tx('API-Schlüssel (optional)') })}</fieldset>
+      <fieldset><legend>Joplin</legend>${feld('JOPLIN_ENABLED', { label: tx('Notizen nach Joplin übertragen') })}
+        ${werte.JOPLIN_ENABLED === 'aktiv' ? felder(['JOPLIN_URL', 'JOPLIN_EMAIL', 'JOPLIN_PASSWORD', 'JOPLIN_NOTEBOOK']) : ''}</fieldset>`,
+
+    grenzen: () => T`<p class="leise">Die Vorgaben passen für die meisten.</p>
+      <fieldset><legend>Fristen</legend>${felder(['TRASH_RETENTION_DAYS', 'EMPTY_RETENTION_HOURS', 'PLANNING_AUTOCLOSE_DAYS'])}</fieldset>
+      ${ki.zugaenge.some((z) => art(z)?.cloud) ? T`<fieldset><legend>${tx('KI-Kosten')}</legend>${felder(['USER_DAILY_LIMIT_USD'])}</fieldset>` : ''}
+      ${erweitert(felder(['LIST_DONE_ACTIVE_MINUTES', 'VISIT_GAP_MINUTES', 'NOTE_CONTEXT_MINUTES', 'HISTORY_MIN_ENTRIES', 'MEMORY_TRAIN_ENTRIES', 'MEMORY_REJECTED']), tx('Anzeige und Gedächtnis'))}
+      ${erweitert(felder(['TRIGGER_SINGLE', 'TRIGGER_DOUBLE', 'RING_CAPACITY_HOURS', 'MAX_ATTEMPTS', 'MIN_FREE_MB', 'HOOK_MAX_MB', 'HOOK_RATE_PER_MIN']), tx('Pebble-App und Grenzwerte'))}`,
+
+    updates: () => T`<fieldset><legend>Updates</legend>
+        ${F.AUTO_UPDATE ? T`${feld('AUTO_UPDATE', { label: tx('Updates automatisch installieren') })}${erweitert(felder(['AUTO_UPDATE_TIME']))}`
+          : T`<p class="leise">${tx('Im Container: Updates mit docker compose pull und docker compose up -d.')}</p>`}</fieldset>
+      <fieldset><legend>Backups</legend>${felder(['BACKUP_SCHEDULE', 'BACKUP_AUDIO'])}${erweitert(felder(['BACKUP_TIME', 'BACKUP_RETENTION_DAYS']))}</fieldset>`,
+
+    fertig: () => {
+      const wahl = (k) => (F[k] ? wahlText(F[k], werte[k]) : '–');
+      const t = ki.wahl.transkription;
+      const transText = t.zugang === 'whisper' ? `Whisper ${d.whisper?.modelle.find((m) => m.id === werte.WHISPER_MODEL)?.name || ''}` : t.zugang === 'pebble' ? tx('Text der Pebble-App') : zugang(t.zugang)?.name || '–';
+      const bereiche = ER_BEREICHE.filter((b) => ki.wahl[b].zugang).map((b) => tx(KI_SEITEN[ER_TITEL[b]].titel));
+      const zeile = (n, w, s) => T`<dt>${esc(n)}</dt><dd>${esc(w)} <button type="button" class="linkknopf" data-gehe="${s}">${tx('Ändern')}</button></dd>`;
+      return T`<p class="leise">Prüfe kurz deine Angaben. Mit „Einrichten“ wird gespeichert und der Dienst startet neu.</p>
+        <dl class="eckdaten">
+          ${zeile(tx('Sprache'), wahl('LANGUAGE'), 0)}
+          ${d.eingerichtet ? '' : zeile(tx('Name'), name, 0)}
+          ${zeile(tx('Adresse'), werte.PUBLIC_URL || '–', 0)}
+          ${d.eingerichtet ? '' : zeile(tx('Schlüssel'), schluessel === 'code' ? tx('getrennt (mehrere Admins)') : tx('gemeinsam (ein Admin)'), 0)}
+          ${zeile(tx('Transkription'), transText, 1)}
+          ${zeile(tx('KI'), ki.zugaenge.length ? `${ki.zugaenge.map((z) => z.name).join(', ')}${bereiche.length ? ` – ${bereiche.join(', ')}` : ''}` : tx('kein Anbieter'), 1)}
+          ${zeile('YouTube', werte.YOUTUBE_API_KEY ? tx('Schlüssel gesetzt') : tx('aus'), 2)}
+          ${zeile('Joplin', werte.JOPLIN_ENABLED === 'aktiv' ? tx('an') : tx('aus'), 2)}
+          ${F.AUTO_UPDATE ? zeile(tx('Updates'), werte.AUTO_UPDATE === 'aktiv' ? tx('automatisch') : tx('von Hand'), 4) : ''}
+          ${zeile(tx('Backups'), wahl('BACKUP_SCHEDULE'), 4)}
+        </dl>
+        ${fehler ? T`<div class="hinweis schlecht">${esc(fehler)}</div>` : ''}
+        ${F[KONFIG_STATISTIK] ? T`<label class="schalter erstatistik"><input type="checkbox" data-schalter="${KONFIG_STATISTIK}"${werte[KONFIG_STATISTIK] === 'aktiv' ? ' checked' : ''}> ${tx('Anonyme Statistik')}</label>
+          <p class="leise erstatistik">${tx('Gesendet wird nur die gesamte Aufnahmezeit je Ring in Sekunden, ohne Bezug zu dir – damit sich die maximale Laufzeit der Ringe besser berechnen lässt.')}</p>` : ''}`;
+    },
+  };
+
+  // Formular „Anbieter hinzufügen“: Art, Name, Adresse, Schlüssel; Prüfen fragt die Modelle ab.
+  function neuForm() {
+    const a = art(neu) || {};
+    const schluessel = a.schluessel && a.schluessel !== 'kein';
+    const schluesselFeld = schluessel ? T`<label for="er-n-key">${tx('Schlüssel')}${a.schluessel === 'pflicht' && !(neu.art === 'openai' && envOpenAI) && !a.oauth ? ' *' : ''}</label><input id="er-n-key" type="password" data-n="schluessel" value="${esc(neu.schluessel || '')}" placeholder="${neu.art === 'openai' && envOpenAI ? esc(tx('aus der Umgebung gesetzt')) : ''}" autocomplete="off" spellcheck="false">` : '';
+    if (a.oauth) {
+      return T`<div class="karte erneu">
+        <label for="er-n-art">${tx('Art')}</label><select id="er-n-art" data-n="art">${(d.arten || []).map((x) => T`<option value="${esc(x.id)}"${x.id === neu.art ? ' selected' : ''}>${esc(tx(x.name))}</option>`).join('')}</select>
+        ${a.text ? T`<p class="leise hilfe">${esc(tx(a.text))}</p>` : ''}
+        <p>${tx('Melde dich bei OpenRouter an und gib den Zugang frei. Ein API-Schlüssel ist nicht nötig; Ausgaben begrenzt du dort selbst.')}</p>
+        <div class="leiste"><button type="button" class="btn haupt" data-verbinden="1">${tx('Mit OpenRouter verbinden')}</button><button type="button" class="btn" data-abbruch="1">${tx('Abbrechen')}</button></div>
+        ${neu.vonHand ? T`<label for="er-n-oacode">${tx('Code von OpenRouter')}</label><div class="mitknopf"><input id="er-n-oacode" data-n="oacode" value="${esc(neu.oacode || '')}" autocomplete="off" spellcheck="false"><button type="button" class="btn" data-oacode="1">${tx('Übernehmen')}</button></div>
+          <p class="leise hilfe">${tx('Diese Seite läuft ohne https: OpenRouter zeigt den Code nach der Freigabe an – hier einfügen.')}</p>` : ''}
+        <p class="leise hilfe" id="er-n-pruef">${neu.pruef ? esc(neu.pruef) : ''}</p>
+        <details class="erweitert"><summary>${tx('Stattdessen API-Schlüssel einfügen')}</summary>${schluesselFeld}
+          <div class="leiste"><button type="button" class="btn" data-hinzu="1">${tx('Hinzufügen')}</button></div></details></div>`;
+    }
+    return T`<div class="karte erneu">
+      <label for="er-n-art">${tx('Art')}</label><select id="er-n-art" data-n="art">${(d.arten || []).map((x) => T`<option value="${esc(x.id)}"${x.id === neu.art ? ' selected' : ''}>${esc(tx(x.name))}</option>`).join('')}</select>
+      ${a.text ? T`<p class="leise hilfe">${esc(tx(a.text))}</p>` : ''}
+      <label for="er-n-name">Name *</label><input id="er-n-name" data-n="name" value="${esc(neu.name)}" autocomplete="off">
+      ${a.adresse_fest ? '' : T`<label for="er-n-adresse">${tx('Adresse')}${a.adresse ? '' : ' *'}</label><input id="er-n-adresse" type="url" data-n="adresse" value="${esc(neu.adresse || '')}" placeholder="${esc(a.adresse || (a.api === 'searxng' ? 'http://<server>:8080' : 'https://…/v1'))}" autocomplete="off" spellcheck="false">`}
+      ${schluesselFeld}
+      <p class="leise hilfe" id="er-n-pruef">${neu.pruef ? esc(neu.pruef) : ''}</p>
+      <div class="leiste"><button type="button" class="btn haupt" data-hinzu="1">${tx('Hinzufügen')}</button><button type="button" class="btn" data-pruefen="1">${tx('Prüfen')}</button><button type="button" class="btn" data-abbruch="1">${tx('Abbrechen')}</button></div></div>`;
+  }
+  const neuerName = (artId) => {
+    const basis = tx(d.arten.find((x) => x.id === artId)?.name || artId).replace(/ \(.*\)$/, '');
+    let n = basis, i = 2;
+    while (ki.zugaenge.some((z) => z.name.toLowerCase() === n.toLowerCase())) n = `${basis} ${i++}`;
+    return n;
+  };
+
+  // Prüfung eines Schritts vor „Weiter“; liefert die erste Meldung oder ''.
+  function pruefe(i) {
+    const s = ER_SCHRITTE[i].id;
+    if (s === 'start') {
+      if (!d.eingerichtet && !name.trim()) return tx('Bitte deinen Namen eingeben');
+      try { const u = new URL(werte.PUBLIC_URL); if (u.protocol !== 'https:' && !(u.protocol === 'http:' && ['localhost', '127.0.0.1'].includes(u.hostname))) return tx('Die öffentliche Adresse muss mit https:// beginnen'); } catch { return tx('Bitte die öffentliche Adresse eingeben (https://…)'); }
+    }
+    if (s === 'ki') {
+      if (neu) return tx('Den neuen Anbieter erst hinzufügen oder abbrechen');
+      for (const [slot, e] of Object.entries(ki.wahl)) {
+        const z = zugang(e.zugang);
+        if (!z || (slot === 'ausweich' && ki.wahl.transkription.zugang !== 'whisper')) continue;
+        const b = slot === 'ausweich' ? 'transkription' : slot;
+        const a = art(z), titel = slot === 'ausweich' ? tx('Ausweich-Anbieter') : tx(b === 'transkription' ? 'Transkription' : KI_SEITEN[ER_TITEL[b]].titel);
+        if (!e.modell?.trim()) return tx('{0}: Modell fehlt', titel);
+        if (a?.cloud && !a.modelle?.[b] && !a.preise_optional) {
+          const preise = b === 'transkription' ? ['preis_minute'] : b === 'bilder' ? ['preis_bild'] : ['preis_ein', 'preis_aus', ...(e.websuche?.includes('anbieter') ? ['preis_suche'] : [])];
+          if (preise.some((k) => e[k] == null || Number.isNaN(e[k]))) return tx('{0}: Preise fehlen', titel);
+        }
+      }
+    }
+    return '';
+  }
+
+  // Einträge der Bereiche aus der Wahl.
+  function bereicheAusWahl() {
+    const out = {};
+    const eintragAus = (id, e) => {
+      const { zugang: z, modell, websuche, ...rest } = e;
+      const x = { id, zugang: z, modell, ...Object.fromEntries(Object.entries(rest).filter(([k, v]) => k.startsWith('preis_') && v != null)) };
+      if (websuche?.length) x.websuche = websuche;
+      return x;
+    };
+    const t = ki.wahl.transkription;
+    if (t.zugang === 'whisper') {
+      out.transkription = [{ id: 'transkription-1', zugang: 'whisper' }];
+      if (ki.wahl.ausweich.zugang) out.transkription.push(eintragAus('transkription-2', ki.wahl.ausweich));
+    } else if (t.zugang === 'pebble') out.transkription = [{ id: 'transkription-1', zugang: 'pebble' }];
+    else out.transkription = [eintragAus('transkription-1', t)];
+    for (const b of ER_BEREICHE) out[b] = ki.wahl[b].zugang ? [eintragAus(`${b}-1`, ki.wahl[b])] : [];
+    return out;
+  }
+
+  // --- Malen ---
   seite.innerHTML = T`<h1>Ersteinrichtung</h1>
     ${d.eingerichtet ? '' : T`<nav class="btn-group unter" aria-label="Art"><button type="button" class="btn aktiv" data-art="neu" aria-pressed="true">Neu einrichten</button><button type="button" class="btn" data-art="backup" aria-pressed="false">Backup einspielen</button></nav>
       <div id="backupweg" hidden></div>`}
-    <div id="neuweg"><p class="leise">Alle Werte sind mit Vorgaben gefüllt; Pflichtfelder tragen *. Den Zugang für die Pebble-App findest du nach der Einrichtung unter Status → Pebble-App. Später änderbar unter Status → Konfiguration.</p>
-    ${d.fehler ? T`<div class="hinweis schlecht">Die gespeicherten Einstellungen sind ungültig: ${esc(d.fehler)}</div>` : ''}
-    ${einstellungsFormular(d.felder, { assistent: true, whisper: d.whisper })}<div id="ergebnis"></div></div>`;
+    <div id="neuweg">${d.fehler ? T`<div class="hinweis schlecht">Die gespeicherten Einstellungen sind ungültig: ${esc(d.fehler)}</div>` : ''}
+      <nav class="erschritte" aria-label="${esc(tx('Fortschritt'))}"><ol></ol><p class="erstand" aria-live="polite"></p></nav>
+      <form class="einstellungen erform" novalidate><div id="erinhalt"></div>
+        <div class="leiste erleiste"><button type="button" class="btn" data-zurueck="1">${tx('Zurück')}</button><button type="submit" class="btn haupt"></button></div></form>
+      <div id="ergebnis"></div></div>`;
+  const leiste = seite.querySelector('.erschritte'), form = seite.querySelector('.erform'), inhalt = document.getElementById('erinhalt');
+  // Die Leiste klebt unter dem Kopf der Seite.
+  const kopfH = () => { leiste.style.top = `${document.querySelector('.kopf')?.offsetHeight || 0}px`; };
+  kopfH();
+  window.addEventListener('resize', kopfH);
+  const male = () => {
+    leiste.querySelector('ol').innerHTML = ER_SCHRITTE.map((s, i) => T`<li><button type="button" class="erblock${i < schritt ? ' erledigt' : ''}${i === schritt ? ' aktiv' : ''}" data-gehe="${i}"${i > weitester ? ' disabled' : ''}${i === schritt ? ' aria-current="step"' : ''} title="${esc(tx(s.titel))}"><span class="erlang">${esc(tx(s.name))}</span><span class="erkurz" aria-hidden="true">${i + 1}</span></button></li>`).join('');
+    leiste.querySelector('.erstand').textContent = tx('Schritt {0} von {1}: {2}', schritt + 1, ER_SCHRITTE.length, tx(ER_SCHRITTE[schritt].titel));
+    inhalt.innerHTML = T`<h2>${esc(tx(ER_SCHRITTE[schritt].titel))}</h2>${SEITEN[ER_SCHRITTE[schritt].id]()}`;
+    form.querySelector('[data-zurueck]').hidden = schritt === 0;
+    form.querySelector('[type=submit]').textContent = schritt === ER_SCHRITTE.length - 1 ? tx('Einrichten') : tx('Weiter');
+  };
+  const gehe = (i) => {
+    schritt = Math.max(0, Math.min(ER_SCHRITTE.length - 1, i));
+    weitester = Math.max(weitester, schritt);
+    fehler = '';
+    male();
+    window.scrollTo(0, 0);
+  };
+  male();
+
   seite.querySelectorAll('[data-art]').forEach((b) => { b.onclick = () => {
     seite.querySelectorAll('[data-art]').forEach((x) => { x.classList.toggle('aktiv', x === b); x.setAttribute('aria-pressed', x === b); });
     document.getElementById('neuweg').hidden = b.dataset.art !== 'neu';
@@ -3702,43 +4084,191 @@ async function zeigeErsteinrichtung() {
     weg.hidden = b.dataset.art !== 'backup';
     if (!weg.hidden && !weg.innerHTML) einrichtungMitBackup(weg, code);
   }; });
-  const form = seite.querySelector('form');
-  bindeWhisper(form);
-  // Erster Nutzer (Admin): sein Name für „Hallo …“.
-  if (!d.eingerichtet) form.insertAdjacentHTML('afterbegin', T`<fieldset><legend>Dein Zugang</legend><label for="f-name">Dein Name *</label><input id="f-name" name="_name" autocomplete="given-name" maxlength="40" required><p class="leise hilfe">Du bist der erste Nutzer und Admin. Weitere Nutzer lädst du später unter Einstellungen → Nutzer ein.</p></fieldset>`);
-  const sprache = form.querySelector('[name=LANGUAGE]');
-  if (sprache) sprache.onchange = () => { const u = new URL(location.href); u.searchParams.set('lang', sprache.value); location.replace(u); };
-  form.onclick = async (ev) => {
-    const b = ev.target.closest('[data-pruefen]');
+
+  // Eingaben merken; Umschalter, die andere Felder zeigen, malen den Schritt neu.
+  form.addEventListener('input', (ev) => {
+    const el = ev.target;
+    if (el.dataset.w) werte[el.dataset.w] = el.value;
+    else if (el.dataset.name) name = el.value;
+    else if (el.dataset.n) neu[el.dataset.n] = el.value;
+    else if (el.dataset.slot && el.dataset.k) {
+      const e = ki.wahl[el.dataset.slot];
+      e[el.dataset.k] = el.dataset.k.startsWith('preis_') ? kiZahl(el.value) : el.value;
+    }
+  });
+  form.addEventListener('change', (ev) => {
+    const el = ev.target;
+    const dk = { zugaenge: ki.zugaenge, arten: d.arten };
+    if (el.dataset.w === 'LANGUAGE') {
+      // Seite in der gewählten Sprache neu laden; der Stand (ohne Geheimnisse) kommt mit.
+      const ohne = Object.fromEntries(Object.entries(werte).filter(([k]) => !geheim(k)));
+      sessionStorage.setItem('ersteinrichtung', JSON.stringify({ code, werte: ohne, name, schluessel, ki: { ...ki, zugaenge: ki.zugaenge.filter((z) => !z.schluessel || z.env) } }));
+      const u = new URL(location.href);
+      u.searchParams.set('lang', el.value);
+      location.replace(u);
+    } else if (el.dataset.schalter) {
+      werte[el.dataset.schalter] = el.checked ? 'aktiv' : 'inaktiv';
+      if (el.dataset.schalter === 'JOPLIN_ENABLED') male();
+    } else if (el.dataset.w === 'WHISPER_MODEL') {
+      werte.WHISPER_MODEL = el.value;
+      const box = document.getElementById('er-whisperhilfe');
+      if (box) box.innerHTML = whisperTabelle(d.whisper, { gewaehlt: el.value });
+    } else if (el.name === 'er-schluessel') {
+      schluessel = el.value;
+      male();
+    } else if (el.name === 'er-trans') {
+      ki.wahl.transkription = el.value === 'whisper' || el.value === 'pebble' ? { zugang: el.value } : vorgabe('transkription', zugang(el.value));
+      male();
+    } else if (el.dataset.ausweich) {
+      const erster = ki.zugaenge.find((z) => art(z)?.bereiche?.includes('transkription'));
+      ki.wahl.ausweich = el.checked && erster ? vorgabe('ausweich', erster) : { zugang: '' };
+      male();
+    } else if (el.dataset.ausweichzugang) {
+      ki.wahl.ausweich = vorgabe('ausweich', zugang(el.value));
+      male();
+    } else if (el.dataset.bereich) {
+      const b = el.dataset.bereich;
+      ki.wahl[b] = el.value ? vorgabe(b, zugang(el.value)) : { zugang: '', websuche: [] };
+      male();
+    } else if (el.dataset.suche) {
+      const e = ki.wahl[el.dataset.slot];
+      e.websuche = [...form.querySelectorAll(T`[data-slot="${el.dataset.slot}"][data-suche]:checked`)].map((c) => c.dataset.suche);
+      kiPreiseAusKatalog(dk, el.dataset.slot === 'ausweich' ? 'transkription' : el.dataset.slot, e);
+      male();
+    } else if (el.dataset.slot && el.dataset.k === 'modell' && el.tagName === 'SELECT') {
+      const e = ki.wahl[el.dataset.slot];
+      e.modell = el.value;
+      kiPreiseAusKatalog(dk, el.dataset.slot === 'ausweich' ? 'transkription' : el.dataset.slot, e);
+      male();
+    } else if (el.dataset.n === 'art') {
+      neu = { ...neu, art: el.value, name: neuerName(el.value), modelle: null, pruef: '' };
+      male();
+    }
+  });
+  form.addEventListener('click', async (ev) => {
+    const b = ev.target.closest('button[type=button]');
     if (!b) return;
-    b.disabled = true;
+    if (b.dataset.zurueck) gehe(schritt - 1);
+    else if (b.dataset.hilfe) {
+      const box = document.getElementById('er-whisperhilfe');
+      box.hidden = !box.hidden;
+      b.setAttribute('aria-expanded', String(!box.hidden));
+    } else if (b.dataset.neu) {
+      const frei = (x) => !ki.zugaenge.some((z) => z.art === x.id);
+      const a = d.arten.find((x) => x.oauth && frei(x)) || d.arten.find(frei) || d.arten[0];
+      neu = { id: kiNeueID(), art: a.id, name: neuerName(a.id), adresse: '', schluessel: '' };
+      male();
+      document.getElementById('er-n-art')?.focus();
+    } else if (b.dataset.abbruch) { neu = null; male(); }
+    else if (b.dataset.weg) { anbieterWeg(b.dataset.weg); male(); }
+    else if (b.dataset.pruefen) {
+      const info = document.getElementById('er-n-pruef');
+      b.disabled = true;
+      info.textContent = tx('Prüft …');
+      try {
+        const r = await api('/api/ersteinrichtung/openai', { method: 'POST', body: { code, art: neu.art, base_url: neu.adresse, key: neu.schluessel } });
+        neu.modelle = r.modelle || null;
+        neu.pruef = r.ok ? (r.modelle ? tx('Erreichbar, {0} Modelle', r.modelle.length) : tx('Erreichbar')) : T`${tx('Fehler')}: ${r.fehler}`;
+      } catch (f) { neu.pruef = f.message; }
+      male();
+    } else if (b.dataset.verbinden || b.dataset.schnell) {
+      if (b.dataset.schnell) {
+        const a = d.arten.find((x) => x.oauth);
+        neu = { id: kiNeueID(), art: a.id, name: neuerName(a.id), adresse: '', schluessel: '' };
+      }
+      b.disabled = true;
+      neu.pruef = tx('Warte auf die Freigabe bei OpenRouter …');
+      male();
+      try {
+        const st = await kiVerbindungStarten('/api/ersteinrichtung/verbinden/openrouter/start', { code, adresse: location.origin });
+        if (!neu) return;
+        neu.state = st.state;
+        if (st.von_hand) { neu.vonHand = true; neu.pruef = ''; male(); return; }
+        const oauthCode = await kiVerbindungAbwarten(st.state);
+        if (!oauthCode) { if (neu?.state === st.state) { neu.pruef = tx('Verbindung abgelaufen – bitte neu verbinden'); male(); } return; }
+        verbindeMitCode(oauthCode, st.state);
+      } catch (f) { if (neu) { neu.pruef = f.message; male(); } else melde(f.message); }
+    } else if (b.dataset.oacode) {
+      if (!neu.oacode?.trim()) { melde(tx('Code fehlt')); return; }
+      verbindeMitCode(neu.oacode.trim(), neu.state);
+    } else if (b.dataset.hinzu) {
+      hinzufuegen();
+    }
+  });
+  // Code der Freigabe gegen den Schlüssel tauschen, Modelle holen und den Anbieter gleich hinzufügen.
+  async function verbindeMitCode(oauthCode, state) {
+    // Nur, wenn noch derselbe OpenRouter-Anbieter offen ist (nicht abgebrochen, Art nicht gewechselt).
+    if (!neu || neu.state !== state || !art(neu)?.oauth) return;
     try {
-      const w = einstellungsWerte(form);
-      const r = await api('/api/ersteinrichtung/openai', { method: 'POST', body: { code, key: w.OPENAI_API_KEY, base_url: w.OPENAI_BASE_URL } });
-      melde(r.ok ? tx('Schlüssel funktioniert') : T`Schlüssel nicht gültig: ${r.fehler}`);
-    } catch (f) { melde(f.message); }
-    b.disabled = false;
-  };
+      const r = await api('/api/ersteinrichtung/verbinden/openrouter/fertig', { method: 'POST', body: { code, oauth_code: oauthCode, state } });
+      if (!neu || neu.state !== state) return;
+      neu.schluessel = r.key;
+      try {
+        const m = await api('/api/ersteinrichtung/openai', { method: 'POST', body: { code, art: neu.art, base_url: '', key: r.key } });
+        if (m.ok && m.modelle) neu.modelle = m.modelle;
+      } catch { /* Modelle nur als Vorschlag */ }
+      hinzufuegen();
+      melde(tx('Mit OpenRouter verbunden'));
+    } catch (f) { if (neu?.state === state) { neu.pruef = f.message; male(); } else melde(f.message); }
+  }
+  function hinzufuegen() {
+    {
+      const a = art(neu) || {};
+      const name2 = neu.name.trim();
+      const meld = !name2 ? tx('Name fehlt') : ki.zugaenge.some((z) => z.name.toLowerCase() === name2.toLowerCase()) ? tx('Name gibt es schon')
+        : !a.adresse_fest && !a.adresse && !neu.adresse.trim() ? tx('Adresse fehlt')
+          : a.schluessel === 'pflicht' && !neu.schluessel.trim() && !(neu.art === 'openai' && envOpenAI) ? tx('Schlüssel fehlt') : '';
+      if (meld) { melde(meld); return; }
+      const { pruef, vonHand, oacode, state, ...z } = neu;
+      z.name = name2;
+      z.adresse = a.adresse_fest ? '' : z.adresse.trim();
+      if (neu.art === 'openai' && envOpenAI && !z.schluessel) z.env = true;
+      neu = null;
+      neuerAnbieter(z);
+      male();
+    }
+  }
+  leiste.addEventListener('click', (ev) => {
+    const b = ev.target.closest('[data-gehe]');
+    if (!b || b.disabled) return;
+    const ziel = Number(b.dataset.gehe);
+    // Vorwärts nur über geprüfte Schritte.
+    for (let i = schritt; i < ziel; i++) { const m = pruefe(i); if (m) { gehe(i); melde(m); return; } }
+    gehe(ziel);
+  });
+  inhalt.addEventListener('click', (ev) => {
+    const b = ev.target.closest('[data-gehe]');
+    if (b) gehe(Number(b.dataset.gehe));
+  });
   form.onsubmit = async (ev) => {
     ev.preventDefault();
+    const m = pruefe(schritt);
+    if (m) { melde(m); return; }
+    if (schritt < ER_SCHRITTE.length - 1) { gehe(schritt + 1); return; }
+    for (let i = 0; i < ER_SCHRITTE.length - 1; i++) { const x = pruefe(i); if (x) { gehe(i); melde(x); return; } }
     const knopf = form.querySelector('[type=submit]');
     knopf.disabled = true;
     try {
-      const { _name: name = '', ...werte } = einstellungsWerte(form);
-      const r = await api('/api/ersteinrichtung', { method: 'POST', body: { code, name, werte } });
+      const zugaenge = ki.zugaenge.map((z) => ({ id: z.id, name: z.name, art: z.art, adresse: z.adresse, schluessel: z.schluessel || '' }));
+      const r = await api('/api/ersteinrichtung', { method: 'POST', body: { code, name: name.trim(), werte, ...(d.eingerichtet ? {} : { zugaenge, bereiche: bereicheAusWahl() }), systemschluessel: schluessel } });
       form.hidden = true;
+      leiste.hidden = true;
       const box = document.getElementById('ergebnis');
       box.innerHTML = T`<div class="hinweis gut">Gespeichert. Der Dienst startet neu …</div>`;
       window.scrollTo(0, 0);
       await warteAufNeustart();
+      // Direkt weiter zum ersten Passkey (danach zeigt die Willkommensseite den Wiederherstellungscode).
+      if (r.weiter) { location.replace(r.weiter); return; }
       box.innerHTML = r.weiter
         ? T`<div class="hinweis gut">Eingerichtet. Jetzt unter der öffentlichen Adresse den ersten Passkey anlegen (Link 15 Minuten gültig).</div><div class="leiste"><a class="btn haupt" href="${esc(r.weiter)}" target="_self">Passkey einrichten</a></div>`
         : T`<div class="hinweis gut">Eingerichtet.</div><div class="leiste"><a class="btn haupt" href="${esc(r.adresse)}/" target="_self">Zur Web-App</a></div>`;
     } catch (f) {
       knopf.disabled = false;
-      melde(f.message);
+      fehler = f.message;
+      male();
     }
   };
+  aufraeumen = () => { window.removeEventListener('resize', kopfH); };
 }
 
 // Ersteinrichtung mit Backup: Datei hochladen, dann die Wiederherstellungscodes der Nutzer (und ggf. den Code des
@@ -3814,8 +4344,13 @@ function einrichtungMitBackup(weg, code) {
 
 // Reiter der Statusseite (Buttongruppe): Übersicht, Pebble-App, Joplin (nur wenn aktiv), Konfiguration, KI (Admins), Theme.
 let joplinAktiv = (() => { try { return localStorage.getItem('joplin-aktiv') === '1'; } catch { return false; } })();
-const statusReiter = (aktiv) => T`<nav class="btn-group unter reiter4" aria-label="Status">${[['status', '/status', tx('Übersicht')], ['pebble', '/pebble', tx('Pebble-App')],
-  ...(joplinAktiv ? [['joplin', '/status/joplin', tx('Joplin')]] : []), ['benachrichtigungen', '/status/benachrichtigungen', tx('Push')], ['einstellungen', '/status/einstellungen', tx('Konfiguration')], ...(istAdmin() ? [['ki', '/status/ki', tx('KI')]] : []), ['darstellung', '/status/darstellung', tx('Theme')]]
+const statusReiter = (aktiv) => T`<nav class="btn-group unter reiter4" aria-label="Status">${[['status', '/status', tx('Übersicht')],
+  ...(joplinAktiv ? [['joplin', '/status/joplin', tx('Joplin')]] : []), ['einstellungen', '/status/einstellungen', tx('Konfiguration')], ...(istAdmin() ? [['ki', '/status/ki', tx('KI')]] : [])]
+  .map(([n, href, text]) => T`<a class="btn${n === aktiv ? ' aktiv' : ''}" href="${href}"${n === aktiv ? ' aria-current="page"' : ''}>${text}</a>`).join('')}</nav>`;
+
+// Reiter der Benutzereinstellungen (Buttongruppe wie unter Status).
+const kontoReiter = (aktiv) => T`<nav class="btn-group unter reiter4" aria-label="${esc(tx('Benutzer'))}">${[['konto', '/konto', tx('Übersicht')], ['pebble', '/pebble', tx('Pebble-App')],
+  ['benachrichtigungen', '/konto/benachrichtigungen', tx('Push')], ['kalender', '/konto/kalender', tx('Kalender')], ['darstellung', '/konto/theme', tx('Theme')]]
   .map(([n, href, text]) => T`<a class="btn${n === aktiv ? ' aktiv' : ''}" href="${href}"${n === aktiv ? ' aria-current="page"' : ''}>${text}</a>`).join('')}</nav>`;
 
 // Konfiguration: je Wert „?“ (Erklärung darunter ein-/ausklappen) und ✎ (eigene Bearbeitungsseite für diesen Wert).
@@ -3876,7 +4411,7 @@ const KI_SEITEN = {
   kurztitel: { bereich: 'kurztitel', titel: 'Kurztitel', text: 'Kurztitel, Zuordnung zu Planungen, Termine, Beschreibungen der Listen. Ein kleines Modell reicht.' },
   auswertung: { bereich: 'auswertung', titel: 'Auswertung & Sortierung', text: 'Notizen auswerten, in Gruppen und Listen einsortieren, Lernlauf. Braucht strukturierte Ausgabe (JSON-Schema).' },
   webrecherche: { bereich: 'recherche', gruppe: 'Webrecherche', titel: 'Webrecherche', text: 'Planungen mit Antwort und Trailer-Suche.' },
-  bilder: { bereich: 'bilder', titel: 'Bilder', text: 'Erklärende Bilder zu Notizen und Planungen (nur OpenAI). Ohne Eintrag erzeugt die KI keine Bilder.' },
+  bilder: { bereich: 'bilder', titel: 'Bilder', text: 'Erklärende Bilder zu Notizen und Planungen. Ohne Eintrag erzeugt die KI keine Bilder.' },
 };
 const KI_GRUPPEN = { zugaenge: 'KI-Zugänge', transkription: 'Transkription', webrecherche: 'Webrecherche' };
 const CLOUDFELDER = [];
@@ -3926,13 +4461,21 @@ async function zeigeKIZugaenge(d) {
   };
   seite.innerHTML = T`${statusReiter('ki')}${krumen([[tx('KI'), '/status/ki'], [tx('Anbieter')]])}<h1>Anbieter</h1>
     <p class="leise">Beliebig viele Anbieter, auch mehrere gleicher Art; jeder mit eigenem Namen. Tippen öffnet den Anbieter.</p>
+    ${d.zugaenge.some((z) => kiArt(d, z)?.oauth) ? '' : T`<div class="leiste"><button type="button" class="btn haupt" data-or-verbinden="1">${tx('Mit OpenRouter verbinden')}</button></div>
+      <p class="leise">${tx('Empfohlen: Mit OpenRouter funktionieren alle Funktionen – Auswertung, Websuche, Bilder und Transkription.')}</p>`}
     ${d.zugaenge.length ? T`<div class="karte kizeilen">${d.zugaenge.map(zeile).join('')}</div>` : T`<p class="leise">Noch kein Anbieter.</p>`}
     <div class="leiste"><button type="button" class="btn" data-neu="1">Anbieter hinzufügen</button></div>
     ${f.USER_DAILY_LIMIT_USD ? T`<div class="karte konfliste"><div class="konfzeile ohnehilfe"><span class="konfname">${esc(tx(f.USER_DAILY_LIMIT_USD.name))}</span>
       <a class="konfedit" href="/status/einstellungen/USER_DAILY_LIMIT_USD?zurueck=/status/ki/zugaenge" aria-label="${esc(tx('{0} bearbeiten', tx(f.USER_DAILY_LIMIT_USD.name)))}">${STIFT}</a>
       <span class="konfwert">${esc(f.USER_DAILY_LIMIT_USD.wert)} $</span></div></div>` : ''}
     <div class="leiste"><a class="btn" href="/status/ki">Zurück</a></div>`;
-  seite.onclick = (ev) => {
+  seite.onclick = async (ev) => {
+    const v = ev.target.closest('[data-or-verbinden]');
+    if (v) {
+      v.disabled = true;
+      try { if (await kiOpenRouterVerbinden('')) zeigeKIBereich('zugaenge'); else v.disabled = false; } catch (f) { melde(f.message); v.disabled = false; }
+      return;
+    }
     const b = ev.target.closest('[data-zugang], [data-neu]');
     if (!b) return;
     kiZugangFenster(d, b.dataset.zugang ? d.zugaenge.find((z) => z.id === b.dataset.zugang) : null);
@@ -3965,7 +4508,9 @@ function kiZugangFenster(d, alt) {
       <label for="kz-art">Art</label><select id="kz-art" data-k="art">${(d.arten || []).map((a) => T`<option value="${esc(a.id)}"${a.id === z.art ? ' selected' : ''}>${esc(tx(a.name))}</option>`).join('')}</select>
       ${art.text ? T`<p class="leise hilfe">${esc(tx(art.text))}</p>` : ''}
       ${art.adresse_fest ? '' : T`<label for="kz-adresse">Adresse${art.adresse ? '' : ' *'}</label><input id="kz-adresse" type="url" data-k="adresse" value="${esc(z.adresse || '')}" placeholder="${esc(art.adresse || (art.api === 'searxng' ? 'http://<server>:8080' : 'https://…/v1'))}" autocomplete="off" spellcheck="false">`}
-      ${schluessel ? T`<label for="kz-key">Schlüssel${art.schluessel === 'pflicht' ? ' *' : ''}</label><input id="kz-key" type="password" data-k="schluessel" value="${esc(z.schluessel || '')}" placeholder="${alt?.schluessel_gesetzt && alt.art === z.art ? esc(tx('gesetzt – leer lassen zum Behalten')) : ''}" autocomplete="off" spellcheck="false">` : ''}
+      ${art.oauth ? T`<div class="leiste"><button type="button" class="btn haupt" data-verbinden="1">${alt ? tx('Neu mit OpenRouter verbinden') : tx('Mit OpenRouter verbinden')}</button></div>
+        <p class="leise hilfe">${tx('Anmelden bei OpenRouter und Zugang freigeben – ohne API-Schlüssel. Oder unten einen Schlüssel einfügen.')}</p>` : ''}
+      ${schluessel ? T`<label for="kz-key">Schlüssel${art.schluessel === 'pflicht' && !art.oauth ? ' *' : ''}</label><input id="kz-key" type="password" data-k="schluessel" value="${esc(z.schluessel || '')}" placeholder="${alt?.schluessel_gesetzt && alt.art === z.art ? esc(tx('gesetzt – leer lassen zum Behalten')) : ''}" autocomplete="off" spellcheck="false">` : ''}
       ${alt ? T`<div class="leiste kileiste"><button type="button" class="btn klein" data-pruefen="1">Prüfen</button></div>
         <p class="leise hilfe" id="kz-pruef">${m ? esc(tx('{0} Modelle, geprüft {1}', m.modelle.length, new Date(m.zeit).toLocaleString(LOCALE))) : ''}</p>` : ''}
       <p class="hinweis schlecht" id="kz-fehler" hidden></p>
@@ -4001,7 +4546,20 @@ function kiZugangFenster(d, alt) {
     const b = ev.target.closest('button[type=button]');
     if (!b) return;
     if (b.dataset.zu) dlg.close();
-    else if (b.dataset.weg) {
+    else if (b.dataset.verbinden) {
+      const fehler = dlg.querySelector('#kz-fehler');
+      fehler.hidden = true;
+      b.disabled = true;
+      try {
+        if (!(await kiOpenRouterVerbinden(alt?.id || ''))) { b.disabled = false; return; }
+        dlg.close();
+        if (aktuell?.name === 'kiBereich') zeigeKIBereich('zugaenge');
+      } catch (f) {
+        fehler.textContent = f.message;
+        fehler.hidden = false;
+        b.disabled = false;
+      }
+    } else if (b.dataset.weg) {
       if (confirm(tx('Anbieter {0} entfernen? Seine Einträge in den Bereichen fallen weg.', alt.name))) {
         d.bereiche = Object.fromEntries(Object.entries(d.bereiche).map(([k, l]) => [k, l.filter((e) => e.zugang !== alt.id).map((e) => ({ ...e, websuche: (e.websuche || []).filter((x) => x !== alt.id) }))]));
         schreibe(d.zugaenge.filter((x) => x.id !== alt.id).map(ohneSchluessel));
@@ -4033,23 +4591,24 @@ function kiEintragFelder(d, bereich, e) {
   const zahl = (k, name) => T`<label for="${id}-${k}">${esc(tx(name))} *</label><input type="text" id="${id}-${k}" data-k="${k}" inputmode="decimal" value="${e[k] ?? ''}" autocomplete="off">`;
   const art = kiArt(d, z);
   const cloud = kiCloud(d, z);
+  const preise = cloud && !art?.preise_optional; // ohne: Kosten meldet der Anbieter oder sie bleiben offen
   const suche = bereich === 'recherche' || bereich === 'auswertung';
   const searx = d.zugaenge.filter((x) => kiArt(d, x)?.api === 'searxng');
-  return T`    ${art?.modelle?.[bereich] ? T`<label for="${id}-modell">Modell</label><select id="${id}-modell" data-k="modell">${art.modelle[bereich].map((m) => T`<option value="${esc(m.id)}"${m.id === e.modell ? ' selected' : ''}>${esc(tx(m.name))} · ${esc(kiPreisText(m))}</option>`).join('')}</select>
-      <p class="leise hilfe">${tx('Ungefähre Preise laut Anbieter; beim Wechsel übernommen, unten anpassbar.')}</p>`
+  return T`    ${art?.modelle?.[bereich] ? T`<label for="${id}-modell">Modell</label><select id="${id}-modell" data-k="modell">${art.modelle[bereich].map((m) => T`<option value="${esc(m.id)}"${m.id === e.modell ? ' selected' : ''}>${esc(tx(m.name))}${kiPreisText(m) ? ` · ${esc(kiPreisText(m))}` : ''}</option>`).join('')}</select>
+      ${art.preise_optional ? '' : T`<p class="leise hilfe">${tx('Ungefähre Preise laut Anbieter; beim Wechsel übernommen, unten anpassbar.')}</p>`}`
     : z ? T`<label for="${id}-modell">Modell *</label><input type="text" id="${id}-modell" data-k="modell" value="${esc(e.modell || '')}" list="${id}-liste" autocomplete="off" spellcheck="false">
       <datalist id="${id}-liste">${(kiModelle(z.id)?.modelle || []).map((m) => T`<option value="${esc(m)}">`).join('')}</datalist>
       ${kiModelle(z.id) ? '' : T`<p class="leise hilfe">${esc(tx('Keine Modelle gemerkt'))} – <a href="/status/ki/zugaenge">${esc(tx('unter Zugänge prüfen'))}</a></p>`}` : ''}
     ${e.zugang === 'pebble' ? T`<p class="leise hilfe">${tx('Nur als erster Eintrag; fehlt der Text, übernehmen die folgenden.')}</p>` : ''}
-    ${cloud && bereich === 'transkription' ? zahl('preis_minute', 'Preis (USD je Minute)') : ''}
-    ${cloud && bereich === 'bilder' ? zahl('preis_bild', 'Preis (USD je Bild)') : ''}
-    ${cloud && bereich !== 'transkription' && bereich !== 'bilder' ? T`${zahl('preis_ein', 'Preis Eingabe (USD je 1 Mio. Tokens)')}${zahl('preis_aus', 'Preis Ausgabe (USD je 1 Mio. Tokens)')}` : ''}
+    ${preise && bereich === 'transkription' ? zahl('preis_minute', 'Preis (USD je Minute)') : ''}
+    ${preise && bereich === 'bilder' ? zahl('preis_bild', 'Preis (USD je Bild)') : ''}
+    ${preise && bereich !== 'transkription' && bereich !== 'bilder' ? T`${zahl('preis_ein', 'Preis Eingabe (USD je 1 Mio. Tokens)')}${zahl('preis_aus', 'Preis Ausgabe (USD je 1 Mio. Tokens)')}` : ''}
     ${suche && z ? T`<p class="feldname">Websuche</p><div class="mehrfach">
       ${art?.suche ? T`<label class="schalter"><input type="checkbox" data-suche="anbieter"${e.websuche?.includes('anbieter') ? ' checked' : ''}> ${tx('Suche des Anbieters')}</label>` : ''}
       ${searx.map((x) => T`<label class="schalter"><input type="checkbox" data-suche="${esc(x.id)}"${e.websuche?.includes(x.id) ? ' checked' : ''}> ${esc(x.name)}</label>`).join('')}</div>
       ${!art?.suche && !searx.length ? T`<p class="leise hilfe">${tx('Ein lokales Modell sucht nicht selbst im Web; dafür einen SearXNG-Anbieter anlegen.')}</p>` : ''}
-      ${cloud && e.websuche?.includes('anbieter') ? zahl('preis_suche', 'Preis Websuche (USD je Aufruf)') : ''}` : ''}
-    ${cloud ? T`<label for="${id}-limit">${tx('Kostenlimit im Monat (USD)')}</label><input type="text" id="${id}-limit" data-k="limit_monat" inputmode="decimal" value="${e.limit_monat || ''}" placeholder="${esc(tx('ohne'))}" autocomplete="off">
+      ${preise && e.websuche?.includes('anbieter') ? zahl('preis_suche', 'Preis Websuche (USD je Aufruf)') : ''}` : ''}
+    ${cloud && (preise || art?.meldet_kosten) ? T`<label for="${id}-limit">${tx('Kostenlimit im Monat (USD)')}</label><input type="text" id="${id}-limit" data-k="limit_monat" inputmode="decimal" value="${e.limit_monat || ''}" placeholder="${esc(tx('ohne'))}" autocomplete="off">
       <p class="leise hilfe">${tx('Diesen Monat: {0}. Ist das Limit erreicht, übernimmt der nächste Eintrag.', kiUSD(d.verbrauch[e.id]))}</p>` : ''}`;
 }
 
@@ -4065,6 +4624,7 @@ const kiZuSpeichern = (liste) => liste.filter((e) => !(e.neu && e.inaktiv)).map(
 
 // Preise eines Modells der OpenAI-Auswahl als kurzer Text.
 function kiPreisText(m) {
+  if (!m.preis_minute && !m.preis_bild && !m.preis_ein && !m.preis_aus) return '';
   if (m.preis_minute) return tx('ca. {0} $/Min', m.preis_minute);
   if (m.preis_bild) return tx('ca. {0} $/Bild', m.preis_bild);
   return tx('ca. {0} / {1} $ je 1 Mio. Tokens', m.preis_ein, m.preis_aus);
@@ -4140,6 +4700,9 @@ function kiEintragFenster(d, bereich, alle, alt) {
   // OpenAI ohne Modell der Auswahl: Vorgabe des Bereichs samt Preisen.
   const auswahl = kiArt(d, d.zugaenge.find((x) => x.id === e.zugang))?.modelle?.[bereich];
   if (auswahl && !auswahl.some((m) => m.id === e.modell)) { e.modell = auswahl[0].id; kiPreiseAusKatalog(d, bereich, e); }
+  // Freie Modellwahl: Vorschlag des Anbieters vorbelegen.
+  const vorschlag = kiArt(d, d.zugaenge.find((x) => x.id === e.zugang))?.vorschlag?.[bereich];
+  if (!auswahl && !e.modell && vorschlag) e.modell = vorschlag;
   // Whisper: Modell (mit Tabelle der Mittel, geladene löschen) und RAM-Haltezeit im selben Fenster.
   const whisper = e.zugang === 'whisper';
   const whisperFelder = () => {
@@ -4355,6 +4918,7 @@ async function zeigeStatistik() {
         <div class="leiste"><button class="btn haupt" type="submit">${esc(tx('Speichern'))}</button></div></form>
       <h2>${esc(tx('Ring-Lebensdauer aller Installationen'))}</h2>${daten}`
       : T`${zurueck}<h1>${esc(tx('Ring-Lebensdauer aller Installationen'))}</h1>${daten}`;
+    if (st.bericht) seite.insertAdjacentHTML('beforeend', statistikVorschau(st));
     if (st.aktiv) zeigeGlobaleLebensdauer(document.getElementById('lebensdauer'));
     const form = seite.querySelector('form');
     if (form) form.onsubmit = async (ev) => {
@@ -4370,6 +4934,31 @@ async function zeigeStatistik() {
   };
   aktuell.neuLaden = laden;
   await laden();
+}
+
+// „Erweitert“: das gesendete JSON mit Kommentaren je Feld (JSON mit // wie JSONC; nur zur Ansicht).
+const STATISTIK_KOMMENTARE = {
+  app_id: () => tx('zufällige App-ID'),
+  ring: () => tx('verschlüsselte Ring-ID'),
+};
+function jsonMitKommentaren(wert, tiefe = 0, schluessel = '', letzt = true) {
+  const ein = '  '.repeat(tiefe), komma = letzt ? '' : ',';
+  // Kommentar je Feld in eigener Zeile darüber – bleibt auch auf dem Handy lesbar.
+  const kom = (k, v) => { const f = STATISTIK_KOMMENTARE[k]; return f ? T`${ein}<span class="jkommentar">// ${esc(f(v))}</span>\n` : ''; };
+  const name = schluessel ? T`<span class="jschluessel">${esc(JSON.stringify(schluessel))}</span>: ` : '';
+  if (Array.isArray(wert) || (wert && typeof wert === 'object')) {
+    const liste = Array.isArray(wert), teile = liste ? wert.map((v) => ['', v]) : Object.entries(wert);
+    const auf = liste ? '[' : '{', zu = liste ? ']' : '}';
+    if (!teile.length) return T`${kom(schluessel)}${ein}${name}${auf}${zu}${komma}\n`;
+    return T`${kom(schluessel)}${ein}${name}${auf}\n${teile.map(([k, v], i) => jsonMitKommentaren(v, tiefe + 1, k, i === teile.length - 1)).join('')}${ein}${zu}${komma}\n`;
+  }
+  return T`${kom(schluessel, wert)}${ein}${name}<span class="jwert">${esc(JSON.stringify(wert))}</span>${komma}\n`;
+}
+function statistikVorschau(st) {
+  const ev = st.ereignisse || [];
+  return T`<details class="karte erweitert"><summary>${esc(tx('Erweitert'))}</summary>
+    <p class="leise">${esc(tx('Wird verschlüsselt gesendet.'))}</p>
+    <pre class="jsonc">${jsonMitKommentaren(st.bericht)}${ev.length ? T`\n${ev.map((e) => jsonMitKommentaren(e)).join('\n')}` : ''}</pre></details>`;
 }
 
 // Ring-Lebensdauer aller Installationen (anonyme Summen, Server hält sie 6 h): je Status Balken Min–Max, Strich bei Ø.
@@ -4427,7 +5016,7 @@ async function zeigeRueckmeldung() {
 }
 
 async function zeigeBenachrichtigungen() {
-  seite.innerHTML = T`${statusReiter('benachrichtigungen')}<p class="leer">Lädt …</p>`;
+  seite.innerHTML = T`${kontoReiter('benachrichtigungen')}<p class="leer">Lädt …</p>`;
   const laden = async () => {
     const [d, k] = await Promise.all([api('/api/einstellungen/persoenlich'), api('/api/push/schluessel')]);
     if (aktuell?.name !== 'benachrichtigungen') return;
@@ -4437,7 +5026,7 @@ async function zeigeBenachrichtigungen() {
     const geraet = !pushDa ? T('<p class="leise">Dieser Browser unterstützt keine Benachrichtigungen. Auf dem iPhone die App erst zum Home-Bildschirm hinzufügen.</p>')
       : T`<p>${abo ? tx('Auf diesem Gerät eingeschaltet.') : tx('Auf diesem Gerät ausgeschaltet.')} <span class="leise">Geräte mit Benachrichtigung: ${k.abos}</span></p>
         <div class="leiste">${abo ? T('<button class="btn" type="button" data-a="push-aus">Ausschalten</button><button class="btn" type="button" data-a="push-test">Test senden</button>') : T('<button class="btn haupt" type="button" data-a="push-an">Einschalten</button>')}</div>`;
-    seite.innerHTML = T`${statusReiter('benachrichtigungen')}<h1>Benachrichtigungen</h1>
+    seite.innerHTML = T`${kontoReiter('benachrichtigungen')}<h1>Benachrichtigungen</h1>
       <h2>Dieses Gerät</h2><div class="karte">${geraet}</div>
       <h2>Kanäle</h2><p class="leise">Gilt für alle deine Geräte.</p>
       <form class="einstellungen" novalidate><fieldset>${kanaele.map((f) => T`<label class="schalter"><input type="checkbox" name="${f.key}"${f.wert === 'aktiv' ? ' checked' : ''}> ${esc(tx(f.name))}</label><p class="leise hilfe">${esc(tx(f.hilfe))}</p>`).join('')}</fieldset>
@@ -4485,12 +5074,12 @@ async function zeigeBenachrichtigungen() {
 
 // Kalender-Abo: geheimer iCal-Link mit Anleitung für Google, Apple und Outlook.
 async function zeigeKalender() {
-  seite.innerHTML = T`<p class="leer">${esc(tx('Lädt …'))}</p>`;
+  seite.innerHTML = T`${kontoReiter('kalender')}<p class="leer">${esc(tx('Lädt …'))}</p>`;
   const laden = async () => {
     const k = await api('/api/kalender');
     if (aktuell?.name !== 'kalender') return;
     const webcal = k.url.replace(/^https?:/, 'webcal:');
-    seite.innerHTML = T`<p><a class="btn klein" href="/status">← ${esc(tx('Status'))}</a></p><h1>${esc(tx('Kalender-Abo'))}</h1>
+    seite.innerHTML = T`${kontoReiter('kalender')}<h1>${esc(tx('Kalender-Abo'))}</h1>
       <p class="leise">${esc(tx('Alle Termine aus den Notizen ({0}) als Kalender zum Abonnieren: neue und verschobene erscheinen von selbst, erledigte mit ✓, gelöschte verschwinden. Nur lesend – Änderungen im Kalender kommen nicht zurück.', k.termine))}</p>
       <div class="karte"><div class="leise">${esc(tx('Dein Link (geheim halten)'))}</div><code class="kopierbar" id="icallink">${esc(k.url)}</code>
         <div class="leiste"><button class="btn haupt" data-k="kopieren">${esc(tx('Link kopieren'))}</button><a class="btn" href="${esc(webcal)}">${esc(tx('In Kalender-App öffnen'))}</a></div></div>
@@ -4526,29 +5115,88 @@ async function zeigeKalender() {
 }
 
 // Anleitung: diesen Dienst als MCP-Server in Claude, ChatGPT oder Claude Code eintragen.
+// App verbinden: geführt in einer Seite – erst die App wählen, dann nur deren Schritte; braucht sie ein API-Token,
+// wird es hier mit Namen angelegt und gleich in Befehl und Beispiele eingesetzt.
+const VERBINDEN_APPS = [['claude', 'Claude'], ['chatgpt', 'ChatGPT'], ['claudecode', 'Claude Code'], ['andere', 'Andere MCP-App']];
 function zeigeMcpAnleitung() {
-  const url = `${location.origin}/mcp`;
-  const befehl = `claude mcp add --transport http sprachnotizen ${url}`;
-  const befehlToken = `${befehl} --header "Authorization: Bearer <API-Token>"`;
+  const wahl = new URLSearchParams(location.search).get('app') || '';
+  const mcp = `${location.origin}/api/v1/mcp`, basis = `${location.origin}/api`;
+  let token = '';
   const code = (id, text) => T`<div class="karte"><code class="kopierbar" id="${id}">${esc(text)}</code><div class="leiste"><button class="btn klein" data-kopieren="${id}">${esc(tx('Kopieren'))}</button></div></div>`;
-  seite.innerHTML = T`<p><a class="btn klein" href="/status">← ${esc(tx('Status'))}</a></p><h1>${esc(tx('App verbinden'))}</h1>
-    <p class="leise">${esc(tx('KI-Apps lesen über MCP deine Listen, Notizen und Termine und haken Punkte ab – nur deine Daten. Freigabe per Passkey, trennen jederzeit unter Status.'))}</p>
-    <div class="leise">${esc(tx('Adresse des MCP-Servers'))}</div>${code('mcpurl', url)}
-    <h2>${esc(tx('Claude (Web, Desktop, Handy)'))}</h2><ol class="anleitung">
-      <li>${esc(tx('Auf claude.ai Einstellungen → Konnektoren öffnen.'))}</li>
-      <li>${esc(tx('„Benutzerdefinierten Konnektor hinzufügen“, Name frei wählen, Adresse oben einfügen. Client-ID und Secret leer lassen.'))}</li>
-      <li>${esc(tx('„Verbinden“: Diese App öffnet sich – mit Passkey anmelden und „Erlauben“ tippen.'))}</li>
-      <li>${esc(tx('Der Konnektor gilt danach auch in der Desktop- und Handy-App; im Chat über das Werkzeug-Menü einschalten.'))}</li></ol>
-    <h2>${esc(tx('ChatGPT'))}</h2><ol class="anleitung">
-      <li>${esc(tx('Einstellungen → Apps & Konnektoren → Erweitert: Entwicklermodus einschalten.'))}</li>
-      <li>${esc(tx('„Erstellen“, Adresse oben einfügen, Authentifizierung OAuth.'))}</li>
-      <li>${esc(tx('Mit Passkey anmelden und „Erlauben“ tippen.'))}</li></ol>
-    <h2>${esc(tx('Claude Code'))}</h2>
-    <p>${esc(tx('Im Terminal ausführen; beim ersten Aufruf von /mcp öffnet sich die Freigabe im Browser:'))}</p>${code('mcpbefehl', befehl)}
-    <p class="leise">${esc(tx('Ohne Browser, mit API-Token (erzeugen unter Zugang und Sicherheit):'))}</p>${code('mcptoken', befehlToken)}
-    <h2>${esc(tx('Andere Apps'))}</h2>
-    <p class="leise">${esc(tx('Jede App mit MCP über Streamable HTTP: Adresse oben, Anmeldung per OAuth oder Kopfzeile „Authorization: Bearer <API-Token>“.'))}</p>
-    <div class="leiste"><a class="btn" href="/status/zugang">${esc(tx('API-Token verwalten'))}</a></div>`;
+  // Token für die gewählte App automatisch mit beschreibendem Namen (App und Datum); umbenennen ist nicht nötig.
+  const tokenKnopf = (text) => T`<div class="leiste"><button class="btn haupt" data-tokenfuer="${esc(text)}">${esc(tx('Token erzeugen und einsetzen'))}</button></div>`;
+  const fertig = T`<div class="leiste"><a class="btn haupt" href="/konto">${esc(tx('Fertig'))}</a></div>`;
+  const schritte = () => {
+    const t = token || '<API-Token>';
+    const tokenHinweis = token ? T`<div class="hinweis warn">${esc(tx('Das Token steht nur jetzt im Klartext – gleich kopieren. Löschen jederzeit unter Benutzer.'))}</div>` : '';
+    const oauth = (liste) => T`<ol class="anleitung">${liste.map((x) => T`<li>${esc(tx(x))}</li>`).join('')}</ol>
+      <p class="leise">${esc(tx('Nach der Freigabe steht die App unter Benutzer → Apps und Zugänge.'))}</p>${fertig}`;
+    switch (wahl) {
+      case 'claude': return T`<div class="leise">${esc(tx('Adresse des MCP-Servers'))}</div>${code('mcpurl', mcp)}${oauth(['Auf claude.ai Einstellungen → Konnektoren öffnen.',
+        '„Benutzerdefinierten Konnektor hinzufügen“, Name frei wählen, Adresse oben einfügen. Client-ID und Secret leer lassen.',
+        '„Verbinden“: Diese App öffnet sich – mit Passkey anmelden und „Erlauben“ tippen.',
+        'Der Konnektor gilt danach auch in der Desktop- und Handy-App; im Chat über das Werkzeug-Menü einschalten.'])}`;
+      case 'chatgpt': return T`<div class="leise">${esc(tx('Adresse des MCP-Servers'))}</div>${code('mcpurl', mcp)}${oauth(['Einstellungen → Apps & Konnektoren → Erweitert: Entwicklermodus einschalten.',
+        '„Erstellen“, Adresse oben einfügen, Authentifizierung OAuth.', 'Mit Passkey anmelden und „Erlauben“ tippen.'])}`;
+      case 'claudecode': return T`<h2>${esc(tx('Mit Browser (empfohlen)'))}</h2>
+        <p class="leise">${esc(tx('Im Terminal ausführen; beim ersten Aufruf öffnet sich die Freigabe im Browser.'))}</p>${code('mcpbefehl', `claude mcp add --transport http sprachnotizen ${mcp}`)}
+        <h2>${esc(tx('Ohne Browser (Server, SSH)'))}</h2>
+        ${token ? T`${tokenHinweis}${code('mcptoken', `claude mcp add --transport http sprachnotizen ${mcp} --header "Authorization: Bearer ${t}"`)}` : T`<p class="leise">${esc(tx('Ein eigenes Token für Claude Code wird angelegt und gleich in den Befehl eingesetzt.'))}</p>${tokenKnopf('Claude Code')}`}${fertig}`;
+      case 'andere': return T`<p class="leise">${esc(tx('Jede App mit MCP über Streamable HTTP. Kann sie OAuth, reicht die Adresse – sie fragt dann hier nach Freigabe. Sonst ein eigenes Token als Kopfzeile mitgeben.'))}</p>
+        <div class="leise">${esc(tx('Adresse des MCP-Servers'))}</div>${code('mcpurl', mcp)}
+        ${token ? T`${tokenHinweis}<div class="leise">${esc(tx('Kopfzeile'))}</div>${code('kopf', `Authorization: Bearer ${t}`)}` : tokenKnopf('MCP-App')}${fertig}`;
+      default: return T`<p class="leise">${esc(tx('Welche App willst du verbinden?'))}</p>`;
+    }
+  };
+  const male = () => {
+    seite.innerHTML = T`<p><a class="btn klein" href="/konto">← ${esc(tx('Benutzer'))}</a></p><h1>${esc(tx('App verbinden'))}</h1>
+      <p class="leise">${esc(tx('KI-Apps und Skripte lesen deine Listen, Notizen und Termine und haken Punkte ab – nur deine Daten.'))}</p>
+      <nav class="btn-group unter" aria-label="${esc(tx('App'))}">${VERBINDEN_APPS.map(([k, n]) => T`<a class="btn${k === wahl ? ' aktiv' : ''}" href="/konto/verbinden?app=${k}"${k === wahl ? ' aria-current="page"' : ''}>${esc(tx(n))}</a>`).join('')}</nav>
+      ${schritte()}`;
+  };
+  male();
+  seite.onclick = async (ev) => {
+    const tk = ev.target.closest('[data-tokenfuer]');
+    if (tk) {
+      tk.disabled = true;
+      const name = `${tk.dataset.tokenfuer} (${new Date().toLocaleDateString()})`;
+      try { token = (await api('/api/zugang/api', { method: 'POST', body: { name } })).token; male(); } catch (e) { tk.disabled = false; melde(e.message); }
+      return;
+    }
+    const b = ev.target.closest('[data-kopieren]');
+    if (!b) return;
+    try { await navigator.clipboard.writeText(document.getElementById(b.dataset.kopieren).textContent); melde(tx('Kopiert')); } catch { melde(tx('Kopieren nicht möglich – Text markieren und kopieren')); }
+  };
+  aufraeumen = () => { seite.onclick = null; };
+}
+
+// Eigenes API-Token für Skripte und Werkzeuge: Name wählen, Token einmal zeigen, dazu Adressen und Beispiele.
+function zeigeTokenNeu() {
+  const mcp = `${location.origin}/api/v1/mcp`, basis = `${location.origin}/api`;
+  const code = (id, text) => T`<div class="karte"><code class="kopierbar" id="${id}">${esc(text)}</code><div class="leiste"><button class="btn klein" data-kopieren="${id}">${esc(tx('Kopieren'))}</button></div></div>`;
+  const kopf = T`<p><a class="btn klein" href="/konto">← ${esc(tx('Benutzer'))}</a></p><h1>${esc(tx('Eigenes API-Token'))}</h1>`;
+  seite.innerHTML = T`${kopf}<p class="leise">${esc(tx('Für Skripte und Werkzeuge: Listen und Einträge lesen, Punkte abhaken, MCP. Gilt nur für deine Daten; je Skript ein eigenes Token.'))}</p>
+    <form class="einstellungen" id="tokenform" novalidate><label for="t-name">${esc(tx('Name des Tokens'))}</label>
+      <input id="t-name" name="name" maxlength="40" autocomplete="off" required>
+      <p class="leise hilfe">${esc(tx('Woran du es später erkennst, z. B. das Skript oder der Rechner.'))}</p>
+      <div class="leiste"><a class="btn" href="/konto">Abbrechen</a><button class="btn haupt" type="submit">${esc(tx('Token erzeugen'))}</button></div></form>`;
+  const f = document.getElementById('tokenform');
+  f.onsubmit = async (ev) => {
+    ev.preventDefault();
+    const knopf = f.querySelector('button[type=submit]');
+    knopf.disabled = true;
+    let r;
+    try { r = await api('/api/zugang/api', { method: 'POST', body: { name: f.name.value } }); } catch (e) { knopf.disabled = false; melde(e.message); return; }
+    seite.innerHTML = T`${kopf}<div class="hinweis warn">${esc(tx('Das Token steht nur jetzt im Klartext – gleich kopieren. Löschen jederzeit unter Benutzer.'))}</div>
+      <div class="leise">${esc(tx('Token „{0}“', r.name))}</div>${code('tok', r.token)}
+      <h2>${esc(tx('So wird es benutzt'))}</h2>
+      <p class="leise">${esc(tx('Jede Anfrage trägt die Kopfzeile „Authorization: Bearer <Token>“.'))}</p>
+      <div class="leise">REST-API</div>${code('basis', basis)}
+      ${code('bsp1', `curl -H "Authorization: Bearer ${r.token}" ${basis}/listen`)}
+      ${code('bsp2', `curl -X POST -H "Authorization: Bearer ${r.token}" ${basis}/listenpunkte/<id>/erledigt`)}
+      <div class="leise">MCP</div>${code('mcpurl', mcp)}
+      <div class="leiste"><a class="btn haupt" href="/konto">${esc(tx('Fertig'))}</a></div>`;
+  };
   seite.onclick = async (ev) => {
     const b = ev.target.closest('[data-kopieren]');
     if (!b) return;
@@ -4618,14 +5266,17 @@ async function zeigeWillkommen() {
     <div class="karte"><div class="leise">Dein Wiederherstellungscode</div><code class="kopierbar" id="wcode">${esc(d.code)}</code>
       <div class="leiste"><button class="btn" type="button" data-kopieren>Kopieren</button></div></div>
     ${d.system ? T('<p class="leise">Derselbe Code stellt auch das System aus einem Backup wieder her (API-Schlüssel, Benachrichtigungen). Einen eigenen Code dafür gibt es unter Backups → Systemschlüssel.</p>') : ''}
-    <div class="hinweis warn">Schreib ihn auf oder leg ihn in deinen Passwort-Manager. Er wird nur jetzt angezeigt.</div>
+    ${d.systemcode ? T`<p>Das System hat einen eigenen Schlüssel (mehrere Admins). Er schützt API-Schlüssel und Benachrichtigungen im Backup; dieser Code holt ihn auf einem neuen Server zurück.</p>
+      <div class="karte"><div class="leise">Code des Systemschlüssels</div><code class="kopierbar">${esc(d.systemcode)}</code>
+      <div class="leiste"><button class="btn" type="button" data-kopieren="system">Kopieren</button></div></div>` : ''}
+    <div class="hinweis warn">${d.systemcode ? tx('Schreib beide Codes auf oder leg sie in deinen Passwort-Manager. Sie werden nur jetzt angezeigt.') : tx('Schreib ihn auf oder leg ihn in deinen Passwort-Manager. Er wird nur jetzt angezeigt.')}</div>
     <form class="einstellungen" novalidate>
       ${d.name ? '' : T('<label for="w-name">Dein Name *</label><input id="w-name" name="name" maxlength="40" autocomplete="given-name" required>')}
-      <label class="schalter"><input type="checkbox" name="notiert"> Ich habe den Code sicher notiert</label>
+      <label class="schalter"><input type="checkbox" name="notiert"> ${d.systemcode ? tx('Ich habe beide Codes sicher notiert') : tx('Ich habe den Code sicher notiert')}</label>
       <div class="leiste"><button class="btn haupt" type="submit">Weiter</button></div></form>`;
-  seite.querySelector('[data-kopieren]').onclick = async () => {
-    try { await navigator.clipboard.writeText(d.code); melde(tx('Code kopiert')); } catch { melde(tx('Kopieren nicht möglich – Code markieren und kopieren')); }
-  };
+  seite.querySelectorAll('[data-kopieren]').forEach((b) => { b.onclick = async () => {
+    try { await navigator.clipboard.writeText(b.dataset.kopieren === 'system' ? d.systemcode : d.code); melde(tx('Code kopiert')); } catch { melde(tx('Kopieren nicht möglich – Code markieren und kopieren')); }
+  }; });
   const form = seite.querySelector('form');
   form.onsubmit = async (ev) => {
     ev.preventDefault();
@@ -4672,49 +5323,107 @@ async function zeigeWiederherstellen() {
   if (ab) ab.onclick = async () => { await abmelden().catch(() => vergissGeraet()); geheZu('/anmelden', true); };
 }
 
-// Zugang und Sicherheit: API-Token (Maschinenzugang) und Wiederherstellungscode – Ansicht mit Aktionen.
-async function zeigeZugang() {
-  seite.innerHTML = T('<p class="leer">Lädt …</p>');
+// Benutzer: alles, was dem angemeldeten Nutzer selbst gehört – Passkeys, verbundene Apps (MCP), Kalender-Abo,
+// API-Token und Wiederherstellungscode; Abmelden. Ansicht mit Aktionen, Bearbeiten auf eigenen Seiten.
+async function zeigeKonto() {
+  seite.innerHTML = T`${kontoReiter('konto')}<p class="leer">Lädt …</p>`;
   const laden = async () => {
-    const t = await api('/api/zugang/api');
-    if (aktuell?.name !== 'zugang') return;
-    seite.innerHTML = T`<p><a class="btn klein" href="/status">← Status</a></p><h1>Zugang und Sicherheit</h1>
-      <h2>API-Token</h2>
-      <p class="leise">Für Skripte und Werkzeuge (Authorization: Bearer): Listen lesen, einsortieren, abhaken. Gilt nur für deine Daten.</p>
-      <div class="karte">${t.aktiv ? T`<strong>Aktiv</strong><div class="leise">angelegt ${zeit(t.angelegt)}${t.zuletzt ? T` · zuletzt genutzt ${zeit(t.zuletzt)}` : ''}</div>` : T('<span class="leise">Kein Token – Maschinenzugang aus.</span>')}</div>
-      <div id="neuestoken"></div>
-      <div class="leiste"><button class="btn" data-z="neu">${t.aktiv ? tx('Neues Token erzeugen') : tx('Token erzeugen')}</button>${t.aktiv ? T('<button class="btn gefahr" data-z="aus">Abschalten</button>') : ''}</div>
+    const [g, o, t] = await Promise.all([api('/api/geraete'), api('/api/oauth/apps').catch(() => ({ apps: [] })), api('/api/zugang/api')]);
+    if (aktuell?.name !== 'konto') return;
+    seite.innerHTML = T`${kontoReiter('konto')}<h1>Benutzer</h1>
+      <p class="leise">${esc(tx('Angemeldet als {0} ({1}).', ich.name || '?', tx(ROLLE[ich.rolle] || ich.rolle || '')))}</p>
+      <h2>Geräte (Passkeys)</h2>
+      ${g.geraete.map((d) => T`<div class="karte"><div class="zeile"><span><strong>${esc(d.name)}</strong>${d.dieses ? T(' <span class="badge neutral">dieses Gerät</span>') : ''}</span>
+        ${g.geraete.length > 1 && !d.dieses ? T`<button class="btn klein gefahr" data-geraet="${esc(d.id)}">Entfernen</button>` : ''}</div>
+        <div class="leise">angelegt ${zeit(d.angelegt)}${d.zuletzt ? T` · zuletzt angemeldet ${zeit(d.zuletzt)}` : ''}</div></div>`).join('')}
+      <div class="leiste"><a class="btn" href="/konto/geraet">Weiteres Gerät hinzufügen</a></div>
+      <h2>${esc(tx('Apps und Zugänge'))}</h2>
+      <p class="leise">${esc(tx('Je App oder Skript ein eigener Zugang – einzeln trennbar. Gilt nur für deine Daten.'))}</p>
+      ${o.apps.map((x) => T`<div class="karte"><div class="zeile"><span><strong>${esc(x.name)}</strong> <span class="badge neutral">${esc(tx('per Freigabe'))}</span></span><button class="btn klein gefahr" data-app="${esc(x.id)}">Trennen</button></div>
+        <div class="leise">verbunden ${zeit(x.angelegt)}${x.zuletzt ? T` · zuletzt genutzt ${zeit(x.zuletzt)}` : ''}</div></div>`).join('')}
+      ${t.tokens.map((x) => T`<div class="karte"><div class="zeile"><span><strong>${esc(x.name)}</strong> <span class="badge neutral">${esc(tx('API-Token'))}</span></span><button class="btn klein gefahr" data-token="${esc(x.id)}" data-name="${esc(x.name)}">Löschen</button></div>
+        <div class="leise">angelegt ${zeit(x.angelegt)}${x.zuletzt ? T` · zuletzt genutzt ${zeit(x.zuletzt)}` : tx(' · noch nie genutzt')}</div></div>`).join('')}
+      ${o.apps.length || t.tokens.length ? '' : T`<p class="leise">${esc(tx('Noch keine App verbunden.'))}</p>`}
+      <div class="leiste"><a class="btn haupt" href="/konto/verbinden">${esc(tx('App verbinden'))}</a><a class="btn" href="/konto/token">${esc(tx('Eigenes Token anlegen'))}</a></div>
       <h2>Wiederherstellungscode</h2>
-      <p class="leise">Öffnet deine verschlüsselten Daten, falls der Schlüssel auf dem Server fehlt. Ein neuer Code macht den alten ungültig.</p>
-      <div class="leiste"><a class="btn" href="/status/zugang/code">Neuen Code erzeugen</a></div>`;
+      <p class="leise">Öffnet deine verschlüsselten Daten, falls der Schlüssel auf dem Server fehlt. Ein neuer Code verschlüsselt alle Daten neu und macht den alten ungültig.</p>
+      <div class="leiste"><a class="btn" href="/konto/code">Neuen Code erzeugen</a></div>
+      <div class="leiste"><button class="btn gefahr" data-a="abmelden">Abmelden</button></div>`;
   };
   aktuell.neuLaden = laden;
   await laden();
   seite.onclick = async (ev) => {
-    const b = ev.target.closest('[data-z]');
+    const b = ev.target.closest('button');
     if (!b) return;
-    if (b.dataset.z === 'aus' && !confirm(tx('Maschinenzugang abschalten? Skripte mit dem Token funktionieren dann nicht mehr.'))) return;
-    if (b.dataset.z === 'neu' && !confirm(tx('Neues Token erzeugen? Ein bisheriges gilt danach nicht mehr.'))) return;
-    b.disabled = true;
     try {
-      if (b.dataset.z === 'aus') { await api('/api/zugang/api', { method: 'DELETE' }); await laden(); return; }
-      const r = await api('/api/zugang/api', { method: 'POST' });
-      await laden();
-      document.getElementById('neuestoken').innerHTML = T`<div class="karte"><div class="leise">Neues Token – nur jetzt sichtbar</div><code class="kopierbar">${esc(r.token)}</code></div>`;
+      if (b.dataset.a === 'abmelden') { await abmelden(); return geheZu('/anmelden', true); }
+      if (b.dataset.app) {
+        if (!confirm(tx('App trennen? Sie verliert sofort den Zugriff und muss neu freigegeben werden.'))) return;
+        await api(T`/api/oauth/apps/${b.dataset.app}`, { method: 'DELETE' });
+        return laden();
+      }
+      if (b.dataset.geraet) {
+        if (!confirm(tx('Gerät entfernen? Es kann sich danach nicht mehr anmelden.'))) return;
+        await api(T`/api/geraete/${b.dataset.geraet}`, { method: 'DELETE' });
+        return laden();
+      }
+      if (b.dataset.token) {
+        if (!confirm(tx('Token „{0}“ löschen? Die App oder das Skript damit hat sofort keinen Zugriff mehr.', b.dataset.name))) return;
+        await api(T`/api/zugang/api/${b.dataset.token}`, { method: 'DELETE' });
+        return laden();
+      }
     } catch (f) { b.disabled = false; melde(f.message); }
   };
   aufraeumen = () => { seite.onclick = null; };
 }
 
-// Neuer Wiederherstellungscode: erst bestätigen, dann einmal zeigen; Willkommen bestätigt das Notieren.
+// Neuer Wiederherstellungscode: erst bestätigen, dann neuer Schlüssel – alle Daten werden neu verschlüsselt
+// (Fortschrittsbalken); danach zeigt Willkommen den Code einmal. Unterbrochene Läufe lassen sich fortsetzen.
+const UMSCHLUESSEL_PHASE = { vorbereiten: 'Vorbereiten …', medien: 'Aufnahmen und Bilder', datenbank: 'Datenbank', abschluss: 'Abschluss', fertig: 'Fertig' };
 async function zeigeNeuerCode() {
-  seite.innerHTML = T`<p><a class="btn klein" href="/status/zugang">← Zugang</a></p><h1>Neuer Wiederherstellungscode</h1>
-    <p>Der bisherige Code gilt danach nicht mehr. Den neuen Code siehst du nur einmal.</p>
-    <div class="leiste"><a class="btn" href="/status/zugang">Abbrechen</a><button class="btn haupt" data-neu>Neuen Code erzeugen</button></div>`;
-  seite.querySelector('[data-neu]').onclick = async (ev) => {
-    ev.target.disabled = true;
-    try { await api('/api/wiederherstellungscode/neu', { method: 'POST' }); geheZu('/willkommen', true); } catch (f) { ev.target.disabled = false; melde(f.message); }
+  seite.innerHTML = T('<p class="leer">Lädt …</p>');
+  let uhr = null;
+  aufraeumen = () => clearTimeout(uhr);
+  const fortschritt = (st) => {
+    const prozent = st.gesamt ? Math.round((st.erledigt / st.gesamt) * 100) : 0;
+    seite.innerHTML = T`<h1>Daten werden neu verschlüsselt</h1>
+      <p class="leise">Bitte warten. Solange sind deine Daten gesperrt; neue Aufnahmen der Uhr werden abgewiesen.</p>
+      <div class="karte"><div class="zeile"><strong>${esc(tx(UMSCHLUESSEL_PHASE[st.phase] || st.phase))}</strong><span>${st.gesamt ? esc(`${prozent} %`) : ''}</span></div>
+        <meter class="balken" min="0" max="${st.gesamt || 1}" value="${st.erledigt || 0}" aria-label="${esc(tx('{0} von {1} erledigt', st.erledigt || 0, st.gesamt || 0))}"></meter>
+        <div class="leise">${st.gesamt ? esc(tx('{0} von {1} (Dateien und Datenbank)', st.erledigt, st.gesamt)) : ''}${st.unlesbar ? esc(tx(' · {0} nicht lesbar – bleiben unverändert', st.unlesbar)) : ''}</div></div>`;
   };
+  const fehler = (st) => {
+    seite.innerHTML = T`<h1>Neuverschlüsselung unterbrochen</h1>
+      <div class="hinweis schlecht">${esc(st.fehler || tx('Unbekannter Fehler'))}</div>
+      <p class="leise">Bisher Erledigtes bleibt; Fortsetzen macht beim nächsten offenen Schritt weiter. Der alte Code gilt bis zum Abschluss.</p>
+      <div class="leiste"><button class="btn haupt" data-weiter>Fortsetzen</button></div>`;
+    seite.querySelector('[data-weiter]').onclick = async (ev) => {
+      ev.target.disabled = true;
+      try { await api('/api/wiederherstellungscode/neu/weiter', { method: 'POST' }); beobachte(); } catch (f) { ev.target.disabled = false; melde(f.message); }
+    };
+  };
+  const beobachte = async () => {
+    clearTimeout(uhr);
+    let st;
+    try { st = await api('/api/wiederherstellungscode/neu'); } catch (f) { if (aktuell?.name === 'zugangCode') uhr = setTimeout(beobachte, 2000); return; }
+    if (aktuell?.name !== 'zugangCode') return;
+    if (st.phase === 'fertig' && !st.laeuft) { geheZu('/willkommen', true); return; }
+    if (st.phase === 'fehler') { fehler(st); return; }
+    if (st.laeuft) { fortschritt(st); uhr = setTimeout(beobachte, 700); return; }
+    bestaetigen();
+  };
+  const bestaetigen = () => {
+    seite.innerHTML = T`<p><a class="btn klein" href="/konto">← ${esc(tx('Benutzer'))}</a></p><h1>Neuer Wiederherstellungscode</h1>
+      <p>Deine Daten bekommen einen neuen Schlüssel und werden komplett neu verschlüsselt. Der bisherige Code gilt danach nicht mehr; den neuen siehst du nur einmal.</p>
+      <ul class="leise"><li>Dauert je nach Menge der Aufnahmen einige Sekunden bis Minuten; so lange sind deine Daten gesperrt.</li>
+        <li>Ältere Backups öffnet weiterhin nur der alte Code. Danach wird gleich ein neues Backup angelegt.</li></ul>
+      <div class="leiste"><a class="btn" href="/konto">Abbrechen</a><button class="btn haupt" data-neu>Neu verschlüsseln</button></div>`;
+    seite.querySelector('[data-neu]').onclick = async (ev) => {
+      ev.target.disabled = true;
+      try { await api('/api/wiederherstellungscode/neu', { method: 'POST' }); fortschritt({ phase: 'vorbereiten', erledigt: 0, gesamt: 0 }); uhr = setTimeout(beobachte, 300); } catch (f) { ev.target.disabled = false; melde(f.message); }
+    };
+  };
+  await beobachte();
 }
 
 const ROLLE = { admin: 'Admin', user: 'Nutzer' };
@@ -4770,7 +5479,7 @@ async function zeigeNutzerBearbeiten(id) {
       <label for="b-rolle">Rolle</label><select id="b-rolle" name="rolle"><option value="user"${u.rolle === 'user' ? ' selected' : ''}>${esc(tx('Nutzer'))}</option><option value="admin"${u.rolle === 'admin' ? ' selected' : ''}>${esc(tx('Admin'))}</option></select>
       ${selbst ? '' : T`<label class="schalter"><input type="checkbox" name="gesperrt"${u.gesperrt === 'gesperrt' ? ' checked' : ''}> Gesperrt (keine Anmeldung, keine Verarbeitung; Daten bleiben)</label>`}
       <div class="leiste"><a class="btn" href="/admin/nutzer">Abbrechen</a><button class="btn haupt" type="submit">Speichern</button></div></form>
-    ${selbst ? '' : T`<h2>Löschen</h2><p class="leise">Löscht Daten, Aufnahmen und Schlüssel dieses Nutzers unwiderruflich. Zur Bestätigung den Namen eingeben.</p>
+    ${selbst ? T`<a class="karte" href="/konto"><strong>${esc(tx('Deine Benutzereinstellungen'))}</strong><br><span class="leise">${esc(tx('Passkeys, Apps und Zugänge, Pebble-App, Push, Kalender, Theme und Wiederherstellungscode'))}</span></a>` : T`<h2>Löschen</h2><p class="leise">Löscht Daten, Aufnahmen und Schlüssel dieses Nutzers unwiderruflich. Zur Bestätigung den Namen eingeben.</p>
       <form class="einstellungen" id="loeschen" novalidate><label for="l-name">Name</label><input id="l-name" name="bestaetigung" autocomplete="off">
         <div class="leiste"><button class="btn gefahr" type="submit">Endgültig löschen</button></div></form>`}`;
   const form = seite.querySelector('form');
@@ -5192,15 +5901,16 @@ async function zeigeKosten() {
 
 // Pebble-App: Gesten und die Werte für die Webhook-Einrichtung.
 async function zeigePebble() {
-  seite.innerHTML = T`${statusReiter('pebble')}<p class="leer">Lädt …</p>`;
+  seite.innerHTML = T`${kontoReiter('pebble')}<p class="leer">Lädt …</p>`;
   let d;
   try { d = await api('/api/pebble'); } catch (f) {
     if (f instanceof NetzFehler) { if (aktuell?.name === 'pebble') seite.innerHTML = T('<p class="leer">Offline – die Einrichtungswerte brauchen eine Verbindung.</p>'); return; }
     throw f;
   }
   if (aktuell?.name !== 'pebble') return;
-  seite.innerHTML = statusReiter('pebble') + pebbleSeite(d);
+  seite.innerHTML = kontoReiter('pebble') + pebbleSeite(d);
   seite.onclick = (ev) => { const b = ev.target.closest('button'); if (b) pebbleKlick(b, d); };
+  aktuell.neuLaden = zeigePebble; // Test-Event kommt an: „Letzter Test“ aktualisieren
   aufraeumen = () => { seite.onclick = null; };
 }
 function pebbleSeite(d) {
@@ -5218,7 +5928,8 @@ function pebbleSeite(d) {
     ${wert(tx('Header-Name'), 'header')}${wert(tx('Header-Wert'), 'token', true)}
     <p class="leise">„Signed requests“ einschalten und dieses Secret eintragen, ohne Leerzeichen:</p>
     ${wert(tx('Signatur-Secret'), 'secret', true)}
-    <ol><li>„Send test event“ – im Verlauf erscheint „Test-Event“.</li>
+    <div class="hinweis${d.letzter_test ? ' gut' : ''}">${d.letzter_test ? esc(tx('Letzter Test angekommen: {0}', zeit(d.letzter_test.zeit))) : esc(tx('Noch kein Test angekommen.'))}</div>
+    <ol><li>„Send test event“ – oben erscheint „Letzter Test angekommen“. Ein Test wird kein Eintrag.</li>
       <li>Je Geste eine kurze Aufnahme.</li>
       <li>Kommt nichts an: „Recent runs“ in der Pebble-App zeigt die Antwort (401 = Header oder Signatur falsch).</li></ol>
     <p class="leise">Pebble wiederholt fehlgeschlagene Zustellungen jede Minute, bis zu zehnmal; doppelte erzeugen keinen zweiten Eintrag.</p>`;
@@ -5271,11 +5982,11 @@ async function codeFeld(el, basis, seitenName, beiEnde) {
 }
 
 async function zeigeGeraetNeu() {
-  seite.innerHTML = T`<h1>Weiteres Gerät hinzufügen</h1><div id="codefeld"><p class="leer">Lädt …</p></div>
+  seite.innerHTML = T`<p><a class="btn klein" href="/konto">← ${esc(tx('Benutzer'))}</a></p><h1>Weiteres Gerät hinzufügen</h1><div id="codefeld"><p class="leer">Lädt …</p></div>
     <ol><li>Auf dem neuen Gerät diese Adresse öffnen: <strong>${esc(location.host)}</strong></li>
       <li>„Mit Code hinzufügen“ antippen und den Code eingeben.</li>
       <li>Namen eingeben und den Passkey anlegen.</li></ol>
-    <div class="leiste"><a class="btn" href="/status">Fertig</a></div>`;
+    <div class="leiste"><a class="btn" href="/konto">Fertig</a></div>`;
   const stopp = await codeFeld(document.getElementById('codefeld'), '/api/geraete/code', 'geraetNeu');
   aufraeumen = stopp;
 }
@@ -5337,7 +6048,7 @@ async function zeigeDarstellung() {
   let d = { modus: 'auto', palette: 'blau', ...(D.lies() || {}) };
   const male = () => {
     const eigene = D.gueltigeFarbe(d.farbe) ? d.farbe : '#2f6fde';
-    seite.innerHTML = T`${statusReiter('darstellung')}<h1>Theme</h1>
+    seite.innerHTML = T`${kontoReiter('darstellung')}<h1>Theme</h1>
       <p class="leise">Gilt auf diesem Gerät. Ein neues Gerät übernimmt beim ersten Öffnen das zuletzt gewählte Theme.</p>
       <h2>Tag/Nacht</h2>
       <nav class="btn-group unter" aria-label="Tag/Nacht">${[['auto', tx('Automatisch')], ['hell', tx('Hell')], ['dunkel', tx('Dunkel')]]
@@ -5452,7 +6163,7 @@ async function zeigeVerbinden() {
     <p>Die App bekommt vollen Zugriff auf deine Sprachnotizen:</p>
     <ul><li>alle Notizen, Wortlaute, Termine und Planungen lesen und durchsuchen</li><li>Notizen anlegen (verursacht KI-Kosten)</li><li>Listen ändern, zusammenführen und löschen, Punkte abhaken</li></ul>
     <div class="hinweis warn">Der Zugang geht an <strong>${esc(d.ziel)}</strong>. Nur erlauben, wenn du die Verbindung gerade selbst gestartet hast und die Adresse zu deiner App gehört.</div>
-    <p class="leise">Trennen jederzeit unter Status → Verbundene Apps.</p>
+    <p class="leise">Trennen jederzeit unter Benutzer → Apps und Zugänge.</p>
     <div class="leiste"><button class="btn haupt" data-erlauben="1">Erlauben</button><button class="btn" data-erlauben="0">Ablehnen</button></div></div>`;
   seite.onclick = async (ev) => {
     const b = ev.target.closest('button[data-erlauben]');
@@ -5568,9 +6279,10 @@ async function zeigeAnmelden() {
       const start = await api('/api/auth/anmelden/start', { method: 'POST' });
       const cred = await navigator.credentials.get(optionenAusJson(start.optionen, false));
       await api(T`/api/auth/anmelden/ende?vorgang=${start.vorgang}`, { method: 'POST', body: credZuJson(cred) });
-      await nachAnmeldung();
+      const s = await nachAnmeldung();
       besuche.anmeldung();
       starteLive();
+      if (s.code_offen) { geheZu('/willkommen', true); return; }
       let weiter = '/';
       try { weiter = sessionStorage.getItem('nach-anmeldung') || '/'; sessionStorage.removeItem('nach-anmeldung'); } catch { /* Startseite */ }
       if (eigenerPfad(weiter) && weiter !== '/') springeWeiter(weiter);
@@ -5610,11 +6322,12 @@ async function zeigeEinrichten() {
       const start = await api('/api/auth/einrichten/start', { method: 'POST', body: { token, name: document.getElementById('name').value, nutzer, wiederherstellungscode: wcode } });
       const cred = await navigator.credentials.create(optionenAusJson(start.optionen, true));
       await api(T`/api/auth/einrichten/ende?vorgang=${start.vorgang}`, { method: 'POST', body: credZuJson(cred) });
-      await nachAnmeldung();
+      const s = await nachAnmeldung();
       besuche.anmeldung();
       melde(tx('Passkey angelegt'));
       starteLive();
-      geheZu('/', true);
+      // Erster Passkey nach der Einrichtung: gleich weiter zum Wiederherstellungscode.
+      geheZu(s.code_offen ? '/willkommen' : '/', true);
     } catch (f) {
       ev.target.disabled = false;
       melde(f.name === 'NotAllowedError' ? tx('Einrichtung abgebrochen') : f.message);
@@ -5655,13 +6368,13 @@ function maleMenue() {
     { id: 'verlauf', name: tx('Verlauf'), href: '/', setze: ['verlauf-art', 'alles'], unter: ARTEN.map(([a, n]) => ({ name: a === 'termin' ? tx('Termine') : n, href: '/', setze: ['verlauf-art', a], an: name === 'verlauf' && art === a, extra: (a === 'fragen' ? '' : neuZahl(neuZahlen[a])) + zahl(zahlen[a] ?? 0, a !== 'fragen') })) },
     { id: 'listen', name: tx('Listen'), href: '/listen', unter: gruppen.map(([g, offen, neu]) => ({ name: gruppenTitel(g), href: gruppenPfad(g), an: !!gruppe && gruppe.toLowerCase() === g.toLowerCase(), extra: neuZahl(neu) + zahl(offen, true) })).concat(weitere > 0 ? [{ knopf: 'data-menue-gruppen', name: alleGruppenZeigen ? tx('Weniger anzeigen') : tx('Weitere anzeigen ({0})', weitere) }] : []) },
     { id: 'status', name: tx('Einstellungen'), href: '/status', unter: [
-      { name: tx('Status'), href: '/status', an: ['status', 'pebble', 'joplin', 'kalender', 'mcp', 'einstellungen', 'einstellungBearbeiten', 'geraetNeu', 'darstellung', 'zugang', 'zugangCode'].includes(name), extra: audioFehler ? T` <span class="zaehler fehler" title="${tx('{0} Aufnahmen ohne Eintrag', audioFehler)}">${audioFehler}</span>` : '' },
+      { name: tx('Status'), href: '/status', an: ['status', 'joplin', 'einstellungen', 'einstellungBearbeiten'].includes(name), extra: audioFehler ? T` <span class="zaehler fehler" title="${tx('{0} Aufnahmen ohne Eintrag', audioFehler)}">${audioFehler}</span>` : '' },
       { name: tx('Gedächtnis'), href: '/status/gedaechtnis', an: name === 'gedaechtnis' || name === 'gedaechtnisBearbeiten', extra: zahl(offeneVorschlaege) },
       { name: tx('Tags'), href: '/status/tags', an: name === 'tagsVerwalten', extra: zahl(tagZahl, true) },
       { name: tx('KI-Kosten'), href: '/status/kosten', an: name === 'kosten' },
       { name: tx('Papierkorb'), href: '/status/papierkorb', an: name === 'papierkorb', extra: zahl(papierkorbZahl, true) },
     ] },
-    // System: was für alle Nutzer gilt, nur für Admins (eigene Gruppe unter den persönlichen Einstellungen).
+    // System: was für alle Nutzer gilt, nur für Admins (eigene Gruppe unter den Einstellungen).
     ...(istAdmin() ? [{ id: 'system', name: tx('System'), href: '/status/update', unter: [
       { name: tx('Updates'), href: '/status/update', an: name === 'update', extra: neueVersion ? ` ${updateSymbol}` : '' },
       { name: tx('Backups'), href: '/status/backups', an: name === 'backups' || name === 'backupHochladen' },
@@ -5671,10 +6384,15 @@ function maleMenue() {
   // Verlauf-Filter ohne Einträge (Zähler 0) sind nicht anklickbar: der Verlauf fiele sonst auf „Alles“ zurück.
   const link = (k, x) => (x.knopf ? T`<button type="button" class="${k} mehr" ${x.knopf}><span>${esc(x.name)}</span></button>` : x.leer && !x.an ? T`<span class="${k} gesperrt" aria-disabled="true"><span>${esc(x.name)}</span>${x.extra || ''}</span>` : linkAktiv(k, x));
   const linkAktiv = (k, x) => T`<a class="${k}${x.an ? ' aktiv' : ''}" href="${x.href}"${x.setze ? T` data-setze="${x.setze[0]}" data-wert="${esc(x.setze[1])}"` : ''}${x.an ? ' aria-current="page"' : ''}><span>${esc(x.name)}</span>${x.extra || ''}</a>`;
-  nav.innerHTML = T`<div class="menuekopf"><span class="marke">${ich.name ? esc(tx('Hallo {0}', ich.name)) : 'Sprachnotizen'}</span><button type="button" class="btn klein rund" data-menue-zu aria-label="Menü schließen">×</button></div>
-    ${teile.map((t) => T`<div class="menuegruppe">${link('menuehaupt', { ...t, an: bereich === t.id })}${t.unter.map((u) => link('menueunter', u)).join('')}</div>`).join('')}
-    <div class="menuegruppe"><button type="button" class="menueunter abmelden" data-menue-abmelden><span>Abmelden</span></button></div>
-    <div class="menuefuss">${ringBalkenHtml()}${spendenLink ? spendenKnopf() : ''}<div class="menuefusszeile">${appVersion ? T`<a href="/status/update">Version ${esc(versionNr(appVersion))}${appKanal ? ` · ${esc(tx(appKanal))}` : ''}</a>` : '<span></span>'}<a class="themeknopf" href="/status/darstellung" title="Theme" aria-label="Theme"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 3a9 9 0 0 0 0 18z" fill="currentColor"/></svg></a></div></div>`;
+  // Fuß: Nutzung, Name (führt zu den Benutzereinstellungen) mit Abmelden rechts, Version und Spenden.
+  const nutzerSeiten = ['pebble', 'konto', 'zugangCode', 'geraetNeu', 'mcp', 'tokenNeu', 'kalender', 'benachrichtigungen', 'darstellung'];
+  const nutzerAktiv = nutzerSeiten.includes(name);
+  nav.innerHTML = T`${teile.map((t) => T`<div class="menuegruppe">${link('menuehaupt', { ...t, an: bereich === t.id })}${t.unter.map((u) => link('menueunter', u)).join('')}</div>`).join('')}
+    <div class="menuefuss">${ringBalkenHtml()}
+      <div class="nutzerzeile"><a class="nutzerknopf${nutzerAktiv ? ' aktiv' : ''}" href="/konto"${nutzerAktiv ? ' aria-current="page"' : ''}>${ZAHNRAD}<span>${esc(ich.name || tx('Benutzer'))}</span></a>
+        <button type="button" class="abmeldeknopf" data-menue-abmelden title="${esc(tx('Abmelden'))}" aria-label="${esc(tx('Abmelden'))}">${ABMELDEN}</button></div>
+      <div class="fusszeile">${appVersion ? T`<a class="fussversion" href="/status/update">V ${esc(versionNr(appVersion))}${appKanal ? ` · ${esc(tx(appKanal))}` : ''}</a>` : '<span></span>'}
+        ${spendenLink ? T`<a class="fussspende" href="${esc(spendenLink)}" data-kofi>${HERZ}<span>${esc(tx('Spenden'))}</span></a>` : ''}</div></div>`;
   setzeBalken(nav);
   const punkt = menueKnopf.querySelector('.punkt');
   punkt.hidden = !(neueVersion && istAdmin()) && !offeneVorschlaege && !audioFehler;
@@ -5682,6 +6400,9 @@ function maleMenue() {
   punkt.classList.toggle('fehler', !!audioFehler);
   menueKnopf.title = audioFehler ? tx('{0} Aufnahmen ohne Eintrag', audioFehler) : neueVersion ? T`Update ${versionNr(neueVersion)} verfügbar` : offeneVorschlaege ? T`${offeneVorschlaege} Gedächtnis-Vorschläge` : '';
 }
+const ABMELDEN = T('<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3M10 16l-4-4 4-4M6 12h10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>');
+const ZAHNRAD = T('<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="2"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>');
+const HERZ = T('<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20s-7-4.4-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.6-7 10-7 10z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>');
 menueKnopf.onclick = () => { maleMenue(); menue.showModal(); };
 // Breite Bildschirme: Menü fest links sichtbar (nicht modal), ohne Menüknopf; schmal: Klappmenü.
 const breit = matchMedia('(min-width: 1100px)');
@@ -5693,8 +6414,8 @@ function menueModus() {
   document.body.classList.toggle('mitmenue', fest);
 }
 breit.addEventListener('change', menueModus);
-// Schließen: ×, Klick neben das Menü (auf den Hintergrund), Esc (Dialog selbst).
-menue.addEventListener('click', (e) => { if (menue.matches(':modal') && (e.target === menue || e.target.closest('[data-menue-zu]'))) menue.close(); });
+// Schließen: Klick neben das Menü (auf den Hintergrund), Esc (Dialog selbst).
+menue.addEventListener('click', (e) => { if (menue.matches(':modal') && e.target === menue) menue.close(); });
 menue.addEventListener('click', (e) => { if (e.target.closest('[data-menue-gruppen]')) { alleGruppenZeigen = !alleGruppenZeigen; maleMenue(); } });
 menue.addEventListener('click', async (e) => {
   const b = e.target.closest('[data-menue-abmelden]');
@@ -5829,6 +6550,8 @@ async function ladeZaehler() {
     speicherVoll = z.speicher_voll || null;
     zeigeSpeicherkarte();
     ringInfo = z.ring || null;
+    alteAdressen = z.alte_adressen || [];
+    pebbleTest = z.pebble_test || null;
     try { localStorage.setItem('ring-info', JSON.stringify(ringInfo)); } catch { /* nur Anzeige */ }
     spendenLink = /^https:\/\/ko-fi\.com\/[A-Za-z0-9_]+$/.test(z.spenden || '') ? z.spenden : '';
     try { localStorage.setItem('spenden-link', spendenLink); } catch { /* nur Anzeige */ }
@@ -5902,9 +6625,10 @@ if ('serviceWorker' in navigator) {
   zeigeVerbindung();
   const pfad = location.pathname;
   // Schon einmal angemeldet: sofort aus dem Zwischenspeicher zeigen, die Sitzung prüft der Hintergrund.
-  const vorab = lokal('angemeldet') === '1' && pfad !== '/anmelden' && pfad !== '/einrichten' && pfad !== '/ersteinrichtung';
+  const ohneSitzung = ['/anmelden', '/einrichten', '/ersteinrichtung', '/api/v1/ai/connect/openrouter'].includes(pfad);
+  const vorab = lokal('angemeldet') === '1' && !ohneSitzung;
   if (vorab) zeige();
-  if (pfad !== '/anmelden' && pfad !== '/einrichten' && pfad !== '/ersteinrichtung') {
+  if (!ohneSitzung) {
     try {
       const s = await api('/api/sitzung');
       // Anderer Nutzer als zuletzt auf diesem Gerät: dessen Zwischenspeicher (Einträge, Vorgemerktes) verwerfen.
@@ -5916,6 +6640,7 @@ if ('serviceWorker' in navigator) {
         if (pfad === '/verbinden') try { sessionStorage.setItem('nach-anmeldung', pfad + location.search); } catch { /* dann zur Startseite */ }
         return geheZu('/anmelden', true);
       }
+      if (s.gesperrt === 'umschluesselung') return geheZu('/konto/code', true);
       if (s.gesperrt) return geheZu('/wiederherstellen', true);
       if (s.code_offen && pfad !== '/willkommen') return geheZu('/willkommen', true);
       // Zuletzt gesehen vom Server holen, bevor die erste Seite „Neu“ markiert.

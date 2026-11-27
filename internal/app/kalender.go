@@ -41,7 +41,7 @@ func (a *App) icalToken(renew bool) (string, error) {
 	return tok, a.DB.Set(icalTokenKey, tok)
 }
 
-func (a *App) icalURL(tok string) string { return a.Cfg.PublicURL + "/kalender/" + tok + ".ics" }
+func (a *App) icalURL(tok string) string { return a.Cfg.PublicURL + pathCalendar + "/" + tok + ".ics" }
 
 // handleCalendar: Link des Abos für die Seite Kalender.
 func (a *App) handleCalendar(w http.ResponseWriter, r *http.Request) {

@@ -56,6 +56,7 @@ self.addEventListener('fetch', (e) => {
   if (e.request.method !== 'GET' || url.origin !== location.origin || url.pathname.startsWith('/api/') || url.pathname.startsWith('/oauth/') || url.pathname.startsWith('/kalender/') || url.pathname.startsWith('/.well-known/') || url.pathname === '/mcp' || url.pathname === '/hook' || url.pathname === '/sw') return;
   const seite = e.request.mode === 'navigate';
   if (seite && !SPA_PFADE.test(url.pathname)) return; // andere Seiten unter derselben Adresse: direkt vom Netz
+  if (seite && url.searchParams.has('lang')) return; // Sprachwechsel: Hülle der gewählten Sprache vom Netz
   const key = seite ? '/' : url.pathname + url.search;
   if (!seite && !HUELLE.includes(key)) return;
   e.respondWith(caches.open(CACHE).then(async (c) => {

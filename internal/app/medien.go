@@ -442,7 +442,7 @@ func (a *App) generateImage(ctx context.Context, m *Medium) (*float64, error) {
 		return nil, errors.New(i18n.T("Bilder erzeugen ist ausgeschaltet"))
 	}
 	gen, ok := a.AI.(interface {
-		Image(ctx context.Context, prompt, size, quality string) ([]byte, float64, error)
+		Image(ctx context.Context, prompt, size, quality string) ([]byte, *float64, error)
 	})
 	if !ok {
 		return nil, errors.New(i18n.T("Bilder erzeugen wird nicht unterstützt"))
@@ -450,11 +450,10 @@ func (a *App) generateImage(ctx context.Context, m *Medium) (*float64, error) {
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
 	defer cancel()
 	prompt := m.Prompt + "\n\nStyle: clean, simple explanatory illustration, flat colors, white background, no text or only very short labels."
-	data, price, err := gen.Image(a.tagged(ctx), prompt, "1536x1024", "low")
+	data, cost, err := gen.Image(a.tagged(ctx), prompt, "1536x1024", "low")
 	if err != nil {
 		return nil, err
 	}
-	cost := &price
 	name, err := a.saveImage(data)
 	if err != nil {
 		return cost, err

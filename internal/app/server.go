@@ -18,7 +18,8 @@ import (
 // Handler baut alle Routen: Webhook, API der Web-App, statische PWA.
 func (s *System) Handler() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST /hook", s.handleHook)
+	// Eingänge von außen: versioniert unter /api/v1/… (frühere Adressen siehe altadressen.go).
+	mux.HandleFunc("POST "+pathHook, s.handleHook)
 	mux.HandleFunc("GET /healthz", s.handleHealth)
 	mux.HandleFunc("GET /admin", s.handleAdminLink)
 
@@ -41,19 +42,20 @@ func (s *System) Handler() http.Handler {
 	}
 	mux.HandleFunc("POST /api/listenpunkte/{id}/erledigt", m((*App).handleItemDone))
 	// MCP: API-Token oder OAuth (Connectoren in Claude, ChatGPT …).
-	mux.HandleFunc("POST /mcp", s.mcpAuth((*App).handleMCP))
-	mux.HandleFunc("GET /mcp", s.mcpAuth(func(_ *App, w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusMethodNotAllowed) }))
-	for _, p := range []string{"/mcp", "/oauth/token", "/oauth/register", "/oauth/revoke", "/.well-known/oauth-protected-resource", "/.well-known/oauth-protected-resource/mcp", "/.well-known/oauth-authorization-server", "/.well-known/openid-configuration"} {
+	mux.HandleFunc("POST "+pathMCP, s.mcpAuth((*App).handleMCP))
+	mux.HandleFunc("GET "+pathMCP, s.mcpAuth(func(_ *App, w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusMethodNotAllowed) }))
+	for _, p := range []string{pathMCP, pathOAuth + "/token", pathOAuth + "/register", pathOAuth + "/revoke", "/.well-known/oauth-protected-resource", "/.well-known/oauth-protected-resource" + pathMCP, "/.well-known/oauth-authorization-server", "/.well-known/openid-configuration"} {
 		mux.HandleFunc("OPTIONS "+p, s.handleOAuthOptions)
 	}
+	// Metadaten (RFC 9728/8414): Pfade unter /.well-known schreibt der Standard vor.
 	mux.HandleFunc("GET /.well-known/oauth-protected-resource", s.handleProtectedResource)
-	mux.HandleFunc("GET /.well-known/oauth-protected-resource/mcp", s.handleProtectedResource)
+	mux.HandleFunc("GET /.well-known/oauth-protected-resource"+pathMCP, s.handleProtectedResource)
 	mux.HandleFunc("GET /.well-known/oauth-authorization-server", s.handleAuthServerMeta)
 	mux.HandleFunc("GET /.well-known/openid-configuration", s.handleAuthServerMeta)
-	mux.HandleFunc("POST /oauth/register", s.handleOAuthRegister)
-	mux.HandleFunc("GET /oauth/authorize", s.handleOAuthAuthorize)
-	mux.HandleFunc("POST /oauth/token", s.handleOAuthToken)
-	mux.HandleFunc("POST /oauth/revoke", s.handleOAuthRevoke)
+	mux.HandleFunc("POST "+pathOAuth+"/register", s.handleOAuthRegister)
+	mux.HandleFunc("GET "+pathOAuth+"/authorize", s.handleOAuthAuthorize)
+	mux.HandleFunc("POST "+pathOAuth+"/token", s.handleOAuthToken)
+	mux.HandleFunc("POST "+pathOAuth+"/revoke", s.handleOAuthRevoke)
 	mux.HandleFunc("GET /api/oauth/anfrage", u((*App).handleOAuthRequest))
 	mux.HandleFunc("POST /api/oauth/freigabe", u((*App).handleOAuthDecide))
 	mux.HandleFunc("GET /api/oauth/apps", u((*App).handleOAuthGrants))
@@ -103,6 +105,10 @@ func (s *System) Handler() http.Handler {
 	mux.HandleFunc("PUT /api/einstellungen", ad(s.handleSettingsSave))
 	mux.HandleFunc("DELETE /api/whisper/modelle/{id}", ad(s.handleWhisperDelete))
 	mux.HandleFunc("POST /api/ki/pruefen/{zugang}", ad(s.handleAICheck))
+	mux.HandleFunc("POST /api/ki/verbinden/openrouter/start", ad(s.handleKIConnectStart))
+	mux.HandleFunc("POST /api/ki/verbinden/openrouter/fertig", ad(s.handleKIConnectDone))
+	mux.HandleFunc("POST /api/ki/verbinden/rueckgabe", s.public(handleKIConnectReturn))
+	mux.HandleFunc("POST /api/ki/verbinden/abholen", ad(handleKIConnectPoll))
 	mux.HandleFunc("GET /api/ki", ad(s.handleAI))
 	mux.HandleFunc("PUT /api/ki", ad(s.handleAISave))
 	mux.HandleFunc("GET /api/update", ad(s.handleUpdate))
@@ -119,6 +125,7 @@ func (s *System) Handler() http.Handler {
 	mux.HandleFunc("DELETE /api/backups/{name}", ad(s.handleBackupDelete))
 	mux.HandleFunc("POST /api/backups/aufraeumen", ad(s.handleBackupPrune))
 	mux.HandleFunc("GET /api/pebble", u((*App).handlePebbleSetup))
+	mux.HandleFunc("POST /api/pebble/test/ok", u((*App).handlePebbleTestOK))
 	mux.HandleFunc("GET /api/kosten", u((*App).handleCosts))
 	mux.HandleFunc("GET /api/gedaechtnis", u((*App).handleMemory))
 	mux.HandleFunc("GET /api/zaehler", u((*App).handleCounters))
@@ -147,7 +154,7 @@ func (s *System) Handler() http.Handler {
 	mux.HandleFunc("GET /api/kalender", u((*App).handleCalendar))
 	mux.HandleFunc("POST /api/kalender/neu", u((*App).handleCalendarNewLink))
 	// Kalender-Abo (iCal): ohne Sitzung, geschützt durch den geheimen Link.
-	mux.HandleFunc("GET /kalender/{datei}", s.handleCalendarFeed)
+	mux.HandleFunc("GET "+pathCalendar+"/{datei}", s.handleCalendarFeed)
 	mux.HandleFunc("PUT /api/darstellung", u((*App).handleDarstellungSave))
 	mux.HandleFunc("DELETE /api/tags/{name}", u((*App).handleDeleteTag))
 	mux.HandleFunc("POST /api/eintraege/{id}/tags", uf(func(a *App) http.HandlerFunc { return a.handleSetTags("job") }))
@@ -189,23 +196,31 @@ func (s *System) Handler() http.Handler {
 	mux.HandleFunc("PUT /api/einstellungen/persoenlich", u((*App).handlePersonalSettingsSave))
 	mux.HandleFunc("GET /api/zugang/api", u((*App).handleAPIToken))
 	mux.HandleFunc("POST /api/zugang/api", u((*App).handleAPITokenNew))
-	mux.HandleFunc("DELETE /api/zugang/api", u((*App).handleAPITokenDelete))
+	mux.HandleFunc("DELETE /api/zugang/api/{id}", u((*App).handleAPITokenDelete))
 
 	// Gesperrte Daten: mit dem Wiederherstellungscode öffnen; Code nach Einrichtung/Umzug anzeigen und bestätigen.
 	mux.HandleFunc("POST /api/wiederherstellen", s.signedIn(s.handleRecover))
 	mux.HandleFunc("GET /api/wiederherstellungscode", u((*App).handleRecoveryCode))
 	mux.HandleFunc("POST /api/wiederherstellungscode/notiert", u((*App).handleRecoveryConfirm))
 	mux.HandleFunc("POST /api/wiederherstellungscode/neu", u((*App).handleRecoveryNew))
+	mux.HandleFunc("GET /api/wiederherstellungscode/neu", s.signedIn(s.handleRekeyState))
+	mux.HandleFunc("POST /api/wiederherstellungscode/neu/weiter", s.signedIn(s.handleRekeyResume))
 
 	// Hülle in der Sprache des angemeldeten Nutzers (sonst der des Systems).
-	mux.HandleFunc("/", staticHandler(func(r *http.Request) string {
+	shell := staticHandler(func(r *http.Request) string {
 		if sess, ok := s.sessionOf(r); ok {
 			if a, _ := s.app(sess.uid); a != nil {
 				return a.Cfg.Language
 			}
 		}
 		return i18n.Lang()
-	}))
+	})
+	// Rücksprung von OpenRouter: eine Seite der Web-App unter der API-Adresse des Eingangs.
+	mux.HandleFunc("GET "+pathConnectOpenRouter, serveShell(shell))
+	mux.HandleFunc("GET /api/alte-adressen", u((*App).handleLegacyHits))
+	mux.HandleFunc("POST /api/alte-adressen/ok", u((*App).handleLegacyHitsOK))
+	s.registerLegacy(mux)
+	mux.HandleFunc("/", shell)
 
 	return securityHeaders(apiCache(mux))
 }

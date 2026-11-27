@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net/url"
+	"os"
 	"strings"
 
 	"github.com/ncruces/go-sqlite3"
@@ -83,6 +84,51 @@ func OpenReadOnly(path string, key []byte) (*sql.DB, error) {
 func (s *Store) SnapshotTo(path string, key []byte) error {
 	_, err := s.DB.Exec(`VACUUM INTO ?`, snapshotURI(path, key))
 	return err
+}
+
+// CheckKey: die Datenbankdatei öffnet sich mit key und ist in sich stimmig.
+func CheckKey(path string, key []byte) error {
+	db, err := openSQLite(path, key, false)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	return quickCheck(db)
+}
+
+// Rekey schreibt die mit oldKey verschlüsselte Datenbank src als mit newKey verschlüsselte Kopie nach dst (fsync).
+// Ein noch nicht übernommenes WAL von src fließt mit ein; src selbst bleibt unverändert.
+func Rekey(src string, oldKey []byte, dst string, newKey []byte) error {
+	if len(newKey) != KeySize {
+		return fmt.Errorf("Datenbank-Schlüssel: %d statt %d Byte", len(newKey), KeySize)
+	}
+	db, err := openSQLite(src, oldKey, false)
+	if err != nil {
+		return err
+	}
+	if err := quickCheck(db); err != nil {
+		db.Close()
+		return err
+	}
+	_, err = db.Exec(`VACUUM INTO ?`, snapshotURI(dst, newKey))
+	if cerr := db.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		return err
+	}
+	f, err := os.OpenFile(dst, os.O_RDWR, 0)
+	if err != nil {
+		return err
+	}
+	err = f.Sync()
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		return err
+	}
+	return CheckKey(dst, newKey)
 }
 
 // SnapshotFile schreibt eine in sich stimmige Kopie der unverschlüsselten Datenbank src nach dst, ohne sie zu

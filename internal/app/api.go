@@ -1163,9 +1163,9 @@ func (a *App) handlePebbleSetup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]any{
-		"url": a.Cfg.PublicURL + "/hook", "header": a.Cfg.HookTokenHeader, "token": access.Token, "secret": access.Secret,
+		"url": a.Cfg.PublicURL + pathHook, "header": a.Cfg.HookTokenHeader, "token": access.Token, "secret": access.Secret,
 		"halten": a.Cfg.TriggerSingle, "doppelklick_halten": a.Cfg.TriggerDouble, "transkription": pebbleMode(a.KI().AI),
-		"max_mb": a.Cfg.HookMaxBytes >> 20,
+		"max_mb": a.Cfg.HookMaxBytes >> 20, "letzter_test": a.lastPebbleTest(),
 	})
 }
 
@@ -1191,4 +1191,38 @@ func pebbleMode(ai config.AI) string {
 		return "pebble"
 	}
 	return "audio"
+}
+
+// handlePebbleTestOK: POST /api/pebble/test/ok – Hinweis „Test angekommen“ bestätigt.
+func (a *App) handlePebbleTestOK(w http.ResponseWriter, r *http.Request) {
+	if t := a.lastPebbleTest(); t != nil && !t.Confirmed {
+		t.Confirmed = true
+		b, _ := json.Marshal(t)
+		if err := a.DB.Set(pebbleTestKey, string(b)); err != nil {
+			writeErr(w, 500, "speicher", "Datenbankfehler")
+			return
+		}
+	}
+	writeJSON(w, 200, map[string]any{"ok": true})
+}
+
+// pendingPebbleTest: Test, dessen Hinweis noch nicht bestätigt ist (nil = keiner).
+func (a *App) pendingPebbleTest() *pebbleTest {
+	if t := a.lastPebbleTest(); t != nil && !t.Confirmed {
+		return t
+	}
+	return nil
+}
+
+// lastPebbleTest: letzter Test der Verbindung (nil = noch keiner).
+func (a *App) lastPebbleTest() *pebbleTest {
+	v, err := a.DB.Get(pebbleTestKey)
+	if err != nil || v == "" {
+		return nil
+	}
+	var t pebbleTest
+	if json.Unmarshal([]byte(v), &t) != nil {
+		return nil
+	}
+	return &t
 }

@@ -11,6 +11,34 @@ Own builds show X.Y.Z.A: **A** is a local build counter (one per deployed change
 
 ## [Unreleased]
 
+## [4.7.0] - 2026-11-27
+
+### New
+- Statistics page: "Advanced" shows the JSON that is sent, with a comment per field.
+- Setup wizard in 6 steps with progress bar and summary; rarely needed settings under "Advanced", notifications use defaults.
+- Setup: AI providers and areas right in the wizard; Whisper large-v3-turbo as default.
+- Setup: choose one shared key (single admin) or a separate system key (several admins); codes shown after the passkey.
+- New recovery code re-encrypts all own data with a new key, with progress bar.
+- Own page "Account": passkeys, connected apps, calendar feed, API tokens and recovery code in one place.
+- Any number of named API tokens, one per app or script.
+- Sidebar footer: no header; name with gear leads to Account settings, red sign-out button beside it; version and donate link in one line; usage bar highlights as a link.
+- Account settings with tabs Overview, Pebble app, Push, Calendar, Theme; Status keeps only its own tabs.
+- "Connect app" guided per app (Claude, ChatGPT, Claude Code, scripts); tokens are created right there and filled into commands.
+- OpenRouter as recommended AI provider: connect your account instead of an API key; covers evaluation, web search, images and transcription.
+- New AI providers xAI Grok, Google Gemini and Meta Muse with their own web search, images and transcription.
+- Prices optional for the new providers; OpenRouter and Grok report their costs themselves.
+
+### Fixed
+- Setup: switching to English no longer reloads in German.
+- File pickers match the app design.
+- Setup: after saving it goes straight to the first passkey and then to the recovery code (no longer back to the start page).
+
+### Changed
+- Pebble test events only confirm the connection: no entry, no recording, no evaluation; a card on every page shows the latest test until confirmed.
+- Breaking: all external addresses versioned under /api/v1/ (Pebble webhook /api/v1/pebble/hook, calendar /api/v1/calendar/…, MCP /api/v1/mcp, OAuth /api/v1/oauth/…); the old addresses no longer exist.
+- Settings: on/off and choice options with self-explanatory names; token header fixed, no longer editable.
+- Images and reasoning effort no longer limited to OpenAI.
+
 ## [4.6.1] - 2026-11-27
 
 ### New

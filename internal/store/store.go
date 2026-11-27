@@ -1114,6 +1114,11 @@ func (s *Store) FailedJobs() ([]*Job, error) {
 	return s.queryJobs(`SELECT ` + jobCols + ` FROM jobs WHERE deleted_at = 0 AND failed = 1 ORDER BY received_at`)
 }
 
+// TestJobs: Test-Events der Pebble-App (auch im Papierkorb – sie werden ohnehin endgültig gelöscht).
+func (s *Store) TestJobs() ([]*Job, error) {
+	return s.queryJobs(`SELECT ` + jobCols + ` FROM jobs WHERE is_test = 1 ORDER BY received_at`)
+}
+
 // DictationsBefore: Notizen (ohne Planungsrunden, Tests, Leere und Gelöschte), aufgenommen in [since, before),
 // außer except; jüngste zuerst, höchstens limit.
 func (s *Store) DictationsBefore(since, before int64, except string, limit int) ([]*Job, error) {

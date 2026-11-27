@@ -29,6 +29,20 @@ type Step struct {
 	PriceMinute float64
 	PriceImage  float64
 	Limit       float64 // je Kalendermonat; 0 = ohne
+	// NoPrices: Cloud-Anbieter ohne eingetragene Preise – Kosten nur, wenn der Anbieter sie meldet, sonst unbekannt.
+	NoPrices bool
+}
+
+// costOf: Kosten einer Anfrage – vom Anbieter gemeldet, sonst nach den Preisen des Eintrags; nil = unbekannt.
+func (s *Step) costOf(reported *float64, byPrice float64) *float64 {
+	if reported != nil {
+		v := *reported
+		return &v
+	}
+	if s.NoPrices {
+		return nil
+	}
+	return &byPrice
 }
 
 // Usage: eine gelungene KI-Anfrage mit ihrem rohen Verbrauch und den Kosten nach den Preisen, die in dem Moment
@@ -181,9 +195,9 @@ func (r *Router) Respond(ctx context.Context, req Request) (*Result, error) {
 		if err != nil {
 			return err
 		}
-		cost := (float64(out.InputTokens)*s.PriceIn+float64(out.OutputTokens)*s.PriceOut)/1e6 + float64(out.Searches)*s.PriceSearch
-		out.Cost, out.Provider, out.Model = &cost, s.Name, s.Model
-		r.record(ctx, s, Usage{Area: req.Area, Purpose: req.SchemaName, TokensIn: &out.InputTokens, TokensOut: &out.OutputTokens, Searches: out.Searches, Cost: &cost})
+		cost := s.costOf(out.ReportedCost, (float64(out.InputTokens)*s.PriceIn+float64(out.OutputTokens)*s.PriceOut)/1e6+float64(out.Searches)*s.PriceSearch)
+		out.Cost, out.Provider, out.Model = cost, s.Name, s.Model
+		r.record(ctx, s, Usage{Area: req.Area, Purpose: req.SchemaName, TokensIn: &out.InputTokens, TokensOut: &out.OutputTokens, Searches: out.Searches, Cost: cost})
 		res = out
 		return nil
 	})
@@ -205,30 +219,31 @@ func (r *Router) TranscribeStep(ctx context.Context, id, name string, audio []by
 	if !r.open(s) {
 		return "", -1, nil, ErrLimit
 	}
-	text, seconds, err := s.Client.Transcribe(ctx, s.Model, name, audio, mime, language, prompt)
+	text, seconds, reported, err := s.Client.Transcribe(ctx, s.Model, name, audio, mime, language, prompt)
 	if err != nil {
 		return "", -1, nil, err
 	}
 	if seconds < 0 {
-		r.record(ctx, s, Usage{Area: AreaTranscribe}) // Länge unbekannt: Kosten bleiben offen
-		return text, seconds, nil, nil
+		// Länge unbekannt: Kosten nur, wenn der Anbieter sie meldet, sonst offen.
+		r.record(ctx, s, Usage{Area: AreaTranscribe, Cost: reported})
+		return text, seconds, reported, nil
 	}
-	cost := seconds / 60 * s.PriceMinute
-	r.record(ctx, s, Usage{Area: AreaTranscribe, Seconds: &seconds, Cost: &cost})
-	return text, seconds, &cost, nil
+	cost := s.costOf(reported, seconds/60*s.PriceMinute)
+	r.record(ctx, s, Usage{Area: AreaTranscribe, Seconds: &seconds, Cost: cost})
+	return text, seconds, cost, nil
 }
 
-// Image erzeugt ein Bild über die Einträge des Bereichs Bilder.
-func (r *Router) Image(ctx context.Context, prompt, size, quality string) ([]byte, float64, error) {
+// Image erzeugt ein Bild über die Einträge des Bereichs Bilder; Kosten nil = unbekannt.
+func (r *Router) Image(ctx context.Context, prompt, size, quality string) ([]byte, *float64, error) {
 	var data []byte
-	var cost float64
+	var cost *float64
 	err := r.chain(ctx, AreaImage, func(s *Step) error {
-		d, err := s.Client.Image(ctx, s.Model, prompt, size, quality)
+		d, reported, err := s.Client.Image(ctx, s.Model, prompt, size, quality)
 		if err != nil {
 			return err
 		}
-		data, cost = d, s.PriceImage
-		r.record(ctx, s, Usage{Area: AreaImage, Images: 1, Cost: &cost})
+		data, cost = d, s.costOf(reported, s.PriceImage)
+		r.record(ctx, s, Usage{Area: AreaImage, Images: 1, Cost: cost})
 		return nil
 	})
 	return data, cost, err

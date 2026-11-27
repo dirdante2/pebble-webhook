@@ -29,6 +29,9 @@ type Field struct {
 	Setup  bool `json:"-"`
 }
 
+// triggerLabels: Anzeige der Aktionen einer Geste.
+var triggerLabels = map[string]string{"diktat": "Notiz", "planung": "Planung (Recherche mit Antwort)"}
+
 // providerLabels: Anzeige der Anbieter eines KI-Bereichs.
 var providerLabels = map[string]string{"openai": "OpenAI", "dienst": "Dienst", "lokal": "Lokal"}
 
@@ -68,13 +71,13 @@ var Fields = []Field{
 	{Key: "PUBLIC_URL", Group: "Adresse", Label: "Öffentliche Adresse", Help: "https-Adresse der Web-App ohne Slash am Ende; bestimmt die Passkey-Domain. Später ändern macht alle Passkeys ungültig.", Kind: "url", Required: true},
 	{Key: "TRUSTED_PROXY", Group: "Adresse", Label: "Reverse-Proxy", Help: "IP des Proxys davor; nur von dort wird X-Real-IP geglaubt. Leer = keiner.", Kind: "text"},
 
-	{Key: "HOOK_TOKEN_HEADER", Group: "Pebble-App", Label: "Header für den Token", Help: "Name des Headers, in dem die Pebble-App das Webhook-Token mitschickt.", Kind: "text", Default: "X-Webhook-Token", Required: true},
-	{Key: "TRIGGER_SINGLE", Group: "Pebble-App", Label: "Geste „Halten“", Help: "Was eine Aufnahme mit „Halten“ auslöst: diktat = Notiz, planung = Recherche mit Antwort.", Kind: "choice", Default: "diktat", Choices: []string{"diktat", "planung"}},
-	{Key: "TRIGGER_DOUBLE", Group: "Pebble-App", Label: "Geste „Klick + Halten“", Help: "Was eine Aufnahme mit „Klick + Halten“ auslöst: diktat = Notiz, planung = Recherche mit Antwort.", Kind: "choice", Default: "planung", Choices: []string{"diktat", "planung"}},
+	{Key: "HOOK_TOKEN_HEADER", Group: "Pebble-App", Label: "Header für den Token", Help: "Name des Headers, in dem die Pebble-App das Webhook-Token mitschickt; fest vorgegeben.", Kind: "text", Default: "X-Webhook-Token", Required: true, Hidden: true},
+	{Key: "TRIGGER_SINGLE", Group: "Pebble-App", Label: "Geste „Halten“", Help: "Was eine Aufnahme mit „Halten“ auslöst.", Kind: "choice", Default: "diktat", Choices: []string{"diktat", "planung"}, Labels: triggerLabels},
+	{Key: "TRIGGER_DOUBLE", Group: "Pebble-App", Label: "Geste „Klick + Halten“", Help: "Was eine Aufnahme mit „Klick + Halten“ auslöst.", Kind: "choice", Default: "planung", Choices: []string{"diktat", "planung"}, Labels: triggerLabels},
 	{Key: "RING_CAPACITY_HOURS", Group: "Pebble-App", Label: "Kapazität eines Rings (Stunden Aufnahme)", Help: "Vorgabe für neue Ringe; Pebble nennt 12–15 Stunden. Warnungen bei 60, 80 und 95 %.", Kind: "int", Default: "12"},
 	{Key: "HOOK_MAX_MB", Group: "Pebble-App", Label: "Größte Aufnahme (MB)", Help: "Größere Aufnahmen weist der Webhook ab.", Kind: "int", Default: "25"},
 	{Key: "HOOK_RATE_PER_MIN", Group: "Pebble-App", Label: "Aufrufe je Minute", Help: "Höchstens so viele Webhook-Aufrufe je Minute; mehr werden abgewiesen (Schutz vor Missbrauch).", Kind: "int", Default: "30"},
-	{Key: "HOOK_MITSCHNITT", Group: "Pebble-App", Label: "Zustellungen mitschneiden", Help: "aktiv = jede Zustellung der Pebble-App liegt roh in einem eigenen Ordner unter DATA_DIR/mitschnitt/<nutzer>/ (die letzten 200): alle Header, Felder und das Audio, unverschlüsselt. Nur zur Analyse; inaktiv löscht die Mitschnitte bei der nächsten Zustellung.", Kind: "choice", Default: "inaktiv", Choices: []string{"aktiv", "inaktiv"}},
+	{Key: "HOOK_MITSCHNITT", Group: "Pebble-App", Label: "Zustellungen mitschneiden", Help: "Nur zur Fehlersuche: jede Zustellung der Pebble-App liegt roh und unverschlüsselt in einem eigenen Ordner unter DATA_DIR/mitschnitt/<nutzer>/ (die letzten 200), mit allen Headern, Feldern und dem Audio. Ausschalten löscht die Mitschnitte bei der nächsten Zustellung.", Kind: "choice", Default: "inaktiv", Choices: []string{"aktiv", "inaktiv"}},
 
 	{Key: "KI_ZUGAENGE", Group: "KI-Zugänge", Label: "KI-Zugänge", Kind: "json", Hidden: true},
 	{Key: "KI_BEREICHE", Group: "KI-Zugänge", Label: "KI-Bereiche", Kind: "json", Hidden: true},
@@ -113,7 +116,8 @@ var Fields = []Field{
 	{Key: "OPENAI_PLAN_MODEL", Group: "Webrecherche", Label: "Modell", Help: "Modell beim gewählten Anbieter.", Kind: "text", Default: "gpt-6-luna", Hidden: true},
 	{Key: "RESEARCH_WEB_SEARCH", Group: "Webrecherche", Label: "Websuche", Help: "Mehrere möglich. Anbieter = Suche von OpenAI, OpenRouter (Web-Plugin) oder einem Modell, das selbst sucht (Perplexity Sonar, Groq Compound); ein lokales Modell sucht nicht selbst. Gilt auch für kurze Suchen der Auswertung. Keine = Antwort aus dem Modellwissen.", Kind: "multi", Default: "anbieter", Choices: []string{"anbieter", "searxng"},
 		Labels: map[string]string{"anbieter": "Websuche des Anbieters", "searxng": "SearXNG"}, Hidden: true},
-	{Key: "OPENAI_PLAN_REASONING_EFFORT", Group: "Webrecherche", Label: "Denkaufwand (nur OpenAI)", Help: "Wie gründlich das Modell nachdenkt; gilt auch für die Auswertung. Höher = besser, aber teurer. standard = Vorgabe des Modells.", Kind: "choice", Default: "low", Choices: []string{"standard", "none", "low", "medium", "high"}},
+	{Key: "OPENAI_PLAN_REASONING_EFFORT", Group: "Webrecherche", Label: "Denkaufwand", Help: "Wie gründlich das Modell nachdenkt (OpenAI, Grok, Gemini, Muse); gilt auch für die Auswertung. Höher = besser, aber teurer.", Kind: "choice", Default: "low", Choices: []string{"standard", "none", "low", "medium", "high"},
+		Labels: map[string]string{"standard": "Vorgabe des Modells", "none": "keiner", "low": "niedrig", "medium": "mittel", "high": "hoch"}},
 	{Key: "RESEARCH_LIMIT_USD", Group: "Webrecherche", Label: "Kostenlimit je Recherche (USD)", Help: "Eine Recherche bricht ab, sobald ihre Kosten diesen Betrag erreichen.", Kind: "num", Default: "0.50", Required: true},
 	{Key: "RESEARCH_MAX_OUTPUT_TOKENS", Group: "Webrecherche", Label: "Höchstens Ausgabe-Tokens", Help: "Obergrenze für die Länge einer Recherche-Antwort.", Kind: "int", Default: "6000"},
 	{Key: "PRICE_PLAN_INPUT_PER_MTOK", Group: "Webrecherche", Label: "Preis Eingabe (USD je 1 Mio. Tokens)", Help: "Fehlt ein Recherche-Preis, läuft keine Recherche. Lokal: 0.", Kind: "num", Default: "0.10", Hidden: true},
@@ -125,7 +129,7 @@ var Fields = []Field{
 
 	{Key: "YOUTUBE_API_KEY", Group: "YouTube", Label: "YouTube-API-Schlüssel", Help: "Schlüssel der YouTube Data API v3 für Trailer zu Filmen und Serien (kostenlos, ca. 100 Suchen am Tag). Leer = die KI sucht den Trailer über die Websuche (ungenauer, kostet).", Kind: "secret"},
 
-	{Key: "JOPLIN_ENABLED", Group: "Joplin", Label: "Joplin", Help: "aktiv = fertige Notizen, Planungen und Listen nach Joplin übertragen; eingerichtet und getestet wird unter Status → Joplin.", Kind: "choice", Default: "inaktiv", Choices: []string{"aktiv", "inaktiv"}},
+	{Key: "JOPLIN_ENABLED", Group: "Joplin", Label: "Joplin", Help: "Fertige Notizen, Planungen und Listen nach Joplin übertragen; eingerichtet und getestet wird unter Status → Joplin.", Kind: "choice", Default: "inaktiv", Choices: []string{"aktiv", "inaktiv"}},
 	{Key: "JOPLIN_URL", Group: "Joplin", Label: "Joplin-Server", Help: "Adresse deines Joplin-Servers (Sync-Ziel). Übertragen wird nur schreibend; E2EE muss aus sein.", Kind: "url"},
 	{Key: "JOPLIN_EMAIL", Group: "Joplin", Label: "Joplin-Konto (E-Mail)", Help: "Anmeldung am Joplin-Server.", Kind: "text"},
 	{Key: "JOPLIN_PASSWORD", Group: "Joplin", Label: "Joplin-Passwort", Help: "Passwort zum Joplin-Konto.", Kind: "secret"},
@@ -155,14 +159,15 @@ var Fields = []Field{
 
 	{Key: "VAPID_SUBJECT", Group: "Zugang und Updates", Label: "Kontakt für Web-Push", Help: "mailto:… oder https-Adresse; leer = öffentliche Adresse.", Kind: "text"},
 	{Key: "UPDATE_CHANNEL", Group: "Zugang und Updates", Label: "Update-Kanal", Help: "stable = Langzeit-Versionen; beta = neue, noch nicht ausgereifte Funktionen; nightly = jede Änderung, auch ungetestet.", Kind: "choice", Default: "stable", Choices: []string{"stable", "beta", "nightly"}},
-	{Key: "AUTO_UPDATE", Group: "Zugang und Updates", Label: "Automatisches Update", Help: "aktiv = jeden Tag zur gewählten Uhrzeit die neueste Version des Update-Kanals installieren, wenn es eine neuere gibt (vorher Backup).", Kind: "choice", Default: "aktiv", Choices: []string{"aktiv", "inaktiv"}},
+	{Key: "AUTO_UPDATE", Group: "Zugang und Updates", Label: "Automatisches Update", Help: "Jeden Tag zur gewählten Uhrzeit die neueste Version installieren, wenn es eine gibt (vorher Backup).", Kind: "choice", Default: "aktiv", Choices: []string{"aktiv", "inaktiv"}},
 	{Key: "AUTO_UPDATE_TIME", Group: "Zugang und Updates", Label: "Uhrzeit automatisches Update", Help: "Uhrzeit (HH:MM, Zeitzone des Servers), zu der das automatische Update prüft und installiert.", Kind: "text", Default: "04:00"},
 	{Key: "UPDATE_REPO", Group: "Zugang und Updates", Label: "Update-Quelle (GitHub owner/repo)", Help: "aus = keine Update-Prüfung. Auf Servern mit Updater fest in /etc/pebble-webhook/env (UPDATE_REPO).", Kind: "text", Default: "dirdante2/pebble-webhook"},
 
-	{Key: "BACKUP_SCHEDULE", Group: "Backup", Label: "Backup-Plan", Help: "Wann das Komplett-Backup läuft (Datenbank mit Einstellungen, Version und Kanal): täglich, wöchentlich (montags), monatlich (am 1.) oder aus.", Kind: "choice", Default: "täglich", Choices: []string{"täglich", "wöchentlich", "monatlich", "aus"}},
+	{Key: "BACKUP_SCHEDULE", Group: "Backup", Label: "Backup-Plan", Help: "Wann das Komplett-Backup läuft (Datenbank mit Einstellungen, Version und Kanal).", Kind: "choice", Default: "täglich", Choices: []string{"täglich", "wöchentlich", "monatlich", "aus"},
+		Labels: map[string]string{"täglich": "täglich", "wöchentlich": "wöchentlich (montags)", "monatlich": "monatlich (am 1.)", "aus": "aus"}},
 	{Key: "BACKUP_TIME", Group: "Backup", Label: "Uhrzeit Backup", Help: "Uhrzeit (HH:MM, Zeitzone des Servers) des geplanten Backups.", Kind: "text", Default: "03:00"},
 	{Key: "BACKUP_RETENTION_DAYS", Group: "Backup", Label: "Backups behalten (Tage)", Help: "Ältere geplante und manuelle Backups werden gelöscht; Backups vor Updates bleiben 30 Tage.", Kind: "int", Default: "30"},
-	{Key: "BACKUP_AUDIO", Group: "Backup", Label: "Aufnahmen sichern", Help: "aktiv = die Audiodateien kommen mit ins Backup (größer).", Kind: "choice", Default: "inaktiv", Choices: []string{"aktiv", "inaktiv"}},
+	{Key: "BACKUP_AUDIO", Group: "Backup", Label: "Aufnahmen sichern", Help: "Die Audiodateien kommen mit ins Backup (größer).", Kind: "choice", Default: "inaktiv", Choices: []string{"aktiv", "inaktiv"}},
 }
 
 // Field sucht eine Einstellung; ok=false bei unbekanntem Schlüssel.

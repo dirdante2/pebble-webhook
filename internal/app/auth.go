@@ -605,7 +605,8 @@ func (a *App) handleRecoveryCode(w http.ResponseWriter, r *http.Request) {
 		name = u.Name
 	}
 	info, _ := a.System.systemKeyInfo()
-	writeJSON(w, 200, map[string]any{"code": code, "name": name, "system": info.Art == "nutzer" && info.UID == a.UserID})
+	systemCode, _ := a.DB.Get(systemCodePendingKey)
+	writeJSON(w, 200, map[string]any{"code": code, "name": name, "system": info.Art == "nutzer" && info.UID == a.UserID, "systemcode": systemCode})
 }
 
 // handleRecoveryConfirm: Name (Pflicht, falls noch leer) speichern und den Code als notiert bestätigen – er wird gelöscht.
@@ -638,53 +639,18 @@ func (a *App) handleRecoveryConfirm(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, "speicher", "Datenbankfehler")
 		return
 	}
+	a.DB.Set(systemCodePendingKey, "")
 	writeJSON(w, 200, map[string]any{"ok": true})
-}
-
-// handleRecoveryNew erzeugt einen neuen Wiederherstellungscode (der alte gilt danach nicht mehr) und zeigt ihn einmal.
-// recoveryFresh: Neuer Wiederherstellungscode nur kurz nach einer Anmeldung mit Passkey – eine gestohlene Sitzung
-// allein reicht dafür nicht.
-const recoveryFresh = 10 * time.Minute
-
-func (a *App) handleRecoveryNew(w http.ResponseWriter, r *http.Request) {
-	c, err := r.Cookie(sessionCookie)
-	if err != nil || time.Since(time.UnixMilli(a.System.DB.SessionCreated(c.Value))) > recoveryFresh {
-		writeErr(w, http.StatusForbidden, "frisch", "Zur Sicherheit erst ab- und wieder anmelden, dann innerhalb von 10 Minuten den neuen Code erzeugen")
-		return
-	}
-	u, err := a.System.DB.User(a.UserID)
-	if err != nil {
-		writeErr(w, 500, "speicher", "Datenbankfehler")
-		return
-	}
-	dek, err := schluessel.Read(a.Cfg.KeyDir, a.UserID, u.KeyID)
-	if err != nil {
-		writeErr(w, 500, "schluessel", "Schlüssel nicht lesbar")
-		return
-	}
-	code, err := schluessel.NewCode()
-	if err != nil {
-		writeErr(w, 500, "zufall", "Code nicht erzeugt")
-		return
-	}
-	wrap, err := schluessel.Wrap(code, a.UserID, dek)
-	if err == nil {
-		err = a.System.DB.SetUserKey(a.UserID, dek.ID(), wrap)
-	}
-	if err == nil {
-		err = a.DB.Set(recoveryPendingKey, code)
-	}
-	if err != nil {
-		writeErr(w, 500, "speicher", "Code nicht gespeichert")
-		return
-	}
-	writeJSON(w, 200, map[string]any{"code": code})
 }
 
 // handleRecover: gesperrte Daten (Schlüsseldatei fehlt, z. B. nach Restore auf neuer Maschine) mit dem Code öffnen.
 func (s *System) handleRecover(w http.ResponseWriter, r *http.Request, u *store.User) {
 	if a, _ := s.app(u.ID); a != nil {
 		writeJSON(w, 200, map[string]any{"ok": true})
+		return
+	}
+	if schluessel.HasPending(s.Cfg.KeyDir, u.ID) {
+		writeErr(w, http.StatusConflict, "umschluesselung", "Deine Daten werden gerade neu verschlüsselt")
 		return
 	}
 	if u.LockedAt > 0 {
