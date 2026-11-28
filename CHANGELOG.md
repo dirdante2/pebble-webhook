@@ -9,6 +9,21 @@ Version numbers X.Y.Z:
 
 Own builds show X.Y.Z.A: **A** is a local build counter (one per deployed change, starting at 1 for every new X.Y.Z); it never appears in Git or releases, so one version can collect several changes.
 
+## [4.8.1] - 2026-11-28
+
+### Changed
+- Statistics: report after start, switching on or channel change only 4–8 min later and only if something changed.
+- Statistics: first switch-on sends right away.
+- Statistics hint names what you get: statistics of all installations, OpenRouter model ratings.
+- Automatic update: default time random between 01:00 and 05:00.
+- Default language English (German browser: German); existing installations keep German.
+- Setup output of installer, log and CLI in English.
+- Docker: `OPENROUTER_API_KEY` from the environment sets up OpenRouter in the setup wizard.
+- README and docs shorter, with English UI names.
+
+### Fixed
+- New version or update channel did not reach the admin statistics after a quick restart.
+
 ## [4.8.0] - 2026-11-28
 
 ### New

@@ -4,6 +4,18 @@ Summarised notes for **beta** and **stable** releases. Each section lists only w
 
 A tag `vX.Y.Z-stable` (stable; before 1.33.5 `vX.Y.Z`) or `vX.Y.Z-beta` (beta) needs a section `## [X.Y.Z]` or `## [X.Y.Z-beta]` here; the release workflow uses it as the release notes.
 
+## [4.8.1] - 2026-11-28
+
+### Statistics
+- Reports after start, switch-on or channel change 4–8 min later, only when changed; first switch-on right away.
+- New version or channel reaches the admin statistics reliably.
+
+### Setup
+- Default language English; existing installations keep German.
+- Automatic update at a random time between 01:00 and 05:00 by default.
+- Docker: `OPENROUTER_API_KEY` sets up OpenRouter in the setup wizard.
+- Shorter README and docs.
+
 ## [4.8.0] - 2026-11-28
 
 ### Decision model

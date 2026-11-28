@@ -3775,8 +3775,9 @@ async function zeigeErsteinrichtung() {
   }
   const ki = { zugaenge: [], wahl: { transkription: { zugang: d.whisper?.engine === false ? 'pebble' : 'whisper' }, ausweich: { zugang: '' } } };
   for (const b of ER_BEREICHE) ki.wahl[b] = { zugang: '', websuche: [] };
-  // OpenAI-Schlüssel aus der Umgebung (Docker): OpenAI steht schon als Anbieter bereit.
-  const envOpenAI = !!F.OPENAI_API_KEY?.gesperrt;
+  // Schlüssel aus der Umgebung (Docker): OpenRouter bzw. OpenAI steht schon als Anbieter bereit.
+  const envOpenAI = !!F.OPENAI_API_KEY?.gesperrt, envOpenRouter = !!F.OPENROUTER_API_KEY?.gesperrt;
+  const envArt = (id) => (id === 'openai' && envOpenAI) || (id === 'openrouter' && envOpenRouter);
   let name = '', schritt = 0, weitester = 0, neu = null, fehler = '', schluessel = 'nutzer';
   // Stand nach dem Sprachwechsel (Seite lädt neu) – ohne Geheimnisse.
   try {
@@ -3799,7 +3800,10 @@ async function zeigeErsteinrichtung() {
   const zugang = (id) => ki.zugaenge.find((z) => z.id === id);
   const erlaubt = (b) => ki.zugaenge.filter((z) => art(z)?.bereiche?.includes(b));
   const searx = () => ki.zugaenge.filter((z) => art(z)?.api === 'searxng');
-  if (envOpenAI && !ki.zugaenge.length) neuerAnbieter({ id: kiNeueID(), name: 'OpenAI', art: 'openai', adresse: '', schluessel: '', env: true });
+  if (!ki.zugaenge.length) {
+    if (envOpenRouter) neuerAnbieter({ id: kiNeueID(), name: 'OpenRouter', art: 'openrouter', adresse: '', schluessel: '', env: true, vorschlag: d.openrouter_vorschlag || {} });
+    if (envOpenAI) neuerAnbieter({ id: kiNeueID(), name: 'OpenAI', art: 'openai', adresse: '', schluessel: '', env: true });
+  }
 
   // Ein Anbieter kommt dazu: leere Bereiche, die er bedienen kann, übernimmt er mit der Vorgabe seiner Modellauswahl.
   function neuerAnbieter(z) {
@@ -3973,7 +3977,7 @@ async function zeigeErsteinrichtung() {
         </dl>
         ${fehler ? T`<div class="hinweis schlecht">${esc(fehler)}</div>` : ''}
         ${F[KONFIG_STATISTIK] ? T`<label class="schalter erstatistik"><input type="checkbox" data-schalter="${KONFIG_STATISTIK}"${werte[KONFIG_STATISTIK] === 'aktiv' ? ' checked' : ''}> ${tx('Anonyme Statistik')}</label>
-          <p class="leise erstatistik">${tx('Gesendet wird nur die gesamte Aufnahmezeit je Ring in Sekunden, ohne Bezug zu dir – damit sich die maximale Laufzeit der Ringe besser berechnen lässt.')}</p>` : ''}`;
+          <p class="leise erstatistik">${tx('Gesendet wird nur die gesamte Aufnahmezeit je Ring in Sekunden, ohne Bezug zu dir – damit sich die maximale Laufzeit der Ringe besser berechnen lässt.')} ${tx('Dafür siehst du die Statistik aller Installationen, und die OpenRouter-KI-Modelle bekommen Metadaten wie Bewertungen.')}</p>` : ''}`;
     },
   };
 
@@ -3981,7 +3985,7 @@ async function zeigeErsteinrichtung() {
   function neuForm() {
     const a = art(neu) || {};
     const schluessel = a.schluessel && a.schluessel !== 'kein';
-    const schluesselFeld = schluessel ? T`<label for="er-n-key">${tx('Schlüssel')}${a.schluessel === 'pflicht' && !(neu.art === 'openai' && envOpenAI) && !a.oauth ? ' *' : ''}</label><input id="er-n-key" type="password" data-n="schluessel" value="${esc(neu.schluessel || '')}" placeholder="${neu.art === 'openai' && envOpenAI ? esc(tx('aus der Umgebung gesetzt')) : ''}" autocomplete="off" spellcheck="false">` : '';
+    const schluesselFeld = schluessel ? T`<label for="er-n-key">${tx('Schlüssel')}${a.schluessel === 'pflicht' && !envArt(neu.art) && !a.oauth ? ' *' : ''}</label><input id="er-n-key" type="password" data-n="schluessel" value="${esc(neu.schluessel || '')}" placeholder="${envArt(neu.art) ? esc(tx('aus der Umgebung gesetzt')) : ''}" autocomplete="off" spellcheck="false">` : '';
     if (a.oauth) {
       return T`<div class="karte erneu">
         <label for="er-n-art">${tx('Art')}</label><select id="er-n-art" data-n="art">${(d.arten || []).map((x) => T`<option value="${esc(x.id)}"${x.id === neu.art ? ' selected' : ''}>${esc(tx(x.name))}</option>`).join('')}</select>
@@ -4224,12 +4228,12 @@ async function zeigeErsteinrichtung() {
       const name2 = neu.name.trim();
       const meld = !name2 ? tx('Name fehlt') : ki.zugaenge.some((z) => z.name.toLowerCase() === name2.toLowerCase()) ? tx('Name gibt es schon')
         : !a.adresse_fest && !a.adresse && !neu.adresse.trim() ? tx('Adresse fehlt')
-          : a.schluessel === 'pflicht' && !neu.schluessel.trim() && !(neu.art === 'openai' && envOpenAI) ? tx('Schlüssel fehlt') : '';
+          : a.schluessel === 'pflicht' && !neu.schluessel.trim() && !envArt(neu.art) ? tx('Schlüssel fehlt') : '';
       if (meld) { melde(meld); return; }
       const { pruef, vonHand, oacode, state, ...z } = neu;
       z.name = name2;
       z.adresse = a.adresse_fest ? '' : z.adresse.trim();
-      if (neu.art === 'openai' && envOpenAI && !z.schluessel) z.env = true;
+      if (envArt(neu.art) && !z.schluessel) z.env = true;
       neu = null;
       neuerAnbieter(z);
       male();
@@ -5141,7 +5145,7 @@ async function zeigeStatistik() {
     // Ein- und Ausschalten gilt für die ganze Installation – nur Admins; Nutzer sehen nur die Auswertung.
     seite.innerHTML = st.admin ? T`${zurueck}<h1>${esc(tx('Anonyme Statistik'))}</h1>
       <form class="einstellungen" novalidate><fieldset><label class="schalter"><input type="checkbox" name="aktiv"${st.aktiv ? ' checked' : ''}> ${esc(tx('Anonyme Statistik senden'))}</label>
-        <p class="leise hilfe">${esc(tx('Es werden nur anonyme Daten zur Gesamtnutzungszeit der Ringe gesendet.'))} ${esc(tx('Gilt für alle Nutzer dieser Installation.'))}</p></fieldset>
+        <p class="leise hilfe">${esc(tx('Es werden nur anonyme Daten zur Gesamtnutzungszeit der Ringe gesendet.'))} ${esc(tx('Dafür siehst du die Statistik aller Installationen, und die OpenRouter-KI-Modelle bekommen Metadaten wie Bewertungen.'))} ${esc(tx('Gilt für alle Nutzer dieser Installation.'))}</p></fieldset>
         <div class="leiste"><button class="btn haupt" type="submit">${esc(tx('Speichern'))}</button></div></form>
       <h2>${esc(tx('Ring-Lebensdauer aller Installationen'))}</h2>${daten}`
       : T`${zurueck}<h1>${esc(tx('Ring-Lebensdauer aller Installationen'))}</h1>${daten}`;

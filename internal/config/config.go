@@ -248,7 +248,7 @@ func FromValues(boot Bootstrap, lookup func(string) string) (*Config, error) {
 
 		WhisperModel:         str("WHISPER_MODEL", whisper.DefaultModel),
 		WhisperKeepMinutes:   num("WHISPER_KEEP_MINUTES", 0),
-		Language:             i18n.Norm(str("LANGUAGE", "de")),
+		Language:             i18n.Norm(str("LANGUAGE", "en")),
 		PlanReasoningEffort:  strings.TrimPrefix(str("OPENAI_PLAN_REASONING_EFFORT", ""), "standard"),
 		YouTubeKey:           str("YOUTUBE_API_KEY", ""),
 		ResearchMaxOutTokens: num("RESEARCH_MAX_OUTPUT_TOKENS", 6000),

@@ -18,6 +18,7 @@ services:
       # MEDIA_DIR: /config/medien                # recordings and images per user
       # BACKUP_DIR: /config/backup               # backup archives
       # PEBBLE_ENV_FILE: /config/env             # optional file with further KEY=value lines
+      # OPENROUTER_API_KEY: sk-or-...            # recommended: OpenRouter is ready as AI provider in the setup wizard
       # OPENAI_API_KEY: sk-...                   # fixed from here and locked in the app; else set in the app
       # YOUTUBE_API_KEY: AIza...                 # fixed from here and locked in the app; else set in the app
     volumes:

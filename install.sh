@@ -523,6 +523,6 @@ if [ "$(curl -fsS http://127.0.0.1:"$(grep -oP '^LISTEN=.*:\K[0-9]+' /etc/pebble
     echo
     echo "  http://${HOST:-<server>}:$PORT_E"
     echo
-    echo "in a browser (best through your HTTPS reverse proxy) and choose \"Einrichten\"."
+    echo "in a browser (best through your HTTPS reverse proxy) and choose \"Setup\" (German: \"Einrichten\")."
     echo "Too late? Restart the service (systemctl restart pebble-webhook) for another 5 minutes."
 fi

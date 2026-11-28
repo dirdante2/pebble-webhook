@@ -4,24 +4,27 @@
 
 Self-hosted backend for the **Pebble Index 01** voice ring. It receives recordings via webhook, transcribes them locally with Whisper – by default, so no audio leaves your server – and turns them into notes, appointments or research plannings. An AI sorts everything into groups and lists; a mobile web app (PWA, English or German) shows the history, sends web push notifications and lets you answer follow-up questions.
 
+**Main use:** whatever you say into the ring is sorted into the right list automatically. AI agents (Claude, ChatGPT & co. via the built-in MCP server) then read a list's open entries in one batch, work through them and tick them off.
+
 One Go binary: webhook, worker, SQLite and web app. No queue, no second database.
 
 ## Features
 
-- **Private by default**: new installations transcribe on your own server with Whisper (bundled, no extra service); recordings never leave it. Only the text goes to the AI that evaluates it – or nowhere, with a local model
-- **Your choice of AI providers**: OpenAI or your own – any OpenAI-compatible service (e.g. Groq), local models via Ollama, SearXNG for web search; per area an ordered list with fallback and monthly cost limit
-- **Encrypted storage**: each user's database and recordings are encrypted on disk; API keys in backups are encrypted with a server-only key
-- **Notes** with key facts, hints and list items; **appointments** with reminders (web push)
-- **Plannings**: web research in rounds, continued by voice or text, with open questions
-- **Lists and groups** sorted by the AI; tags, full-text search, trash with restore; new entries marked across all devices
-- **Memory**: the AI learns names, terms and sorting rules you confirm
-- **Calendar subscription** (iCal link) for Google Calendar, Apple or Outlook
-- Optional one-way export to a **Joplin** server
-- Built-in **MCP server** with OAuth: connect Claude, ChatGPT & co., read lists and tick items off from AI chats
-- **Ring usage**: the Index 01 battery lasts about 12–15 hours of recording. Every recording is counted (seconds, notes vs. plannings, button presses) per ring – each ring is recognised by its own identifier, several rings can be used side by side; warnings at 60/80/95/100 %, forecast at constant use, comparison of rings
-- **English or German** – UI, messages, push and MCP answers, and the texts the AI writes; chosen in the setup wizard (preset from the browser), changeable under Status → Configuration
-- **Multiple users**: own database and recordings per user, admin/user roles, invite links, recovery code; nobody sees another user's data
-- Passkey login (new devices with a 6-digit code), setup wizard, settings with explanations and validation, **themes** (day/night, colour palettes) and **updates** in the web app
+- **AI of your choice**: OpenRouter with model ratings, local models via Ollama, OpenAI or any compatible service; per area fallback and monthly cost limit
+- **Lists for AI agents**: entries sorted into groups and lists; Claude, ChatGPT & co. read, process and tick them off via the built-in MCP server (OAuth)
+- **Private by default**: Whisper transcribes on your server, audio never leaves it
+- **Encrypted**: each user's database and recordings encrypted on disk
+- **Notes, appointments, plannings**: key facts, reminders via web push, web research in rounds
+- **Ring usage**: recording time per ring, warnings and forecast (battery lasts about 12–15 h)
+
+**More**
+
+- Memory: learns names, terms and sorting rules you confirm
+- Multiple users: own data per user, roles, invite links
+- Tags, full-text search, trash with restore, web search via SearXNG
+- Passkey login, setup wizard, themes, updates in the web app
+- Calendar subscription (iCal), export to Joplin
+- English or German
 
 ## Screenshots
 
@@ -49,7 +52,7 @@ Image [`dirdante/pebble-index-webapp`](https://hub.docker.com/r/dirdante/pebble-
 docker run -d --name pebble --restart unless-stopped -p 8080:8080 \
   -e TZ=Europe/Berlin -e PUID=1000 -e PGID=1000 \
   -v pebble-config:/config dirdante/pebble-index-webapp:stable
-docker logs pebble    # link to the setup wizard
+docker logs pebble    # address of the setup wizard
 ```
 
 Or with Docker Compose ([compose.yaml](docker/compose.yaml)):
@@ -61,7 +64,17 @@ docker compose up -d && docker compose logs pebble
 
 Tags, paths, `PUID`/`PGID` and updates: [installation](docs/installation.md#docker).
 
-The installer (or the container log) prints a link to the setup wizard. Put the service behind an HTTPS reverse proxy (passkeys need HTTPS), enter the public address and an AI key (OpenAI; other providers under Status → AI), then create your first passkey. Transcription runs locally with Whisper from the start; the model is downloaded after saving.
+### First start
+
+1. Open the address shown by the installer (or the container log).
+2. Do this within 5 minutes after the first start.
+3. Choose *Setup*.
+4. Too late? Restart the service. Only the first browser gets the wizard.
+5. Put the service behind an HTTPS reverse proxy (passkeys need HTTPS).
+6. Enter the public address and connect an AI provider (OpenRouter recommended; others under Status → AI).
+7. Create your first passkey.
+
+Transcription runs locally with Whisper from the start. The model is downloaded after saving.
 
 ## Tips
 
@@ -88,7 +101,7 @@ mkdir -p lokal/data lokal/audio
 PEBBLE_ENV_FILE=./lokal/env go run ./cmd/pebble-webhook serve
 ```
 
-The first start runs the setup wizard (link in the log). `http://localhost` is accepted as public address for local tests.
+The first start runs the setup wizard: open the address and choose *Setup* within 5 minutes. `http://localhost` is accepted as public address for local tests.
 
 ## License
 

@@ -43,7 +43,7 @@ const usage = `pebble-webhook <Befehl>
   gedaechtnis-zuruecksetzen
             alle Gedächtnis-Einträge samt Entscheidungen löschen (Beobachtungen bleiben); danach in der Web-App „Jetzt lernen“
   ersteinrichtung
-            Hinweis zur Einrichtung ausgeben (Adresse öffnen, „Einrichten“ in den ersten 5 Minuten nach dem Start)
+            Hinweis zur Einrichtung ausgeben (Adresse öffnen, „Setup“/„Einrichten“ in den ersten 5 Minuten nach dem Start)
   aufnahmen-verschluesseln
             Aufnahmen bis 2.x sofort verschlüsselt in den Ordner des Nutzers legen (sonst 24 h nach dem Umzug)
   nutzer-anlegen <Name> [admin]
@@ -337,7 +337,7 @@ func setup() (*app.System, error) {
 	if err != nil {
 		db.Close()
 		if errors.Is(err, app.ErrNotConfigured) {
-			return nil, fmt.Errorf("noch nicht eingerichtet – Einrichtungsassistent: pebble ersteinrichtung")
+			return nil, fmt.Errorf("not configured yet – setup wizard: pebble ersteinrichtung")
 		}
 		return nil, err
 	}
@@ -451,15 +451,15 @@ func serveSetup(boot config.Bootstrap, db *store.System, loadErr error) error {
 	users, _ := db.Users()
 	if len(users) > 0 || !errors.Is(loadErr, app.ErrNotConfigured) {
 		// Benutzte Installation mit ungültigen Einstellungen: kein „Einrichten“, nur der Link mit Code (Log, pebble ersteinrichtung).
-		log.Printf("Einrichtungsassistent: http://<server>:%s/ersteinrichtung?code=%s", port(boot.Listen), code)
+		log.Printf("Setup wizard: http://<server>:%s/ersteinrichtung?code=%s", port(boot.Listen), code)
 	}
 	if errors.Is(loadErr, app.ErrNotConfigured) {
-		log.Printf("pebble-webhook %s: noch nicht eingerichtet", version)
+		log.Printf("pebble-webhook %s: not configured yet", version)
 	} else {
-		log.Printf("pebble-webhook %s: Einstellungen ungültig (%v) – bitte im Einrichtungsassistenten korrigieren", version, loadErr)
+		log.Printf("pebble-webhook %s: invalid settings (%v) – correct them in the setup wizard", version, loadErr)
 	}
 	if len(users) == 0 && errors.Is(loadErr, app.ErrNotConfigured) {
-		log.Printf("Einrichtung: http://<server>:%s im Browser öffnen und „Einrichten“ wählen – nur in den ersten 5 Minuten nach dem Start", port(boot.Listen))
+		log.Printf("Setup: open http://<server>:%s in a browser and choose \"Setup\" (German: \"Einrichten\") – only within 5 minutes after the start", port(boot.Listen))
 	}
 	s := &app.SetupServer{DB: db, Boot: boot, Version: version, LoadErr: loadErr}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -551,17 +551,17 @@ func setupLink() error {
 	defer db.Close()
 	_, lerr := app.LoadSettings(db, boot)
 	if lerr == nil {
-		return fmt.Errorf("schon eingerichtet – Einstellungen in der Web-App unter Status → Einstellungen")
+		return fmt.Errorf("already configured – settings in the web app under Status → Settings")
 	}
 	if users, _ := db.Users(); len(users) > 0 || !errors.Is(lerr, app.ErrNotConfigured) {
 		code, err := app.SetupCode(db)
 		if err != nil {
 			return err
 		}
-		fmt.Printf("Einrichtungsassistent (Einstellungen ungültig; im Browser öffnen):\n\n  http://<server>:%s/ersteinrichtung?code=%s\n", port(boot.Listen), code)
+		fmt.Printf("Setup wizard (invalid settings; open in a browser):\n\n  http://<server>:%s/ersteinrichtung?code=%s\n", port(boot.Listen), code)
 		return nil
 	}
-	fmt.Printf("Einrichtung (im Browser öffnen, „Einrichten“ wählen; nur in den ersten 5 Minuten nach dem Start des Dienstes):\n\n  http://<server>:%s\n\nAbgelaufen? Dienst neu starten: systemctl restart pebble-webhook\n", port(boot.Listen))
+	fmt.Printf("Setup (open in a browser, choose \"Setup\" (German: \"Einrichten\"); only within 5 minutes after the service started):\n\n  http://<server>:%s\n\nToo late? Restart the service: systemctl restart pebble-webhook\n", port(boot.Listen))
 	return nil
 }
 

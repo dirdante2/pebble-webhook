@@ -50,9 +50,10 @@ type System struct {
 	vapidPub  string
 	vapidPriv string
 
-	updates updateCache
-	devCode deviceCode  // Kurz-Code für ein weiteres Gerät (gehört dem Nutzer, der ihn erzeugt hat)
-	oauth   oauthServer // OAuth für den MCP-Server (Einmal-Codes, Zugriff auf kv „oauth“ in system.db)
+	updates       updateCache
+	telemetryWant telemetryWant // angeforderter Sofort-Bericht (telemetrie.go)
+	devCode       deviceCode    // Kurz-Code für ein weiteres Gerät (gehört dem Nutzer, der ihn erzeugt hat)
+	oauth         oauthServer   // OAuth für den MCP-Server (Einmal-Codes, Zugriff auf kv „oauth“ in system.db)
 
 	appsMu sync.RWMutex
 	lifeMu sync.Mutex // Öffnen, Schließen, Sperren, Löschen von Nutzern nacheinander (keine verwaisten Apps, keine überholte Sperre)

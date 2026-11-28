@@ -1,9 +1,14 @@
 # MCP server
 
-pebble-webhook has a built-in [MCP](https://modelcontextprotocol.io) server, so AI assistants (Claude, ChatGPT/OpenAI, …) can read your lists and tick items off in a chat.
+pebble-webhook has a built-in [MCP](https://modelcontextprotocol.io) server. AI assistants (Claude, ChatGPT/OpenAI, …) can read your lists and tick items off in a chat.
 
-- **Endpoint:** `https://<your-domain>/api/v1/mcp` (Streamable HTTP, JSON responses)
-- **Auth:** OAuth 2.1 (for connectors in Claude, ChatGPT and other apps) or a fixed `Authorization: Bearer <API token>` – create it under *Status → Access and security*. Both give access only to the data of the user who connected or created the token.
+| | |
+|---|---|
+| **Endpoint** | `https://<your-domain>/api/v1/mcp` (Streamable HTTP, JSON responses) |
+| **Auth** | OAuth 2.1 (connectors in Claude, ChatGPT and other apps), or a fixed `Authorization: Bearer <API token>` |
+
+- Create the token under *Status → Access and security*.
+- Both give access only to the data of the user who connected or created the token.
 
 ## Tools
 
@@ -16,17 +21,34 @@ pebble-webhook has a built-in [MCP](https://modelcontextprotocol.io) server, so 
 | `notizen_suchen` | Full-text search in all notes, appointments and plannings (same as the search bar). |
 | `notiz_lesen` | Full text of any note or planning by number (`#63`), also when it is in no list. |
 
-Every item has an id: `#42`, or `#59.1`, `#59.2` … when one note produced several items. A bare `#59` is rejected if it is ambiguous; `#59.*` addresses all items of the note.
+**Item ids**
+
+- Every item has an id: `#42`.
+- One note with several items: `#59.1`, `#59.2` …
+- A bare `#59` is rejected if it is ambiguous.
+- `#59.*` addresses all items of the note.
 
 ## Connecting
 
-**Claude (claude.ai, desktop, mobile) and ChatGPT – with OAuth**
+### Claude (claude.ai, desktop, mobile) and ChatGPT – with OAuth
 
-Add a custom connector with the URL `https://<your-domain>/api/v1/mcp`, no client id or secret needed. The app opens a page of your web app: sign in with your passkey and tap *Erlauben*. Connected apps are listed under *Status → Verbundene Apps (MCP)*, where *Trennen* revokes access immediately.
+1. Add a custom connector with the URL `https://<your-domain>/api/v1/mcp`.
+2. No client id or secret needed.
+3. The app opens a page of your web app.
+4. Sign in with your passkey and tap *Allow*.
 
-Details: dynamic client registration (`/api/v1/oauth/register`), authorization code with PKCE (S256), access tokens valid 1 hour, refresh tokens 90 days (rotated). Redirect addresses must be https (http only for localhost). Tokens only work for `/api/v1/mcp`.
+Connected apps are listed under *Status → Connected apps (MCP)*. *Disconnect* revokes access immediately.
 
-**Claude Code**
+**OAuth details**
+
+- Dynamic client registration: `/api/v1/oauth/register`
+- Authorization code with PKCE (S256)
+- Access tokens valid 1 hour
+- Refresh tokens valid 90 days (rotated)
+- Redirect addresses must be https (http only for localhost)
+- Tokens only work for `/api/v1/mcp`
+
+### Claude Code
 
 OAuth (opens the browser on first use):
 
@@ -40,7 +62,7 @@ Or with the API token:
 claude mcp add --transport http sprachnotizen https://<your-domain>/api/v1/mcp --header "Authorization: Bearer <API token>"
 ```
 
-**OpenAI (Responses API)**
+### OpenAI (Responses API)
 
 ```json
 {"type": "mcp", "server_label": "sprachnotizen", "server_url": "https://<your-domain>/api/v1/mcp",

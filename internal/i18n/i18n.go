@@ -23,15 +23,15 @@ func init() {
 	if err := json.Unmarshal(raw, &en); err != nil {
 		panic("i18n: en.json: " + err.Error())
 	}
-	lang.Store("de")
+	lang.Store("en")
 }
 
-// Norm macht aus einer Angabe ("en", "en-US", "EN") eine bekannte Sprache; alles andere ist Deutsch.
+// Norm macht aus einer Angabe ("de", "de-DE", "DE") eine bekannte Sprache; alles andere (auch leer) ist Englisch.
 func Norm(l string) string {
-	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(l)), "en") {
-		return "en"
+	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(l)), "de") {
+		return "de"
 	}
-	return "de"
+	return "en"
 }
 
 // Set legt die Sprache des Dienstes fest (beim Start aus der Einstellung LANGUAGE).

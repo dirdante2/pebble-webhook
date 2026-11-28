@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"os"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -45,14 +46,17 @@ const (
 	telemetrySentKey    = "telemetrie:gesendet" // System-kv: „JJJJ-MM <ms>“ letzter erfolgreicher Versand
 	telemetryErrKey     = "telemetrie:fehler"   // System-kv: letzter Fehler („“ = keiner)
 	telemetryPendingKey = "telemetrie:offen"    // Nutzer-kv: Ring-Ereignisse, die noch nicht angekommen sind
-	telemetryLastKey    = "telemetrie:zuletzt"  // System-kv: ms des letzten gesendeten Berichts (Sofort-Versand höchstens stündlich)
+	telemetryLastKey    = "telemetrie:zuletzt"  // System-kv: ms des letzten gesendeten Berichts
+	telemetryStandKey   = "telemetrie:stand"    // System-kv: Fingerabdruck des zuletzt gesendeten Stands (Sofort-Bericht)
 	telemetryCatchUpMax = 6 * time.Hour         // Nachholen: zufällig bis zu so lange nach dem Start
 	telemetryRetry      = time.Hour             // nach einem Fehler
-	telemetryMinGap     = time.Hour             // Sofort-Bericht (Start, Einschalten) höchstens so oft
+	telemetryDelayMin   = 4 * time.Minute       // Sofort-Bericht (Start, Einschalten, Kanalwechsel) zufällig so lange
+	telemetryDelayMax   = 8 * time.Minute       // … bis so lange nach dem Anlass
 )
 
 var (
 	telemetryMu sync.Mutex // Warteschlangen (nie über einen Versand gehalten)
+	wantMu      sync.Mutex // System.telemetryWant
 	appIDMu     sync.Mutex // App-ID anlegen
 )
 
@@ -259,15 +263,16 @@ func (s *System) TelemetrySchedule(ctx context.Context) {
 	t := time.NewTicker(time.Minute)
 	defer t.Stop()
 	lastFlush := time.Now()
-	started := false
+	s.telemetryRequest("Start", lastFlush)
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case now := <-t.C:
-			if !started { // eine Minute nach dem Start: die Nutzer sind geöffnet
-				started = true
-				s.telemetrySendNow(ctx, "Start", now)
+			if why, ok := s.telemetryDue(now); ok {
+				if retry := s.telemetrySendNow(ctx, why, now); !retry.IsZero() {
+					s.telemetryWantAt(why, retry)
+				}
 			}
 			s.telemetryTick(ctx, now)
 			if now.Sub(lastFlush) >= telemetryRetry {
@@ -327,28 +332,115 @@ func (s *System) telemetryTick(ctx context.Context, now time.Time) {
 	}
 }
 
+// telemetryWant: angeforderter Sofort-Bericht – fällig ab at (Null = keiner offen), why = Anlass(e) fürs Log.
+type telemetryWant struct {
+	at  time.Time
+	why string
+}
+
+// telemetryRequest fordert einen Sofort-Bericht an (Start, Einschalten, Kanalwechsel): gesendet wird erst
+// zufällig 4–8 min später (verteilt die Last vieler Installationen), mehrere Anlässe bis dahin ergeben einen Bericht. Ein Neustart (Update) in der Zeit verwirft
+// die Anforderung, sein eigener Start-Bericht reicht.
+func (s *System) telemetryRequest(why string, now time.Time) {
+	s.telemetryWantAt(why, now.Add(telemetryDelayMin+randDuration(telemetryDelayMax-telemetryDelayMin)))
+}
+
+// telemetryWantAt: Sofort-Bericht spätestens zu at; ein früher offener bleibt bei seinem Termin.
+func (s *System) telemetryWantAt(why string, at time.Time) {
+	wantMu.Lock()
+	defer wantMu.Unlock()
+	w := &s.telemetryWant
+	switch {
+	case w.at.IsZero():
+		w.at, w.why = at, why
+	case !strings.Contains(w.why, why):
+		w.why += ", " + why
+	}
+	if at.Before(w.at) {
+		w.at = at
+	}
+}
+
+// telemetryDue: offener Sofort-Bericht ist fällig – Anlass zurück, die Anforderung ist damit abgeholt.
+func (s *System) telemetryDue(now time.Time) (string, bool) {
+	wantMu.Lock()
+	defer wantMu.Unlock()
+	w := &s.telemetryWant
+	if w.at.IsZero() || now.Before(w.at) {
+		return "", false
+	}
+	why := w.why
+	*w = telemetryWant{}
+	return why, true
+}
+
+// telemetryStand: Fingerabdruck dessen, was der Sofort-Bericht meldet – Version, Kanal, aktive Ringe, inaktive mit
+// Grund und Tag; die Nutzungszeit zählt nicht (sie wächst immer, dafür gibt es den Monatsbericht).
+func (s *System) telemetryStand(m *telemetryMonth) (string, error) {
+	parts := []string{m.Version, m.Channel}
+	for _, g := range m.Rings {
+		parts = append(parts, "a:"+g.Ring)
+	}
+	for _, a := range s.Apps() {
+		if !a.telemetryOn() {
+			continue
+		}
+		rings, err := a.DB.Rings()
+		if err != nil {
+			return "", err
+		}
+		for _, g := range rings {
+			if g.EndedAt == 0 {
+				continue
+			}
+			ev, ok, err := a.ringEventOf(g)
+			if err != nil {
+				return "", err
+			}
+			if ok {
+				parts = append(parts, "i:"+ev.Ring+":"+ev.Reason+":"+ev.Day)
+			}
+		}
+	}
+	slices.Sort(parts[2:])
+	sum := sha256.Sum256([]byte(strings.Join(parts, "\n")))
+	return hex.EncodeToString(sum[:16]), nil
+}
+
 var telemetryNowMu sync.Mutex
 
-// telemetrySendNow: alle Daten sofort (Start der App, Statistik eingeschaltet) – Bericht mit den aktiven Ringen, je
-// inaktivem Ring sein Stand mit Grund, dann liegengebliebene Ring-Ereignisse; höchstens einmal je telemetryMinGap. Der Monatsbericht am 1. bleibt davon unberührt.
-func (s *System) telemetrySendNow(ctx context.Context, why string, now time.Time) {
+// telemetrySendNow: Sofort-Bericht – Bericht mit den aktiven Ringen, je inaktivem Ring sein Stand mit Grund, dann
+// liegengebliebene Ring-Ereignisse; nur wenn sich der Stand (telemetryStand) seit dem letzten Sofort-Bericht geändert
+// hat. Der Monatsbericht am 1. bleibt davon unberührt. Rückgabe: Zeitpunkt für einen neuen Versuch (Fehler),
+// Null = erledigt.
+func (s *System) telemetrySendNow(ctx context.Context, why string, now time.Time) time.Time {
 	if !telemetryAvailable() {
-		return
+		return time.Time{}
 	}
 	telemetryNowMu.Lock()
 	defer telemetryNowMu.Unlock()
-	var last int64
-	fmt.Sscan(kvVal(s.DB.Get(telemetryLastKey)), &last)
-	if last > 0 && now.Sub(time.UnixMilli(last)) < telemetryMinGap {
-		return
-	}
 	m, err := s.telemetryMonthly(now.Format("2006-01"), nil)
-	if err != nil || m.Users == 0 {
-		return
+	if err == nil && m.Users == 0 {
+		return time.Time{}
+	}
+	var stand string
+	if err == nil {
+		stand, err = s.telemetryStand(m)
+	}
+	if err != nil {
+		logf("Statistik: Bericht (%s): %v", why, err)
+		return now.Add(telemetryRetry)
+	}
+	if kvVal(s.DB.Get(telemetryStandKey)) == stand {
+		logf("Statistik: Bericht (%s) unverändert, nicht gesendet", why)
+		return time.Time{}
 	}
 	if err := s.telemetryPost(ctx, "/statistik", m); err != nil {
 		logf("Statistik: Bericht (%s): %v", why, err)
-		return
+		if errors.Is(err, errRejected) {
+			return time.Time{}
+		}
+		return now.Add(telemetryRetry)
 	}
 	s.DB.Set(telemetryLastKey, fmt.Sprint(now.UnixMilli()))
 	inactive := 0
@@ -358,7 +450,9 @@ func (s *System) telemetrySendNow(ctx context.Context, why string, now time.Time
 			a.telemetryFlush(ctx)
 		}
 	}
-	logf("Statistik: Bericht gesendet (%s, %d aktive, %d inaktive Ringe)", why, len(m.Rings), inactive)
+	s.DB.Set(telemetryStandKey, stand)
+	logf("Statistik: Bericht gesendet (%s, %s %s, %d aktive, %d inaktive Ringe)", why, m.Version, m.Channel, len(m.Rings), inactive)
+	return time.Time{}
 }
 
 // telemetryOn: Statistik der Installation eingeschaltet (Admin-Einstellung, Vorgabe an) – aus den gespeicherten
@@ -374,7 +468,7 @@ func (s *System) telemetryOn() bool {
 func (a *App) telemetryOn() bool { return a.System.telemetryOn() }
 
 // handleTelemetrySave (Admin): Statistik der Installation ein- oder ausschalten – ohne Neustart. Ein: sofort alle
-// Daten senden (höchstens stündlich); aus: Wartendes aller Nutzer verwerfen.
+// Daten senden (beim ersten Mal sofort, sonst verzögert und nur Geändertes); aus: Wartendes aller Nutzer verwerfen.
 func (s *System) handleTelemetrySave(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Active *bool `json:"aktiv"`
@@ -400,7 +494,11 @@ func (s *System) handleTelemetrySave(w http.ResponseWriter, r *http.Request) {
 	s.Cfg.Telemetry = *in.Active
 	switch {
 	case *in.Active && !was:
-		go s.telemetrySendNow(context.Background(), "eingeschaltet", time.Now())
+		if kvVal(s.DB.Get(telemetryLastKey)) == "" { // noch nie gesendet: sofort, damit es Daten zum Anzeigen gibt
+			go s.telemetrySendNow(context.Background(), "eingeschaltet", time.Now())
+		} else {
+			s.telemetryRequest("eingeschaltet", time.Now())
+		}
 	case !*in.Active && was:
 		for _, a := range s.Apps() {
 			a.telemetryQueue(func([]telemetryEvent) []telemetryEvent { return nil })

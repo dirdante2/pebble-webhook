@@ -1,6 +1,9 @@
 # Configuration
 
-All settings except the start values live in the database and are edited in the web app. The UI is English or German (setting `LANGUAGE`); this page uses the English labels, with the German one in brackets where it differs.
+- All settings except the start values live in the database.
+- You edit them in the web app.
+- The UI is English or German (setting `LANGUAGE`).
+- This page uses the English labels, with the German one in brackets where it differs.
 
 ## Start values (`/etc/pebble-webhook/env`)
 
@@ -12,21 +15,55 @@ All settings except the start values live in the database and are edited in the 
 | `BACKUP_DIR` | `/srv/pebble-backup` | backups; after changing it run `install.sh` again (creates the folder, allows the service to write there) |
 | `KEY_DIR` | `/etc/pebble-webhook/keys` | one key file per user (never in a backup) |
 
-Restart after changes: `sudo systemctl restart pebble-webhook`.
+Restart after changes:
+
+```bash
+sudo systemctl restart pebble-webhook
+```
 
 ## Setup wizard
 
-On the first start the service only runs the setup wizard. No link is printed: open the address and choose *Einrichten* within 5 minutes after the start (only the first browser gets it; afterwards restart the service). The same button creates the first passkey if none exists yet. It asks for your name (you become the first user and admin); every other field is prefilled with its default. *Prüfen* tests the OpenAI key. After saving, the service restarts, you create the first passkey and the welcome page shows your recovery code once – note it, it is the only way to reopen your encrypted data if the key file is lost.
+On the first start the service only runs the setup wizard.
 
-If the stored settings ever become invalid, the service starts in the wizard again and shows the error.
+1. Open the address. No link is printed.
+2. Choose *Setup* within 5 minutes after the start.
+3. Enter your name. You become the first user and admin.
+4. Leave other fields prefilled, or change them. Each has its default.
+5. Add an AI provider: *Connect with OpenRouter* (no API key), or another one (OpenAI, Grok, Gemini, Muse, OpenAI-compatible, local model). *Check* tests it.
+6. Save. The service restarts.
+7. Create the first passkey.
+8. The welcome page shows your recovery code once.
+
+- Only the first browser gets *Setup*. Afterwards, restart the service.
+- The same button creates the first passkey if none exists yet.
+- Note the recovery code. It is the only way to reopen your encrypted data if the key file is lost.
+- If the stored settings ever become invalid, the service starts in the wizard again and shows the error.
 
 ## Settings in the web app
 
-*Status → Konfiguration* lists every value. **?** opens a short explanation below it, the **pencil** opens a page to change just that value. Secrets are never shown again – leave the field empty to keep them. Changing the public address invalidates all passkeys.
+*Status → Configuration* lists every value.
 
-Two parts: **personal** values (language, Pebble gestures, Joplin, display and memory) belong to each user, apply at once and are stored in that user's encrypted database; without an own value the system value applies. **System** values (address, OpenAI, prices, retention, updates, backups) apply to all users, only admins see and change them, and the service restarts after saving (a few seconds).
+- **?** opens a short explanation below it.
+- The **pencil** opens a page to change just that value.
+- Secrets are never shown again. Leave the field empty to keep them.
+- Changing the public address invalidates all passkeys.
 
-Every save is validated first: number ranges (e.g. max recording 1–2048 MB, retries 1–50), valid addresses (the public address must be `https://host` without path, query or invalid characters), reverse proxy as an IP, header and model names, update source (`owner/repo` or `aus`). Invalid values are rejected with a message and not stored, so the service keeps running.
+Two parts:
+
+| Part | Covers | Applies |
+|---|---|---|
+| **Personal** | language, Pebble gestures, Joplin, display and memory | at once; stored in that user's encrypted database; without an own value the system value applies |
+| **System** | address, OpenAI, prices, retention, updates, backups | to all users; only admins see and change them; service restarts after saving (a few seconds) |
+
+Every save is validated first. Invalid values are rejected with a message and not stored, so the service keeps running.
+
+| Check | Rule |
+|---|---|
+| number ranges | e.g. max recording 1–2048 MB, retries 1–50 |
+| public address | `https://host` without path, query or invalid characters |
+| reverse proxy | an IP |
+| header and model names | valid names |
+| update source | `owner/repo` or `aus` |
 
 | Group | Settings |
 |---|---|
@@ -43,14 +80,49 @@ Every save is validated first: number ranges (e.g. max recording 1–2048 MB, re
 
 ## Users and roles
 
-Every user has an own encrypted database, own recordings, devices, Pebble app access, API token, calendar link and MCP connections – nobody sees another user's data, admins included. **Admins** additionally manage updates, backups, system settings and users: *Menu → Users* invites a user (link valid 7 days, the user creates a passkey and gets a recovery code), changes the role, locks or deletes a user; per user only role, last sign-in, AI costs and storage are shown. The last admin cannot be demoted, locked or deleted.
+Every user has their own:
 
-The API token for machine access is created under *Status → Access and security* (shown once). Command line: `sudo pebble nutzer-anlegen <name> [admin]`, then `sudo PEBBLE_NUTZER=<id> pebble enroll` for the passkey link; `sudo pebble schluessel-wiederherstellen <id> <code>` writes a lost key file from the recovery code.
+- encrypted database,
+- recordings,
+- devices,
+- Pebble app access,
+- API token,
+- calendar link,
+- MCP connections.
+
+Nobody sees another user's data, admins included.
+
+**Admins** additionally manage updates, backups, system settings and users.
+
+*Menu → Users*:
+
+- invites a user (link valid 7 days; the user creates a passkey and gets a recovery code),
+- changes the role,
+- locks or deletes a user.
+
+Per user it shows only role, last sign-in, AI costs and storage. The last admin cannot be demoted, locked or deleted.
+
+The API token for machine access is created under *Status → Access and security* (shown once).
+
+Command line:
+
+```bash
+sudo pebble nutzer-anlegen <name> [admin]
+sudo PEBBLE_NUTZER=<id> pebble enroll          # passkey link
+sudo pebble schluessel-wiederherstellen <id> <code>   # writes a lost key file from the recovery code
+```
 
 ## Upgrading to 3.0
 
-3.0 moves `pebble.db` into `system.db` and the encrypted `users/1/daten.db` of the first user (admin); passkeys, sessions, the Pebble app access, API token, calendar link and MCP connections keep working. The old file stays as `pebble.db.vor-3.0` (unencrypted – delete it once everything works). Older recordings are encrypted and moved 24 hours after the update. Going back to 2.x is only possible by restoring a 2.x backup. Update from 2.3 or later (its installer prepares the key folder).
+- 3.0 moves `pebble.db` into `system.db` and the encrypted `users/1/daten.db` of the first user (admin).
+- Passkeys, sessions, the Pebble app access, API token, calendar link and MCP connections keep working.
+- The old file stays as `pebble.db.vor-3.0` (unencrypted). Delete it once everything works.
+- Older recordings are encrypted and moved 24 hours after the update.
+- Going back to 2.x is only possible by restoring a 2.x backup.
+- Update from 2.3 or later. Its installer prepares the key folder.
 
 ## Upgrading from an env-only setup
 
-Versions before 1.14 kept every setting in `/etc/pebble-webhook/env`. On the first start of 1.14 these values are imported into the database once; from then on only the start values in the env file are used.
+- Versions before 1.14 kept every setting in `/etc/pebble-webhook/env`.
+- On the first start of 1.14 these values are imported into the database once.
+- From then on only the start values in the env file are used.

@@ -671,9 +671,13 @@ func (a *System) handleUpdateChannel(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, "speicher", "Speichern fehlgeschlagen")
 		return
 	}
+	changed := a.updateChannel() != in.Kanal
 	a.updates.mu.Lock()
 	a.updates.channel = in.Kanal
 	a.updates.mu.Unlock()
+	if changed && a.telemetryOn() { // neuer Kanal an die Statistik (verzögert)
+		a.telemetryRequest("Kanal gewechselt", time.Now())
+	}
 	a.handleUpdate(w, r)
 }
 

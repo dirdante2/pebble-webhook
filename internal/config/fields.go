@@ -66,7 +66,7 @@ func init() {
 
 // Fields: alle Einstellungen außer den Start-Werten (LISTEN, DATA_DIR, MEDIA_DIR, BACKUP_DIR).
 var Fields = []Field{
-	{Key: "LANGUAGE", Group: "Sprache", Label: "Sprache", Help: "Sprache der Web-App, der Meldungen und der Texte, die die KI schreibt; auch die Transkription richtet sich danach. Bestehende Einträge bleiben, wie sie sind.", Kind: "choice", Default: "de", Choices: []string{"de", "en"}},
+	{Key: "LANGUAGE", Group: "Sprache", Label: "Sprache", Help: "Sprache der Web-App, der Meldungen und der Texte, die die KI schreibt; auch die Transkription richtet sich danach. Bestehende Einträge bleiben, wie sie sind.", Kind: "choice", Default: "en", Choices: []string{"en", "de"}},
 
 	{Key: "PUBLIC_URL", Group: "Adresse", Label: "Öffentliche Adresse", Help: "https-Adresse der Web-App ohne Slash am Ende; bestimmt die Passkey-Domain. Später ändern macht alle Passkeys ungültig.", Kind: "url", Required: true},
 	{Key: "TRUSTED_PROXY", Group: "Adresse", Label: "Reverse-Proxy", Help: "IP des Proxys davor; nur von dort wird X-Real-IP geglaubt. Leer = keiner.", Kind: "text"},
@@ -81,6 +81,7 @@ var Fields = []Field{
 
 	{Key: "KI_ZUGAENGE", Group: "KI-Zugänge", Label: "KI-Zugänge", Kind: "json", Hidden: true},
 	{Key: "KI_BEREICHE", Group: "KI-Zugänge", Label: "KI-Bereiche", Kind: "json", Hidden: true},
+	{Key: "OPENROUTER_API_KEY", Group: "KI-Zugänge", Label: "OpenRouter: API-Schlüssel", Help: "Schlüssel von OpenRouter; aus der Umgebung (Docker) steht OpenRouter im Assistenten gleich als Anbieter bereit.", Kind: "secret", Hidden: true, Setup: true},
 	{Key: "OPENAI_ENABLED", Group: "KI-Zugänge", Label: "OpenAI", Help: "Zugang zu OpenAI nutzen.", Kind: "choice", Default: "aktiv", Choices: []string{"aktiv", "inaktiv"}, Hidden: true},
 	{Key: "OPENAI_API_KEY", Group: "KI-Zugänge", Label: "OpenAI: API-Schlüssel", Help: "Nur nötig, wenn ein Bereich OpenAI nutzt. Einziger Anbieter mit erzeugten Bildern.", Kind: "secret", Hidden: true, Setup: true},
 	{Key: "OPENAI_BASE_URL", Group: "KI-Zugänge", Label: "OpenAI: API-Adresse", Help: "Adresse der OpenAI-API (Responses-API).", Kind: "url", Default: "https://api.openai.com/v1", Hidden: true},
@@ -156,12 +157,12 @@ var Fields = []Field{
 	{Key: NotifyRing, Group: "Benachrichtigungen", Label: "Ring-Nutzung", Help: "Push bei 60, 80 und 95 % der Aufnahmezeit des Rings.", Kind: "choice", Default: "aktiv", Choices: []string{"aktiv", "inaktiv"}},
 	{Key: NotifyUpdates, Group: "Benachrichtigungen", Label: "Updates", Help: "Push, wenn eine neue Version bereitsteht (nur für Admins).", Kind: "choice", Default: "aktiv", Choices: []string{"aktiv", "inaktiv"}},
 
-	{Key: Telemetry, Group: "Statistik", Label: "Anonyme Statistik senden", Help: "Es werden nur anonyme Daten zur Gesamtnutzungszeit der Ringe gesendet.", Kind: "choice", Default: "aktiv", Choices: []string{"aktiv", "inaktiv"}},
+	{Key: Telemetry, Group: "Statistik", Label: "Anonyme Statistik senden", Help: "Es werden nur anonyme Daten zur Gesamtnutzungszeit der Ringe gesendet. Dafür siehst du die Statistik aller Installationen, und die OpenRouter-KI-Modelle bekommen Metadaten wie Bewertungen.", Kind: "choice", Default: "aktiv", Choices: []string{"aktiv", "inaktiv"}},
 
 	{Key: "VAPID_SUBJECT", Group: "Zugang und Updates", Label: "Kontakt für Web-Push", Help: "mailto:… oder https-Adresse; leer = öffentliche Adresse.", Kind: "text"},
 	{Key: "UPDATE_CHANNEL", Group: "Zugang und Updates", Label: "Update-Kanal", Help: "stable = Langzeit-Versionen; beta = neue, noch nicht ausgereifte Funktionen; nightly = jede Änderung, auch ungetestet.", Kind: "choice", Default: "stable", Choices: []string{"stable", "beta", "nightly"}},
 	{Key: "AUTO_UPDATE", Group: "Zugang und Updates", Label: "Automatisches Update", Help: "Jeden Tag zur gewählten Uhrzeit die neueste Version installieren, wenn es eine gibt (vorher Backup).", Kind: "choice", Default: "aktiv", Choices: []string{"aktiv", "inaktiv"}},
-	{Key: "AUTO_UPDATE_TIME", Group: "Zugang und Updates", Label: "Uhrzeit automatisches Update", Help: "Uhrzeit (HH:MM, Zeitzone des Servers), zu der das automatische Update prüft und installiert.", Kind: "text", Default: "04:00"},
+	{Key: "AUTO_UPDATE_TIME", Group: "Zugang und Updates", Label: "Uhrzeit automatisches Update", Help: "Uhrzeit (HH:MM, Zeitzone des Servers), zu der das automatische Update prüft und installiert.", Kind: "text"},
 	{Key: "UPDATE_REPO", Group: "Zugang und Updates", Label: "Update-Quelle (GitHub owner/repo)", Help: "aus = keine Update-Prüfung. Auf Servern mit Updater fest in /etc/pebble-webhook/env (UPDATE_REPO).", Kind: "text", Default: "dirdante2/pebble-webhook"},
 
 	{Key: "BACKUP_SCHEDULE", Group: "Backup", Label: "Backup-Plan", Help: "Wann das Komplett-Backup läuft (Datenbank mit Einstellungen, Version und Kanal).", Kind: "choice", Default: "täglich", Choices: []string{"täglich", "wöchentlich", "monatlich", "aus"},

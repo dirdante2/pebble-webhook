@@ -1,6 +1,8 @@
 # Pebble Index Webapp
 
-Self-hosted backend and web app for the Pebble Index 01 voice ring. Recordings arrive via webhook, are transcribed with OpenAI and become notes, appointments or research plans.
+Self-hosted backend and web app for the Pebble Index 01 voice ring.
+
+Recordings arrive via webhook and are transcribed with OpenAI. They become notes, appointments or research plans.
 
 - Notes, appointments with push reminders, plannings with web research
 - AI sorts everything into groups and lists and learns your terms
@@ -18,7 +20,10 @@ docker run -d --name pebble --restart unless-stopped -p 8080:8080 \
 docker logs pebble
 ```
 
-The log shows the link to the setup wizard. Put the container behind an HTTPS reverse proxy (passkeys need HTTPS).
+- Connect the AI provider in the setup wizard (OpenRouter recommended). With Compose, `OPENROUTER_API_KEY` can be set in the file.
+- Within 5 minutes after the first start, open the address and choose *Setup*.
+- Too late: `docker restart pebble`.
+- Put the container behind an HTTPS reverse proxy. Passkeys need HTTPS.
 
 ## Docker Compose
 
@@ -28,7 +33,13 @@ docker compose up -d
 docker compose logs pebble
 ```
 
-The compose file lists every option, commented out. Update: `docker compose pull && docker compose up -d`
+The compose file lists every option, commented out.
+
+Update:
+
+```bash
+docker compose pull && docker compose up -d
+```
 
 ## More
 

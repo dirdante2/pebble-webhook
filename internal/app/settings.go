@@ -26,6 +26,9 @@ import (
 // über die Web-Oberfläche gepflegt – beim ersten Start im Einrichtungsassistenten, danach unter Status →
 // Einstellungen. Nach dem Speichern beendet sich der Dienst; systemd startet ihn mit den neuen Werten neu.
 
+// envKeyOpenRouter: OpenRouter-Schlüssel aus der Umgebung (Docker) – im Assistenten gleich als Anbieter bereit.
+const envKeyOpenRouter = "OPENROUTER_API_KEY"
+
 // ErrNotConfigured: es gibt noch keine Einstellungen (Ersteinrichtung nötig).
 var ErrNotConfigured = fmt.Errorf("noch nicht eingerichtet")
 
@@ -61,14 +64,38 @@ func LoadSettings(db *store.System, boot config.Bootstrap) (*config.Config, erro
 		log.Printf("Einstellungen: %d Werte aus der env-Datei übernommen; gepflegt werden sie ab jetzt in der Web-App", len(imported))
 		values = imported
 	}
+	if values["LANGUAGE"] == "" {
+		// Vor 4.8.1 war Deutsch die Vorgabe: bestehende Installationen ohne gespeicherte Sprache bleiben deutsch.
+		if err := db.SaveSettings(map[string]string{"LANGUAGE": "de"}); err != nil {
+			return nil, err
+		}
+		values["LANGUAGE"] = "de"
+	}
+	if values["AUTO_UPDATE_TIME"] == "" {
+		// Vorgabe zufällig 01:00–04:59, einmal gewählt und gespeichert: nicht alle Installationen holen ein neues
+		// Release zur selben Minute.
+		t := autoUpdateDefault()
+		if err := db.SaveSettings(map[string]string{"AUTO_UPDATE_TIME": t}); err != nil {
+			return nil, err
+		}
+		values["AUTO_UPDATE_TIME"] = t
+		log.Printf("Einstellungen: Uhrzeit automatisches Update %s (zufällige Vorgabe)", t)
+	}
 	return config.FromValues(boot, func(k string) string { return values[k] })
+}
+
+// autoUpdateDefault: zufällige Uhrzeit HH:MM zwischen 01:00 und 04:59.
+func autoUpdateDefault() string {
+	m := int(randDuration(4*time.Hour) / time.Minute)
+	return fmt.Sprintf("%02d:%02d", 1+m/60, m%60)
 }
 
 // restartSoon beendet den Dienst kurz nach der Antwort; systemd (Restart=always) bzw. Docker (restart: unless-stopped)
 // startet ihn neu.
 func restartSoon() { restartSoonFor("Einstellungen gespeichert") }
 
-func restartSoonFor(reason string) {
+// restartSoonFor ist eine Variable, damit Tests den Neustart abfangen können.
+var restartSoonFor = func(reason string) {
 	go func() {
 		time.Sleep(800 * time.Millisecond)
 		log.Printf("%s: Neustart", reason)
@@ -389,6 +416,10 @@ func (s *SetupServer) handleGet(w http.ResponseWriter, r *http.Request) {
 	users, _ := s.DB.Users()
 	resp := map[string]any{"felder": settingsView(values, true, scopeAll), "version": s.Version, "eingerichtet": len(users) > 0,
 		"whisper": whisperInfo(whisper.New(s.Boot.DataDir)), "arten": config.ProviderTypes, "docker": inDocker()}
+	if _, locked := config.EnvLocked(envKeyOpenRouter); locked && len(users) == 0 {
+		// OpenRouter aus der Umgebung: Vorgaben der Bereiche wie beim Verbinden.
+		resp["openrouter_vorschlag"] = ensureORCatalog(r.Context(), s.DB, false).defaults()
+	}
 	if s.LoadErr != nil && s.LoadErr != ErrNotConfigured {
 		resp["fehler"] = strings.TrimPrefix(s.LoadErr.Error(), "Konfiguration: ")
 	}
@@ -407,6 +438,10 @@ func (s *SetupServer) handleCheckOpenAI(w http.ResponseWriter, r *http.Request) 
 	if readJSON(r, &in) != nil || r.Header.Get("X-App") != "1" || !s.codeOK(r, in.Code) {
 		writeErr(w, http.StatusForbidden, "code", "Nicht erlaubt")
 		return
+	}
+	// OpenRouter-Schlüssel aus der Umgebung: OpenRouter hat eine feste Adresse.
+	if v, locked := config.EnvLocked(envKeyOpenRouter); locked && in.Key == "" && in.Art == "openrouter" {
+		in.Key = v
 	}
 	// Der in der Umgebung gesetzte Schlüssel geht nur an die Adresse aus der Umgebung bzw. an OpenAI selbst.
 	if v, locked := config.EnvLocked("OPENAI_API_KEY"); locked && in.Key == "" && (in.Art == "" || in.Art == "openai") {
@@ -472,11 +507,13 @@ func (s *SetupServer) handleSave(w http.ResponseWriter, r *http.Request) {
 	}
 	merged := mergeSettings(old, in.Werte, scopeAll)
 	if in.Zugaenge != nil && in.Bereiche != nil && len(users) == 0 { // eingerichtete Installation: KI bleibt, wie sie ist
-		// OpenAI-Schlüssel aus der Umgebung (Docker): gilt für OpenAI-Anbieter ohne eigenen Schlüssel.
-		if v, locked := config.EnvLocked("OPENAI_API_KEY"); locked {
-			for i := range in.Zugaenge {
-				if in.Zugaenge[i].Kind == "openai" && in.Zugaenge[i].Key == "" {
-					in.Zugaenge[i].Key = v
+		// Schlüssel aus der Umgebung (Docker): gelten für Anbieter ihrer Art ohne eigenen Schlüssel.
+		for kind, env := range map[string]string{"openai": "OPENAI_API_KEY", "openrouter": envKeyOpenRouter} {
+			if v, locked := config.EnvLocked(env); locked {
+				for i := range in.Zugaenge {
+					if in.Zugaenge[i].Kind == kind && in.Zugaenge[i].Key == "" {
+						in.Zugaenge[i].Key = v
+					}
 				}
 			}
 		}

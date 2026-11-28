@@ -113,7 +113,7 @@ func (s *System) handleFirstEnroll(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, "speicher", "Datenbankfehler")
 		return
 	}
-	logf("Einrichtung: Einmal-Link für %s über „Einrichten“ ausgegeben", admin.Name)
+	logf("Setup: one-time link for %s issued via \"Setup\"", admin.Name)
 	writeJSON(w, 200, map[string]any{"weiter": "/einrichten#" + token})
 }
 
@@ -133,6 +133,6 @@ func (s *SetupServer) handleSetupStart(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, "speicher", "Datenbankfehler")
 		return
 	}
-	logf("Einrichtung: Assistent über „Einrichten“ geöffnet")
+	logf("Setup: wizard opened via \"Setup\"")
 	writeJSON(w, 200, map[string]any{"code": code})
 }
