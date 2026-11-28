@@ -21,10 +21,11 @@ const (
 	AreaDictation  = "auswertung"
 	AreaResearch   = "recherche"
 	AreaImage      = "bilder"
+	AreaDecision   = "entscheidung" // Entscheidungsmodelle (OpenRouter Decisions-API): Art der Notiz vorab
 )
 
 // AIAreas: alle Bereiche in der Reihenfolge der Oberfläche.
-var AIAreas = []string{AreaTranscribe, AreaTitle, AreaDictation, AreaResearch, AreaImage}
+var AIAreas = []string{AreaTranscribe, AreaTitle, AreaDictation, AreaResearch, AreaImage, AreaDecision}
 
 // Besondere Einträge der Transkription (kein Zugang): Whisper auf diesem Server und der Text der Pebble-App.
 const (
@@ -60,6 +61,10 @@ type AIEntry struct {
 	LimitMonth  float64  `json:"limit_monat,omitempty"` // 0 = ohne Limit
 	Search      []string `json:"websuche,omitempty"`    // Webrecherche: „anbieter“ und/oder ID eines SearXNG-Zugangs
 	Off         bool     `json:"inaktiv,omitempty"`     // in der Gruppe „Inaktiv“: bleibt gespeichert, wird nicht genutzt
+	// Private: nur Anbieter ohne Datenspeicherung (OpenRouter: provider.zdr, data_collection deny).
+	Private bool `json:"datenschutz,omitempty"`
+	// Effort: Nachdenken des Modells – "" = Vorgabe, none = aus, low, medium, high.
+	Effort string `json:"aufwand,omitempty"`
 }
 
 // Active: die genutzten Einträge eines Bereichs in ihrer Reihenfolge.
@@ -326,7 +331,7 @@ func (a *AI) check() (errs []string) {
 
 // areaLabel: Name eines Bereichs in Meldungen.
 var areaLabel = map[string]string{AreaTranscribe: "Transkription", AreaTitle: "Kurztitel", AreaDictation: "Auswertung & Sortierung",
-	AreaResearch: "Webrecherche", AreaImage: "Bilder"}
+	AreaResearch: "Webrecherche", AreaImage: "Bilder", AreaDecision: "Entscheidung"}
 
 // normalize: Lokale Einträge und Sondereinträge tragen keine Preise und kein Limit.
 func (a *AI) normalize() {
@@ -376,6 +381,9 @@ func (a *AI) normalize() {
 			}
 			if !slices.Contains(e.Search, "anbieter") {
 				e.PriceSearch = nil
+			}
+			if !slices.Contains([]string{"none", "low", "medium", "high"}, e.Effort) || area == AreaTranscribe || area == AreaImage {
+				e.Effort = ""
 			}
 		}
 		a.Areas[area] = list

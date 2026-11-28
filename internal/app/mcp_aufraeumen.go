@@ -229,6 +229,7 @@ func (a *App) mcpChangeOne(c mcpChange, run bool) (string, error) {
 				return "", a.Errorf("Punkt „%s“: %v", it.Text, err)
 			}
 			if it.JobID != "" {
+				a.markListByHand(it.JobID, dst)
 				a.changed(it.JobID)
 			}
 			if it.PlanningID != "" {

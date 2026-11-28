@@ -113,8 +113,14 @@ func (a *App) jobSummary(j *store.Job) map[string]any {
 		m["erledigt"] = j.DoneAt
 	}
 	if j.Mode == "diktat" {
-		if d := parseDictation(j.Result); d != nil && j.State == store.StateDone && !j.Failed && len(d.Fragen) > 0 {
-			m["fragen"] = len(d.Fragen)
+		if d := parseDictation(j.Result); d != nil {
+			if len(d.Fragen) > 0 && j.State == store.StateDone && !j.Failed {
+				m["fragen"] = len(d.Fragen)
+			}
+			// Doppelt: Nummer des ersten Originals für das Badge der Karte (Links stehen in der Notiz).
+			if len(d.Doppelt) > 0 {
+				m["doppelt"] = map[string]any{"nr": d.Doppelt[0].Nr, "anzahl": len(d.Doppelt)}
+			}
 		}
 		if l, items := a.jobList(j.ID); l != nil {
 			// erledigt: Zeitpunkt des letzten Hakens, sobald alle Punkte der Notiz abgehakt sind; sonst 0.
@@ -210,6 +216,28 @@ func (a *App) addTags(m map[string]any, kind, id string) {
 		set.Suggestions = []string{}
 	}
 	m["tags"], m["tag_vorschlaege"] = set.Tags, set.Suggestions
+}
+
+// dupJSON: die Originale doppelter Punkte für die Notizansicht; Link nur, solange Notiz bzw. Planung da sind.
+func (a *App) dupJSON(refs []DupRef) []map[string]any {
+	out := []map[string]any{}
+	for _, r := range refs {
+		m := map[string]any{"text": r.Text, "liste": r.Liste}
+		if r.Nr > 0 {
+			m["nr"] = r.Nr
+		}
+		if r.Eintrag != "" {
+			if o, err := a.DB.Job(r.Eintrag); err == nil {
+				m["id"], m["typ"], m["titel"] = o.ID, "eintrag", shortTitle(o.Title)
+			}
+		} else if r.Planung != "" {
+			if p, err := a.DB.Planning(r.Planung); err == nil {
+				m["id"], m["typ"], m["titel"] = p.ID, "planung", p.Title
+			}
+		}
+		out = append(out, m)
+	}
+	return out
 }
 
 // historyPageSize: Einträge je nachgeladener Seite des Verlaufs.
@@ -532,6 +560,9 @@ func (a *App) handleJob(w http.ResponseWriter, r *http.Request) {
 				if p, err := a.DB.JobByNr(d.Bezug); err == nil {
 					m["bezug"] = map[string]any{"id": p.ID, "nr": p.Nr, "titel": shortTitle(p.Title)}
 				}
+			}
+			if refs := a.dupJSON(d.Doppelt); len(refs) > 0 {
+				m["doppelt"] = refs
 			}
 		}
 		if j.JoplinID != "" {
@@ -1090,7 +1121,7 @@ func (a *App) handleCosts(w http.ResponseWriter, r *http.Request) {
 		index[series[i].Tag] = i
 	}
 	totals := map[string]*total{"diktat": {}, "planung": {}}
-	kinds := map[string]float64{"transkription": 0, "titel_zuordnung": 0, "recherche": 0}
+	kinds := map[string]float64{"transkription": 0, "titel_zuordnung": 0, "auswertung": 0, "recherche": 0}
 	val := func(p *float64) float64 {
 		if p == nil {
 			return 0
@@ -1105,13 +1136,18 @@ func (a *App) handleCosts(w http.ResponseWriter, r *http.Request) {
 		// Ein KI-Schritt lief, aber sein Betrag fehlt (Preis nicht konfiguriert oder Altbestand): sichtbar zählen.
 		if ((j.TranscriptSource == sourceOpenAI || j.TranscriptSource == sourceFallback) && j.CostTranscribe == nil) ||
 			(j.Mode == "diktat" && j.Result != "" && j.CostUSD == nil) ||
-			(j.Mode == "planung" && j.AssignHow == "ki" && j.CostAux == nil) ||
+			(j.Mode == "planung" && (j.AssignHow == "ki" || j.AssignHow == "entscheidung") && j.CostAux == nil) ||
 			(j.Mode == "planung" && j.Result != "" && j.CostUSD == nil) {
 			t.OhneKosten++
 		}
 		kinds["transkription"] += val(j.CostTranscribe)
 		kinds["titel_zuordnung"] += val(j.CostAux)
-		kinds["recherche"] += val(j.CostUSD)
+		// Hauptanfrage: bei Notizen die Auswertung, bei Planungs-Runden die Recherche.
+		if j.Mode == "diktat" {
+			kinds["auswertung"] += val(j.CostUSD)
+		} else {
+			kinds["recherche"] += val(j.CostUSD)
+		}
 		if i, ok := index[time.UnixMilli(j.ReceivedAt).In(now.Location()).Format("2006-01-02")]; ok {
 			if j.Mode == "diktat" {
 				series[i].Diktat += sum
@@ -1127,7 +1163,15 @@ func (a *App) handleCosts(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, "speicher", "Datenbankfehler")
 		return
 	}
+	// Entscheidungsmodell: steckt in den Beträgen der Aufträge (Auswertung, Zuordnung); hier nur als „davon“ aus dem Protokoll.
+	decided := 0.0
+	for _, u := range usage {
+		if u.Area == config.AreaDecision && u.Cost != nil {
+			decided += *u.Cost
+		}
+	}
 	writeJSON(w, 200, map[string]any{
+		"entscheidung_usd": decided,
 		"tage": series, "summen": totals, "arten": kinds, "limit_usd": a.Cfg.ResearchLimitUSD, "anfragen": aiUsageJSON(usage),
 	})
 }

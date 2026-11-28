@@ -336,6 +336,9 @@ func (s *System) Run(ctx context.Context) {
 	go s.BackupSchedule(ctx)
 	go s.TelemetrySchedule(ctx)
 	s.startWhisper(ctx)
+	if s.hasOpenRouter() {
+		s.refreshORCatalogSoon(false) // nur, wenn der Katalog fehlt (höchstens alle 24 h)
+	}
 	for _, a := range apps {
 		s.startApp(ctx, a)
 	}

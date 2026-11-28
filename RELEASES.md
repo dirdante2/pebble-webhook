@@ -4,6 +4,22 @@ Summarised notes for **beta** and **stable** releases. Each section lists only w
 
 A tag `vX.Y.Z-stable` (stable; before 1.33.5 `vX.Y.Z`) or `vX.Y.Z-beta` (beta) needs a section `## [X.Y.Z]` or `## [X.Y.Z-beta]` here; the release workflow uses it as the release notes.
 
+## [4.8.0] - 2026-11-28
+
+### Decision model
+- Optional decision step (OpenRouter) before the evaluation: appointment or note, content and list; confident answers are fixed, otherwise the AI decides as before.
+- Also sorts closed plannings and old notes into lists and assigns planning rounds without the large AI request when confident.
+
+### AI providers
+- OpenRouter model choice from its own catalogue with prices, context size, privacy filter and ratings from Artificial Analysis.
+- Reasoning per AI entry; editing an entry opens its own page; the provider's web search is always used.
+- AI costs split by purpose (decision model, note evaluation, planning research).
+
+### Lists
+- Same item twice (e.g. same film): no second list item; the new note stays under notes, marked "Duplicate" with a link to the original.
+- New evaluation (answers, transcript edit, re-transcription, instruction) replaces old items without leftovers, keeps a list chosen by hand and ticks of unchanged items; if the AI fails, the previous evaluation stays.
+- Visible notes instead of silent fixes: list entry without items, more than 20 items.
+
 ## [4.7.0] - 2026-11-27
 
 ### Account

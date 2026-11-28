@@ -241,15 +241,16 @@ func (s *System) handleKIConnectDone(w http.ResponseWriter, r *http.Request) {
 		areas[k] = append([]config.AIEntry{}, v...)
 	}
 	if in.Zugang == "" {
-		assignFreeAreas(areas, id)
+		assignFreeAreas(areas, id, ensureORCatalog(r.Context(), s.DB, true))
 	}
 	logf("KI: OpenRouter-Konto verbunden (Zugang %s)", id)
 	s.saveAI(w, accs, areas, nil, map[string]any{"zugang": id})
 }
 
-// assignFreeAreas: ein neu verbundener OpenRouter-Zugang übernimmt jeden Bereich, der noch keinen aktiven Eintrag hat
-// (vorgeschlagenes Modell; Auswertung und Recherche mit der Websuche des Anbieters).
-func assignFreeAreas(areas map[string][]config.AIEntry, id string) {
+// assignFreeAreas: ein neu verbundener OpenRouter-Zugang übernimmt jeden Bereich, der noch keinen aktiven Eintrag hat,
+// mit der Vorgabe aus dem Katalog (Auswertung und Recherche mit der Websuche des Anbieters). Ohne Katalog bleibt der
+// Bereich frei.
+func assignFreeAreas(areas map[string][]config.AIEntry, id string, cat *orCatalog) {
 	t := config.ProviderTypeByID("openrouter")
 	for _, area := range t.Areas {
 		active := false
@@ -258,10 +259,11 @@ func assignFreeAreas(areas map[string][]config.AIEntry, id string) {
 				active = true
 			}
 		}
-		if active || t.Suggest[area] == "" {
+		model := cat.defaultModel(area)
+		if active || model == "" {
 			continue
 		}
-		e := config.AIEntry{ID: area + "-" + newAccessID(), Access: id, Model: t.Suggest[area]}
+		e := config.AIEntry{ID: area + "-" + newAccessID(), Access: id, Model: model}
 		if area == config.AreaDictation || area == config.AreaResearch {
 			e.Search = []string{"anbieter"}
 		}
@@ -336,5 +338,6 @@ func (s *SetupServer) handleSetupConnectDone(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	kiConnectEnd(in.State)
-	writeJSON(w, 200, map[string]any{"key": key})
+	// Katalog der Modelle gleich abrufen und ablegen; der Assistent belegt die Bereiche mit seinen Vorgaben.
+	writeJSON(w, 200, map[string]any{"key": key, "vorschlag": ensureORCatalog(r.Context(), s.DB, true).defaults()})
 }

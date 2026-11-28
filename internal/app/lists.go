@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"slices"
 	"strings"
 	"time"
 
@@ -20,6 +21,8 @@ import (
 type Dictation struct {
 	Titel    string `json:"titel"`
 	Art      string `json:"art"` // notiz | listenpunkt | termin
+	// Entscheidung: Einordnung durch das Entscheidungsmodell vor der Auswertung (nil = keins eingerichtet).
+	Entscheidung *noteDecision `json:"entscheidung,omitempty"`
 	Eckdaten []Fact `json:"eckdaten"`
 	// Notiz ist der bereinigte Wortlaut: nur was gesagt wurde, ohne Zusatzwissen. Fehlt bei älteren Auswertungen.
 	Notiz string `json:"notiz,omitempty"`
@@ -43,7 +46,26 @@ type Dictation struct {
 	Bezug int64 `json:"bezug,omitempty"`
 	// Medien: Diagramme, Bilder, Trailer (Film/Serie); Marker [[medium:N]] in Beschreibung. Fehlt bei älteren Auswertungen.
 	Medien []Medium `json:"medien,omitempty"`
+	// ArtKI: Einordnung, wie die KI sie geliefert hat (art kann danach z. B. zu notiz werden). Fehlt bei Altbestand.
+	ArtKI string `json:"art_ki,omitempty"`
+	// Doppelt: Punkte, die die Liste schon aus einer anderen Notiz oder Planung führt; sie kommen kein zweites Mal hinein.
+	Doppelt []DupRef `json:"doppelt,omitempty"`
+	// ListeVonHand: Id der Liste, in die der Nutzer die Punkte selbst gelegt hat; gilt bei erneuter Auswertung, bis eine
+	// neue Anweisung zur Notiz sie aufhebt.
+	ListeVonHand string `json:"liste_von_hand,omitempty"`
 }
+
+// DupRef verweist auf den Punkt, den die Liste schon führt: aus Notiz Nr/Eintrag oder Planung.
+type DupRef struct {
+	Text    string `json:"text"`
+	Nr      int64  `json:"nr,omitempty"`
+	Eintrag string `json:"eintrag,omitempty"`
+	Planung string `json:"planung,omitempty"`
+	Liste   string `json:"liste"`
+}
+
+// maxDictItems: so viele Punkte übernimmt eine Notiz höchstens.
+const maxDictItems = 20
 
 // Answer ist die Antwort des Nutzers auf eine Rückfrage zu einer Notiz.
 type Answer struct {
@@ -136,6 +158,16 @@ Regeln:
 func (a *App) analyseDictation(ctx context.Context, j *store.Job) error {
 	date := time.UnixMilli(j.RecordedAt).Format("02.01.2006")
 	plain := func(reason string) error {
+		// Erneute Auswertung gescheitert: die frühere bleibt samt Punkten, sichtbar mit dem Grund.
+		if prev := parseDictation(j.Result); prev != nil {
+			logf("Auftrag %s: keine neue Auswertung, die frühere bleibt: %s", j.ID, reason)
+			if h := a.T("Neue Auswertung nicht möglich:") + " " + reason; !slices.Contains(prev.Hinweise, h) {
+				prev.Hinweise = append(prev.Hinweise, h)
+			}
+			data, _ := json.Marshal(prev)
+			j.Result = string(data)
+			return nil
+		}
 		logf("Auftrag %s: keine Auswertung, nehme die ersten Wörter als Titel: %s", j.ID, reason)
 		words := strings.Fields(j.Transcript)
 		j.Title = strings.Trim(strings.Join(words[:min(6, len(words))], " "), ".,;:!? ") + " – " + date
@@ -153,9 +185,14 @@ func (a *App) analyseDictation(ctx context.Context, j *store.Job) error {
 	var instructionTimes []int64
 	prevList, prevGroup := "", ""
 	var prevMedia []Medium
-	if prev := parseDictation(j.Result); prev != nil {
+	prev := parseDictation(j.Result)
+	if prev != nil {
 		answered, instructions, instructionTimes = prev.Antworten, prev.Anweisungen, prev.AnweisungenZeit
 		prevList, prevGroup, prevMedia = prev.Liste, prev.Gruppe, prev.Medien
+	}
+	// Wo die Punkte jetzt stehen, zählt vor dem gespeicherten Stand (der Nutzer kann sie verschoben oder die Liste umbenannt haben).
+	if l, _ := a.jobList(j.ID); l != nil {
+		prevList, prevGroup = l.Name, l.Project
 	}
 	oldNote := ""
 	if j.JoplinPushedAt != 0 {
@@ -193,6 +230,21 @@ func (a *App) analyseDictation(ctx context.Context, j *store.Job) error {
 	if noSplit {
 		input += "\n\nNicht aufteilen: mehrere Dinge bleiben Punkte dieser einen Notiz, keine Rückfrage zum Aufteilen."
 	}
+	// Entscheidungsmodell vorab: sichere Antworten sind feste Vorgabe.
+	decision, dcost := a.decideNote(ctx, j.ID, input)
+	addCost(&j.CostUSD, dcost)
+	// Sicher gewählte Liste: die Auswertung sieht nur diese Liste (kürzere Eingabe) und muss sie nehmen – außer der
+	// Nutzer hat eine Liste mit Nummer genannt oder zur Notiz etwas angewiesen.
+	decidedList := decision.sureList()
+	if decidedList != nil && (len(instructions) > 0 || a.listByNr(j.Transcript) != nil) {
+		decidedList, decision.list = nil, nil
+	}
+	if decidedList != nil {
+		if known, err = a.listHintOf([]*store.List{decidedList}); err != nil {
+			return err
+		}
+	}
+	input += decision.hint()
 	req := openai.Request{
 		Area: openai.AreaDictation, Instructions: dictationInstructions, MaxOutputTokens: 3000,
 		ReasoningEffort: a.Cfg.PlanReasoningEffort, SchemaName: "diktat", Schema: dictationSchema,
@@ -224,6 +276,14 @@ func (a *App) analyseDictation(ctx context.Context, j *store.Job) error {
 		return plain(err.Error())
 	}
 	d := full.Dictation
+	d.ArtKI = d.Art
+	// Punkte einer früheren Auswertung fallen erst jetzt weg, wo die neue vorliegt (scheitert sie, bleiben sie stehen).
+	// Was der Nutzer an ihnen getan hat, gilt weiter: Liste von Hand und Haken gleicher Punkte.
+	prevHand, prevDone, err := a.dropEvalItems(j, prev)
+	if err != nil {
+		return err
+	}
+	d.Entscheidung = decision
 	d.Eckdaten = cleanFacts(d.Eckdaten, 5)
 	d.Notiz, d.Beschreibung = clipText(d.Notiz, 600), clipText(d.Beschreibung, 1000)
 	d.Medien = normalizeMedia(d.Medien, prevMedia)
@@ -271,6 +331,9 @@ func (a *App) analyseDictation(ctx context.Context, j *store.Job) error {
 
 	// Termin: eigener Zeitpunkt statt Liste. Ohne brauchbaren Zeitpunkt bleibt es eine Notiz mit sichtbarem Hinweis.
 	d.Termin = nil
+	if d.Art == "termin" && decision.sureNote() {
+		d.Art = "notiz" // Vorgabe des Entscheidungsmodells: kein Termin
+	}
 	if d.Art == "termin" {
 		ap, err := appointmentTimes(full.RawTermin, j.RecordedAt)
 		if err != nil {
@@ -284,12 +347,21 @@ func (a *App) analyseDictation(ctx context.Context, j *store.Job) error {
 	setAppointment(j, d.Termin)
 
 	d.Liste, d.Gruppe = cleanName(d.Liste), cleanName(d.Gruppe)
+	// Leere Punkte gibt es nicht; mehr als maxDictItems werden nicht übernommen, das steht sichtbar an der Notiz.
 	items := []DictItem{}
+	dropped := 0
 	for _, it := range d.Punkte {
-		it.Text = store.Preview(it.Text, 120)
-		if it.Text != "" && len(items) < 20 {
-			items = append(items, it)
+		if it.Text = store.Preview(it.Text, 120); it.Text == "" {
+			continue
 		}
+		if len(items) >= maxDictItems {
+			dropped++
+			continue
+		}
+		items = append(items, it)
+	}
+	if dropped > 0 {
+		d.Hinweise = append(d.Hinweise, fmt.Sprintf(a.T("Nur die ersten %d Punkte übernommen, %d weitere weggelassen."), maxDictItems, dropped))
 	}
 	// Ein Ding (Film, Buch): Punkt und Titel der Notiz mit Jahr aus den Eckdaten der Notiz.
 	if len(items) == 1 {
@@ -311,6 +383,12 @@ func (a *App) analyseDictation(ctx context.Context, j *store.Job) error {
 	if d.Art == "termin" {
 		list = nil
 	}
+	// Vom Nutzer selbst gewählte Liste: gilt bei erneuter Auswertung, bis eine neue Anweisung sie aufhebt (reevaluate).
+	if list == nil && prevHand != "" && d.Art != "termin" {
+		if hl, err := a.DB.List(prevHand); err == nil {
+			list = hl
+		}
+	}
 	// Fortsetzung einer früheren Notiz: dieselbe Liste wie dort (außer der Nutzer hat zur Notiz etwas angewiesen).
 	if d.Bezug == j.Nr {
 		d.Bezug = 0
@@ -322,8 +400,14 @@ func (a *App) analyseDictation(ctx context.Context, j *store.Job) error {
 			list = rl
 		}
 	}
-	if list != nil && d.Art == "listenpunkt" && len(d.Punkte) == 0 {
-		d.Art = "notiz"
+	// Vom Entscheidungsmodell sicher gewählte Liste (nach Nummer im Diktat und Fortsetzung).
+	if list == nil && decidedList != nil && d.Art != "termin" {
+		list = decidedList
+	}
+	// Fehler der KI sichtbar statt still: ohne Punkte wird es eine Notiz (mit ihrem Titel als Punkt).
+	if d.Art == "listenpunkt" && len(d.Punkte) == 0 {
+		logf("Auftrag %s: KI liefert Listenpunkt ohne Punkte, eingeordnet als Notiz", j.ID)
+		d.Hinweise = append(d.Hinweise, a.T("KI: Listenpunkt ohne Punkte, als Notiz eingeordnet."))
 	}
 	if list == nil && d.Liste != "" {
 		var ns errNotSorted
@@ -336,12 +420,19 @@ func (a *App) analyseDictation(ctx context.Context, j *store.Job) error {
 		}
 	}
 	if d.Art == "listenpunkt" && list != nil && len(d.Punkte) > 0 {
-		if err := a.addToList(j, list, d.Punkte); err != nil {
+		placed, dups, err := a.addToList(j, list, d.Punkte)
+		if err != nil {
 			return err
 		}
-		// Listenpunkte stehen in der Notiz ihrer Liste, nicht als eigene Notiz unter Notizen; die Eckdaten bleiben an der Notiz.
-		d.Liste, d.Gruppe, j.JoplinID = list.Name, list.Project, ""
-		if oldNote != "" {
+		d.Liste, d.Gruppe, d.Doppelt = list.Name, list.Project, dups
+		if placed == 0 {
+			// Alles stand schon in der Liste: die Notiz bleibt unter Notizen, markiert als doppelt mit Verweis aufs Original.
+			j.JoplinID = store.DerivedID("diktat:" + j.ID)
+		} else {
+			// Listenpunkte stehen in der Notiz ihrer Liste, nicht als eigene Notiz unter Notizen; die Eckdaten bleiben an der Notiz.
+			j.JoplinID = ""
+		}
+		if placed > 0 && oldNote != "" {
 			// War die Notiz vor den Antworten eine eigene Joplin-Notiz, verschwindet diese.
 			if err := a.DB.AddJoplinDelete(oldNote); err != nil {
 				return err
@@ -395,6 +486,14 @@ func (a *App) analyseDictation(ctx context.Context, j *store.Job) error {
 			}
 			d.Liste, d.Gruppe = list.Name, list.Project
 		}
+	}
+	// Die Liste von Hand gilt weiter, solange die Punkte dort stehen.
+	if list != nil && list.ID == prevHand {
+		d.ListeVonHand = prevHand
+	}
+	// Vor der erneuten Auswertung abgehakte Punkte bleiben abgehakt, wenn sie wieder entstehen.
+	if err := a.restoreItemsDone(j.ID, prevDone); err != nil {
+		return err
 	}
 	// Erledigt bestimmt der Nutzer, nicht die Auswertung: neue Punkte einer erledigten Notiz sind gleich abgehakt.
 	// Frisch gelesen, weil der Stand sich während der Auswertung ändern kann.
@@ -491,15 +590,12 @@ func (a *App) reevaluate(j *store.Job, d *Dictation, text string, at int64) erro
 	}
 	d.Anweisungen = append(d.Anweisungen, text)
 	d.AnweisungenZeit = append(d.AnweisungenZeit, at)
-	items, err := a.DB.ItemsByJob(j.ID)
-	if err != nil {
-		return err
+	// Neue Anweisung: die KI teilt neu ein (die Liste von Hand gilt nicht mehr), mit der Liste, in der die Notiz jetzt steht.
+	// Die Punkte fallen erst mit der neuen Auswertung weg.
+	if l, _ := a.jobList(j.ID); l != nil {
+		d.Liste, d.Gruppe = l.Name, l.Project
 	}
-	// Anders als bei Rückfragen fallen auch Punkte in Gruppen-Listen weg: der Nutzer verlangt ausdrücklich eine neue Einteilung.
-	for _, it := range items {
-		a.DB.DeleteListItem(it.ID)
-		a.listChanged(it.ListID)
-	}
+	d.ListeVonHand = ""
 	data, _ := json.Marshal(d)
 	j.Result, j.State, j.Attempts, j.NextTryAt, j.Error = string(data), store.StateTranscribed, 0, 0, ""
 	if err := a.DB.SaveJob(j); err != nil {
@@ -510,31 +606,116 @@ func (a *App) reevaluate(j *store.Job, d *Dictation, text string, at int64) erro
 	return nil
 }
 
-// addToList hängt die Punkte eines Diktats an die Liste. Ein Punkt, den die Liste schon führt, kommt kein zweites Mal hinein.
-func (a *App) addToList(j *store.Job, list *store.List, items []DictItem) error {
+// addToList hängt die Punkte eines Diktats an die Liste. Ein Punkt, den die Liste schon führt, kommt kein zweites Mal hinein:
+// steht er dort aus einer anderen Notiz oder Planung, wird er als doppelt gemeldet (mit Verweis aufs Original).
+// placed zählt die Punkte, die nun für diese Notiz in der Liste stehen (neu angelegt oder schon ihre eigenen).
+func (a *App) addToList(j *store.Job, list *store.List, items []DictItem) (placed int, dups []DupRef, err error) {
 	existing, err := a.DB.ListItems(list.ID)
 	if err != nil {
-		return err
+		return 0, nil, err
 	}
 	for _, it := range items {
-		dup := false
+		var same *store.ListItem
 		for _, e := range existing {
-			dup = dup || strings.EqualFold(e.Text, it.Text)
+			if strings.EqualFold(strings.TrimSpace(e.Text), strings.TrimSpace(it.Text)) {
+				// Eigener Punkt (z. B. zweimal im selben Diktat) geht vor einem fremden.
+				if same == nil || (e.JobID == j.ID && same.JobID != j.ID) {
+					same = e
+				}
+			}
 		}
-		if dup {
+		if same != nil && same.JobID == j.ID {
+			placed++
+			continue
+		}
+		if same != nil {
+			dups = append(dups, DupRef{Text: same.Text, Nr: same.Nr, Eintrag: same.JobID, Planung: same.PlanningID, Liste: list.Name})
 			continue
 		}
 		ni := &store.ListItem{ListID: list.ID, JobID: j.ID, Text: it.Text}
 		if err := a.DB.AddListItem(ni); err != nil {
-			return err
+			return placed, dups, err
 		}
 		existing = append(existing, ni)
+		placed++
 	}
 	if err := a.DB.TouchList(list.ID); err != nil {
-		return err
+		return placed, dups, err
 	}
 	a.hub.send("liste:" + list.ID)
+	return placed, dups, nil
+}
+
+// restoreItemsDone hakt Punkte der Notiz wieder ab, die vor der erneuten Auswertung mit gleichem Text abgehakt waren.
+func (a *App) restoreItemsDone(jobID string, done map[string]int64) error {
+	if len(done) == 0 {
+		return nil
+	}
+	items, err := a.DB.ItemsByJob(jobID)
+	if err != nil {
+		return err
+	}
+	for _, it := range items {
+		if at := done[strings.ToLower(strings.TrimSpace(it.Text))]; at > 0 && it.DoneAt == 0 {
+			it.DoneAt = at
+			if err := a.DB.SaveListItem(it); err != nil {
+				return err
+			}
+			a.listChanged(it.ListID)
+		}
+	}
 	return nil
+}
+
+// dropEvalItems nimmt bei einer erneuten Auswertung die Punkte der früheren aus den Listen; die neue legt sie wieder an.
+// Zurück kommen die Liste von Hand (Id; "" = keine) und die Haken je Punkttext. Von Hand gilt: ausdrücklich gemerkt
+// (markListByHand), sonst wenn die Punkte nicht mehr in der Liste der früheren Auswertung stehen (verschoben, Liste
+// umbenannt) oder es keine frühere Auswertung gab (von Hand einsortiert).
+func (a *App) dropEvalItems(j *store.Job, prev *Dictation) (hand string, done map[string]int64, err error) {
+	l, _ := a.jobList(j.ID)
+	items, err := a.DB.ItemsByJob(j.ID)
+	if err != nil {
+		return "", nil, err
+	}
+	if prev != nil && prev.ListeVonHand != "" {
+		if _, err := a.DB.List(prev.ListeVonHand); err == nil {
+			hand = prev.ListeVonHand
+		}
+	}
+	if hand == "" && l != nil && (prev == nil || (prev.Liste != "" && (!strings.EqualFold(prev.Liste, l.Name) || !strings.EqualFold(prev.Gruppe, l.Project)))) {
+		hand = l.ID
+	}
+	for _, it := range items {
+		if it.DoneAt > 0 {
+			if done == nil {
+				done = map[string]int64{}
+			}
+			done[strings.ToLower(strings.TrimSpace(it.Text))] = it.DoneAt
+		}
+		if err := a.DB.DeleteListItem(it.ID); err != nil {
+			return "", nil, err
+		}
+		a.listChanged(it.ListID)
+	}
+	return hand, done, nil
+}
+
+// markListByHand merkt an der Notiz, dass der Nutzer ihre Punkte selbst in diese Liste gelegt hat.
+func (a *App) markListByHand(jobID string, list *store.List) {
+	j, err := a.DB.Job(jobID)
+	if err != nil {
+		return
+	}
+	d := parseDictation(j.Result)
+	if d == nil || j.Mode != "diktat" {
+		return
+	}
+	d.ListeVonHand, d.Liste, d.Gruppe = list.ID, list.Name, list.Project
+	data, _ := json.Marshal(d)
+	j.Result = string(data)
+	if err := a.DB.SaveJob(j); err != nil {
+		logf("Auftrag %s: Liste von Hand merken: %v", jobID, err)
+	}
 }
 
 func (a *App) listFolderID() string { return store.DerivedID("ordner:" + a.Cfg.JoplinRoot + "/Listen") }
@@ -875,20 +1056,7 @@ func (a *App) handleJobAnswer(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "leer", "Keine Antwort gegeben")
 		return
 	}
-	// Die Punkte der ersten Auswertung fallen weg; die neue legt sie mit dem besseren Verständnis wieder an.
-	items, err := a.DB.ItemsByJob(j.ID)
-	if err != nil {
-		writeErr(w, 500, "speicher", "Datenbankfehler")
-		return
-	}
-	for _, it := range items {
-		// Ein Punkt in einem Projekt-Thema stammt nicht aus der Auswertung der KI und bleibt stehen.
-		if l, err := a.DB.List(it.ListID); err == nil && l.Project != "" {
-			continue
-		}
-		a.DB.DeleteListItem(it.ID)
-		a.listChanged(it.ListID)
-	}
+	// Die neue Auswertung ersetzt die Punkte der ersten (auch in Gruppen-Listen); Liste von Hand und Haken bleiben.
 	d.Fragen = []Question{}
 	data, _ := json.Marshal(d)
 	j.Result, j.State, j.Attempts, j.NextTryAt, j.Error = string(data), store.StateTranscribed, 0, 0, ""
@@ -1229,6 +1397,9 @@ func (a *App) handleItemMove(w http.ResponseWriter, r *http.Request) {
 	a.rememberMove(it.Text, old, in.Ziel)
 	a.listChanged(old, in.Ziel)
 	if it.JobID != "" {
+		if l, err := a.DB.List(in.Ziel); err == nil {
+			a.markListByHand(it.JobID, l)
+		}
 		a.changed(it.JobID)
 	}
 	if it.PlanningID != "" {
@@ -1265,6 +1436,10 @@ func (a *App) handleJobToList(w http.ResponseWriter, r *http.Request) {
 		text = store.Preview(j.Transcript, 120)
 	}
 	if a.sortInto(w, r, items, &store.ListItem{JobID: j.ID, Text: text}) {
+		// Eine erneute Auswertung lässt die Notiz in der Liste, die der Nutzer gewählt hat.
+		if l, _ := a.jobList(j.ID); l != nil {
+			a.markListByHand(j.ID, l)
+		}
 		a.changed(j.ID)
 	}
 }

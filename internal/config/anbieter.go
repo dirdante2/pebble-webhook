@@ -46,8 +46,6 @@ type ProviderType struct {
 	Search   bool                      `json:"suche"`             // eigene Websuche („Suche des Anbieters“)
 	Plugin   bool                      `json:"-"`                 // Websuche als OpenRouter-Web-Plugin
 	Models   map[string][]CatalogModel `json:"modelle,omitempty"` // feste Auswahl je Bereich (erstes = Vorgabe); leer = frei
-	// Suggest: vorgeschlagenes Modell je Bereich bei freier Auswahl (nur Vorbelegung, wird nicht erzwungen).
-	Suggest map[string]string `json:"vorschlag,omitempty"`
 	// PricesOptional: Preise je Eintrag sind freiwillig; ohne sie gelten die Kosten, die der Anbieter selbst meldet,
 	// sonst bleiben sie unbekannt.
 	PricesOptional bool `json:"preise_optional,omitempty"`
@@ -76,9 +74,8 @@ var ProviderTypes = func() []ProviderType {
 	return []ProviderType{
 		{ID: "openrouter", Name: "OpenRouter", Text: "Ein Konto für viele Modelle (Claude, Grok, Gemini, GPT u. a.), mit Websuche; verbinden mit deinem OpenRouter-Konto statt API-Schlüssel.",
 			API: APIChat, URL: "https://openrouter.ai/api/v1", FixedURL: true, Key: KeyRequired, Cloud: true, Plugin: true, PricesOptional: true, ReportsCost: true, OAuth: "openrouter",
-			Areas: []string{AreaTranscribe, AreaTitle, AreaDictation, AreaResearch, AreaImage}, Search: true,
-			Suggest: map[string]string{AreaTranscribe: "openai/whisper-large-v3", AreaTitle: "google/gemini-2.5-flash",
-				AreaDictation: "anthropic/claude-sonnet-4.5", AreaResearch: "anthropic/claude-sonnet-4.5", AreaImage: "openai/gpt-image-2"}},
+			Areas: []string{AreaTranscribe, AreaTitle, AreaDictation, AreaResearch, AreaImage, AreaDecision}, Search: true,
+		},
 		{ID: "openai", Name: "OpenAI", Text: "OpenAI mit eigener Websuche und Bildern.", API: APIResponses, URL: "https://api.openai.com/v1",
 			Key: KeyRequired, Cloud: true, Areas: []string{AreaTranscribe, AreaTitle, AreaDictation, AreaResearch, AreaImage}, Search: true,
 			Models: map[string][]CatalogModel{

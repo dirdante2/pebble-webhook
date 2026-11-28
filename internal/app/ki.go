@@ -28,6 +28,7 @@ func NewAI(ai config.AI, ledger openai.Ledger) *openai.Router {
 			t := acc.Type()
 			cl := openai.New(acc.Key, acc.URL)
 			cl.Chat, cl.Plugin, cl.Dialect, cl.Name = t.API == config.APIChat, t.Plugin, t.ID, acc.Name
+			cl.ZDR = e.Private
 			for _, x := range e.Search {
 				if x == "anbieter" {
 					cl.ProviderSearch = t.Search
@@ -37,7 +38,7 @@ func NewAI(ai config.AI, ledger openai.Ledger) *openai.Router {
 			}
 			r.Areas[area] = append(r.Areas[area], &openai.Step{ID: e.ID, Name: acc.Name, Client: cl, Model: e.Model,
 				PriceIn: orZero(e.PriceIn), PriceOut: orZero(e.PriceOut), PriceSearch: orZero(e.PriceSearch), PriceMinute: orZero(e.PriceMinute),
-				PriceImage: orZero(e.PriceImage), Limit: e.LimitMonth, NoPrices: acc.Cloud() && !hasPrices(area, e)})
+				PriceImage: orZero(e.PriceImage), Limit: e.LimitMonth, Effort: e.Effort, NoPrices: acc.Cloud() && !hasPrices(area, e)})
 		}
 	}
 	return r
@@ -105,6 +106,15 @@ func (s *System) handleAI(w http.ResponseWriter, r *http.Request) {
 	}
 	out := s.aiView()
 	out["felder"], out["whisper"] = settingsView(values, false, scopeSystem), whisperInfo(s.Whisper)
+	// Modellwahl bei OpenRouter: Katalog aus kv; fehlt er, höchstens alle 24 h neu abrufen.
+	if s.hasOpenRouter() {
+		out["openrouter_katalog"] = ensureORCatalog(r.Context(), s.DB, false)
+		// Bewertungen der Modelle (Artificial Analysis über pebble-admin), nur mit Statistik, höchstens alle 24 h neu.
+		if a := s.ensureModelAnalysis(r.Context()); a != nil {
+			out["modell_analyse"] = a
+		}
+	}
+	out["entscheidung_fragen"] = map[string]any{"typ": decisionKinds, "inhalt": decisionContents}
 	writeJSON(w, 200, out)
 }
 
@@ -164,6 +174,13 @@ func (s *System) saveAI(w http.ResponseWriter, zugaenge []config.AIAccess, berei
 		out[k] = v
 	}
 	writeJSON(w, 200, out)
+	// Neuer OpenRouter-Zugang: Katalog der Modelle gleich abrufen.
+	for _, a := range zugaenge {
+		if a.Kind == "openrouter" && !strings.Contains(old["KI_ZUGAENGE"], `"`+a.ID+`"`) {
+			s.refreshORCatalogSoon(true)
+			break
+		}
+	}
 	if restart {
 		restartSoon()
 		return
@@ -182,6 +199,9 @@ func (s *System) handleAICheck(w http.ResponseWriter, r *http.Request) {
 	case a.Type() != nil && a.Type().API == config.APISearxng:
 		err = checkSearx(r.Context(), a.URL)
 	default:
+		if a.Kind == "openrouter" {
+			ensureORCatalog(r.Context(), s.DB, true) // „Prüfen“ holt auch den Katalog der Modelle neu
+		}
 		var models []string
 		if models, err = listModels(r.Context(), a.URL, a.Key); err == nil {
 			writeJSON(w, 200, map[string]any{"ok": true, "modelle": models})

@@ -287,6 +287,7 @@ a.badge { text-decoration: none; }
 
 /* Fragen der KI */
 .badge.frage { color: var(--planung); }
+.badge.doppelt { color: var(--warn); }
 .fragezeile { display: flex; align-items: center; justify-content: space-between; gap: .5rem; margin-top: .55rem; padding-top: .55rem; border-top: 1px solid var(--linie); }
 .zaehler { display: inline-block; text-align: center; min-width: 1.35rem; padding: 0 .35rem; border-radius: 999px; background: var(--planung); color: #fff; font-size: .78rem; line-height: 1.35rem; font-variant-numeric: tabular-nums; }
 .btn-group .btn.aktiv .zaehler { background: var(--akzent-text); color: var(--akzent); }
@@ -934,6 +935,31 @@ svg.balken.zweiteilig.knapp .rest, svg.balken.zweiteilig.knapp .eigen { fill: va
 .kigriff { touch-action: none; padding: .3rem .2rem; }
 .kireihezeile.ziehen { cursor: grabbing; box-shadow: 0 4px 14px rgb(0 0 0 / .3); position: relative; z-index: 1; }
 .kigriff { color: var(--leise); font-size: 1.1rem; flex: none; }
+.kiauswahl { border: 0; margin: .4rem 0 .8rem; padding: 0; min-width: 0; }
+.kiwahl { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: .2rem .6rem;
+  padding: .55rem .7rem; margin: .35rem 0; border: 1px solid var(--linie); border-radius: var(--radius); background: var(--flaeche); cursor: pointer; }
+.kiwahl:has(input:checked) { border-color: var(--akzent); box-shadow: inset 0 0 0 1px var(--akzent); }
+.kiwahl:has(input:focus-visible) { outline: 2px solid var(--akzent); outline-offset: 2px; }
+.kiwahlradio { position: absolute; opacity: 0; width: 1px; height: 1px; pointer-events: none; }
+.kiwahlname { grid-area: name; overflow-wrap: anywhere; }
+.kiwahl { grid-template-areas: "name icons" "info info" "werte werte"; }
+.kiwahlwerte { grid-area: werte; display: flex; flex-wrap: wrap; gap: .4rem 1.1rem; margin-top: .15rem; }
+.kipunkte { display: inline-flex; align-items: center; gap: .4rem; }
+.kipunkteicon { width: 1.15rem; height: 1.15rem; color: var(--akzent); flex: none; display: inline-block; }
+.kipunkteicon svg { width: 100%; height: 100%; display: block; }
+.kipunktereihe { display: inline-flex; gap: .2rem; }
+.kipunktereihe i { width: .5rem; height: .5rem; border-radius: 50%; background: var(--linie); }
+.kipunktereihe i.an { background: var(--akzent); }
+.kilegende { margin-top: .6rem; font-size: .88rem; }
+.kilegende p { display: flex; align-items: flex-start; gap: .5rem; margin: .3rem 0; }
+.kilegende .kipunkteicon { margin-top: .1rem; }
+.kiwahlicons { grid-area: icons; display: flex; align-items: center; gap: .5rem; }
+.kischild { width: 1.25rem; height: 1.25rem; color: var(--gut); flex: none; }
+.kischild svg { width: 100%; height: 100%; display: block; }
+.kistufe { font-weight: 700; letter-spacing: .05em; white-space: nowrap; }
+.kistufe b { color: var(--akzent); } .kistufe i { font-style: normal; color: var(--linie); }
+.kiwahlinfo { grid-area: info; font-size: .88rem; overflow-wrap: anywhere; }
+.kiauswahl .schalter { margin: .2rem 0 .5rem; }
 .kitrenner { margin-top: .8rem; padding: .3rem 0; border-top: 2px solid var(--linie); color: var(--leise); font-weight: 600; }
 .leiste[hidden] { display: none; }
 /* Schließen-Knopf oben im KI-Fenster: erstes fokussierbares Element, damit kein Eingabefeld (und keine Tastatur) den Fokus bekommt */
@@ -996,3 +1022,16 @@ p.erstatistik { margin: .2rem 0 0; }
 .erblock .erkurz { display: none; }
 @media (max-width: 560px) { .erblock:not(.aktiv) .erlang { display: none; } .erblock:not(.aktiv) .erkurz { display: block; } .erschritte li:has(.aktiv) { flex: 3 1 0; } }
 .erleiste [hidden] { display: none; }
+.kisuchzeile { display: flex; gap: .5rem; align-items: stretch; }
+.kisuchzeile input[type=search] { flex: 1; min-width: 0; }
+.kifilterknopf { position: relative; flex: none; min-width: 2.75rem; padding: 0 .7rem; display: inline-flex; align-items: center; justify-content: center; }
+.kifilterknopf svg { width: 1.2rem; height: 1.2rem; display: block; }
+.kifilterknopf.aktiv { border-color: var(--akzent); color: var(--akzent); }
+.kifilterzahl { position: absolute; top: -.4rem; right: -.4rem; min-width: 1.2rem; height: 1.2rem; padding: 0 .25rem; border-radius: 999px; background: var(--akzent); color: #000; font-size: .72rem; font-weight: 700; line-height: 1.2rem; text-align: center; }
+.kifilter { margin: .5rem 0; padding: .7rem .8rem; border: 1px solid var(--linie); border-radius: var(--radius); background: var(--flaeche); }
+.kifilterzeile { display: grid; grid-template-columns: minmax(0, 8.5rem) minmax(0, 1fr) 6.5rem; gap: .6rem; align-items: center; margin: .35rem 0; }
+.kifilterzeile label { display: flex; align-items: center; gap: .4rem; margin: 0; overflow-wrap: anywhere; }
+.kifilterzeile input[type=range] { width: 100%; accent-color: var(--akzent); min-height: 2.75rem; margin: 0; }
+.kifilterzeile output { font-size: .88rem; color: var(--leise); text-align: right; }
+.kifilterfuss { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: .5rem; margin-top: .4rem; }
+@media (max-width: 480px) { .kifilterzeile { grid-template-columns: minmax(0, 1fr) auto; } .kifilterzeile input[type=range] { grid-column: 1 / -1; grid-row: 2; } }

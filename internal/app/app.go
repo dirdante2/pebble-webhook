@@ -22,6 +22,7 @@ type AI interface {
 	TranscribeStep(ctx context.Context, id, name string, audio []byte, mime, language, prompt string) (text string, seconds float64, cost *float64, err error)
 	Respond(ctx context.Context, r openai.Request) (*openai.Result, error)
 	First(area string) *openai.Step
+	Decide(ctx context.Context, state string, questions map[string]openai.DecisionQuestion) (map[string]openai.DecisionAnswer, *float64, error)
 }
 
 // Notes ist das Einweg-Ziel Joplin (in Tests ersetzt); nil = Joplin aus.

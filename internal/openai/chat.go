@@ -75,6 +75,17 @@ func (c *Client) respondChat(ctx context.Context, r Request) (*Result, error) {
 	}
 
 	body := map[string]any{"model": r.Model, "stream": false}
+	if p := c.zdrProvider(); p != nil {
+		body["provider"] = p
+	}
+	// OpenRouter: Nachdenken einheitlich über „reasoning“ (aus = enabled false).
+	if c.Dialect == "openrouter" {
+		if e := c.effort(r.ReasoningEffort); e == "none" {
+			body["reasoning"] = map[string]any{"enabled": false}
+		} else if e != "" {
+			body["reasoning"] = map[string]any{"effort": e}
+		}
+	}
 	if r.MaxOutputTokens > 0 {
 		body["max_tokens"] = r.MaxOutputTokens
 	}

@@ -46,6 +46,7 @@ type Config struct {
 	YouTubeKey           string // YouTube Data API v3 (Trailer); leer = Suche über die KI-Websuche
 	ResearchLimitUSD     float64
 	UserDailyLimitUSD    float64 // KI-Kosten je Nutzer und Tag (0 = kein Limit; Admins ausgenommen)
+	DecisionMinConf      float64 // Entscheidungsmodell: ab dieser Sicherheit feste Vorgabe für die Auswertung
 	ResearchMaxOutTokens int
 
 	TrashRetentionDays  int // Papierkorb: so viele Tage nach dem Löschen endgültig entfernen
@@ -307,6 +308,11 @@ func FromValues(boot Bootstrap, lookup func(string) string) (*Config, error) {
 		errs = append(errs, i18n.T("USER_DAILY_LIMIT_USD ist keine Zahl ab 0"))
 	} else {
 		c.UserDailyLimitUSD = v
+	}
+	if v, err := strconv.ParseFloat(str("DECISION_MIN_CONFIDENCE", "0.7"), 64); err != nil || v < 0 || v > 1 {
+		errs = append(errs, i18n.T("DECISION_MIN_CONFIDENCE ist keine Zahl von 0 bis 1"))
+	} else {
+		c.DecisionMinConf = v
 	}
 	if c.PublicURL != "" {
 		u, err := url.Parse(c.PublicURL)

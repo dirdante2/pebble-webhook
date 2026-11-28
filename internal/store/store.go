@@ -168,7 +168,7 @@ type Job struct {
 	Error            string
 	PlanningID       string
 	RoundNo          int
-	AssignHow        string   // schluesselwort | ki | neu | web | umgehaengt
+	AssignHow        string   // schluesselwort | entscheidung | ki | neu | web | umgehaengt
 	ForcePlanning    string   // "", "neu" oder Planungs-Id: Zuordnung steht fest
 	Result           string   // JSON: Planung nach dieser Runde bzw. Auswertung des Diktats
 	CostUSD          *float64 // Recherche

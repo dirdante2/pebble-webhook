@@ -9,7 +9,33 @@ Version numbers X.Y.Z:
 
 Own builds show X.Y.Z.A: **A** is a local build counter (one per deployed change, starting at 1 for every new X.Y.Z); it never appears in Git or releases, so one version can collect several changes.
 
-## [Unreleased]
+## [4.8.0] - 2026-11-28
+
+### New
+- Decision step before the evaluation: a decision model (OpenRouter) classifies each note as appointment or note and its content (film, series, …); confident answers are fixed input for the evaluation.
+- Decision model also picks the list of a note (evaluation then sees only that list), sorts closed plannings and old notes into existing lists, and assigns planning rounds – without the large AI request when confident.
+- AI costs: share of the decision model shown under “What for”.
+- AI costs: “What for” splits note evaluation from planning research (both were shown as research).
+- OpenRouter: model choice per area from OpenRouter's own catalogue – five models across the price range, offline search (up to 10 matches), prices, context size and privacy.
+- OpenRouter: privacy switch shows only models without data retention and enforces it on requests.
+- AI entries: reasoning per entry (default, off, low, medium, high), only for models that can reason.
+- OpenRouter catalogue is fetched once when connecting and stored locally (retry at most every 24 h if missing).
+- OpenRouter model choice shows ratings from Artificial Analysis (intelligence, speed, Elo, error rate) – only with statistics on, refreshed at most every 24 h.
+- OpenRouter model choice lists only rated models when ratings exist for the area (the chosen model always stays).
+
+### Changed
+- AI areas: editing an entry opens its own page instead of a dialog.
+- AI areas: the provider's own web search is always used; the switch is gone.
+- Model cards: price tier as $ to $$$ and a shield for no data retention, always in the same place.
+
+### Fixed
+- Same item twice (e.g. same film): new note stays under notes, marked “Duplicate” with a link to the original.
+- Old notes whose items were silently dropped as duplicates get marked by `notizen-einsortieren` (also when the AI is unavailable).
+- New evaluation after answers, transcript edit or re-transcription no longer leaves old items in group lists.
+- New evaluation keeps a list chosen by hand and ticks of unchanged items.
+- AI prompt names the list a note is in now, not an outdated one.
+- Visible notes for list entries without items and for more than 20 items (no longer silent).
+- Note keeps the AI's original type (`art_ki`).
 
 ## [4.7.0] - 2026-11-27
 

@@ -29,6 +29,7 @@ type Step struct {
 	PriceMinute float64
 	PriceImage  float64
 	Limit       float64 // je Kalendermonat; 0 = ohne
+	Effort      string  // Nachdenken je Eintrag (überschreibt die Vorgabe der Anfrage); "" = Vorgabe
 	// NoPrices: Cloud-Anbieter ohne eingetragene Preise – Kosten nur, wenn der Anbieter sie meldet, sonst unbekannt.
 	NoPrices bool
 }
@@ -191,6 +192,9 @@ func (r *Router) Respond(ctx context.Context, req Request) (*Result, error) {
 	err := r.chain(ctx, req.Area, func(s *Step) error {
 		q := req
 		q.Model = s.Model
+		if s.Effort != "" {
+			q.ReasoningEffort = s.Effort
+		}
 		out, err := s.Client.Respond(ctx, q)
 		if err != nil {
 			return err

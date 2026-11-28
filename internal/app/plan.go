@@ -249,6 +249,15 @@ func (a *App) assign(ctx context.Context, j *store.Job) error {
 		}
 		fmt.Fprintf(&list, "- id: %s | titel: %s | vorhaben: %s\n", p.ID, store.Preview(p.Title, 100), vorhaben)
 	}
+	// Entscheidungsmodell zuerst: sicher fortgesetzt → anhängen, sicher neu → neue Planung (ohne Schlüsselwort).
+	dp, dneu, dcost := a.decidePlanning(ctx, j, open, list.String())
+	addCost(&j.CostAux, dcost)
+	if dp != nil {
+		return attach(dp, "entscheidung")
+	}
+	if dneu && !keyword {
+		return create("neu")
+	}
 	res, err := a.respond(ctx, openai.Request{
 		Area: openai.AreaTitle, SchemaName: "zuordnung", Schema: assignSchema, MaxOutputTokens: 2000,
 		Instructions: "Entscheide, ob eine neue Sprachnotiz eine der offenen Planungen fortsetzt. Antworte als JSON: " +
@@ -573,6 +582,9 @@ func renderDictation(j *store.Job) string {
 	var b strings.Builder
 	if d := parseDictation(j.Result); d != nil {
 		writeFacts(&b, d.Eckdaten)
+		for _, r := range d.Doppelt {
+			fmt.Fprintf(&b, i18n.T("Doppelt: „%s“ steht schon in %s (#%d)")+"\n\n", r.Text, r.Liste, r.Nr)
+		}
 		if len(d.Hinweise) > 0 {
 			b.WriteString(i18n.T("## Hinweise\n\n"))
 			for _, h := range d.Hinweise {

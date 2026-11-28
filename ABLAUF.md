@@ -10,13 +10,13 @@ Stände eines Auftrags: `neu` → `transkribiert` → (`zugeordnet`, nur Planung
 2. Prüfen: Rate-Limit → Token → Größe (`HOOK_MAX_MB`) → Signatur und Zeitfenster (5 min). Bekannte Zustellung → `200`, nichts doppelt.
 3. Audio verschlüsselt speichern → Auftrag anlegen → erst dann `200`. Speicherfehler → `507`, die Pebble-App wiederholt.
 4. Transkription nach der eingestellten Reihenfolge (Cloud, Whisper lokal oder Pebble-Transkript).
-5. KI-Auswertung: Titel, Kurzfassung, Eckdaten, Hinweise, Quellen, Tags, ggf. Termin oder Rückfragen.
+5. Entscheidungsmodell (falls eingerichtet) → KI-Auswertung: Titel, Kurzfassung, Eckdaten, Hinweise, Quellen, Tags, ggf. Termin oder Rückfragen.
 6. Einsortieren in Gruppe und Liste → `fertig` → Live-Update an offene Web-Apps.
 
 ## Aufnahme vom Pebble (Planung)
 
 1. Schritte 1–4 wie bei der Notiz.
-2. Zuordnung zu einer offenen Planung („Weiter …“ oder per KI), sonst neue Planung.
+2. Zuordnung zu einer offenen Planung („Weiter …“, Entscheidungsmodell oder KI), sonst neue Planung.
 3. Recherche mit Websuche (Tiefe und Kostenlimit einstellbar) → neuer Stand der Planung; jede Runde bleibt als Version erhalten.
 4. Rückfragen der KI lassen sich in der Web-App beantworten → neue Runde.
 5. Planungen schließen sich von selbst nach `PLANNING_AUTOCLOSE_DAYS` ohne neue Runde.
@@ -30,14 +30,26 @@ Stände eines Auftrags: `neu` → `transkribiert` → (`zugeordnet`, nur Planung
 ## KI-Anbieter je Bereich
 
 1. Status → KI: Zugänge anlegen (OpenAI-kompatibel, lokal, SearXNG).
-2. Je Bereich (Transkription, Kurztitel, Auswertung, Recherche, Bilder) eine Reihenfolge mit Modell, Preisen und Monatslimit.
+2. Je Bereich (Transkription, Kurztitel, Auswertung, Recherche, Bilder, Entscheidung) eine Reihenfolge mit Modell, Preisen und Monatslimit.
 3. Aufruf: erster Eintrag unter seinem Limit; Fehler oder Limit → nächster. Kosten je Anfrage werden protokolliert.
+
+## Entscheidungsmodell (Bereich Entscheidung)
+
+Nur mit Eintrag im Bereich Entscheidung (OpenRouter-Decisions-API); Antwort gilt ab `DECISION_MIN_CONFIDENCE` (Vorgabe 0,7), sonst entscheidet die KI wie bisher.
+
+1. Notiz, vor der Auswertung, eine Anfrage: Typ (Termin/Notiz), Inhalt, „passt eine vorhandene Liste?“ und welche (`L<n>`).
+2. Sichere Liste → Auswertung sieht nur diese Liste und muss sie nehmen; Vorrang behalten „Liste N“ im Diktat, Anweisungen des Nutzers und die Liste einer Bezugsnotiz. Sicher kein Termin → `art` termin gilt nicht.
+3. Abgeschlossene Planung und Nachtrag alter Notizen: „passt eine Liste?“ + welche → sicher: direkt einsortiert, sonst KI-Anfrage.
+4. Planungs-Runde: „setzt eine offene Planung fort?“ + welche → sicher ja: angehängt (`entscheidung`), sicher nein ohne „Weiter“: neue Planung, sonst KI-Zuordnung.
+5. Antworten (mit Sicherheit) stehen an der Notiz unter `entscheidung`; Kosten zählen zur Notiz bzw. Runde.
 
 ## Listen, Gruppen, Tags
 
 1. Die KI legt Gruppen und Listen selbst an und sortiert jede Notiz als Punkt ein; Listen haben eine feste Nummer `L<n>`, Punkte die Nummer `#N` ihrer Notiz.
-2. Von Hand: Notiz → „In Liste“, Liste/Gruppe bearbeiten. Korrekturen landen als Vorschlag im Gedächtnis.
-3. Tags: Auswahl aus dem Vorrat, neue nur als Vorschlag zum Übernehmen.
+2. Steht ein Punkt schon in der Liste (andere Notiz oder Planung), kommt er nicht doppelt hinein; die Notiz bleibt unter Notizen, markiert „Doppelt“ mit Link aufs Original.
+3. Erneute Auswertung (Rückfrage, Wortlaut, Neu-Transkription, Anweisung): die alten Punkte fallen erst weg, wenn die neue Auswertung vorliegt; eine von Hand gewählte Liste gilt weiter (bis zu einer neuen Anweisung), Haken gleicher Punkte bleiben.
+4. Von Hand: Notiz → „In Liste“, Liste/Gruppe bearbeiten. Korrekturen landen als Vorschlag im Gedächtnis.
+5. Tags: Auswahl aus dem Vorrat, neue nur als Vorschlag zum Übernehmen.
 
 ## Gedächtnis und Begriffe
 

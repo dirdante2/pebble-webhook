@@ -176,21 +176,8 @@ func (a *App) handleRetranscribe(w http.ResponseWriter, r *http.Request) {
 		}
 		addCost(&j.CostAux, j.CostUSD)
 		j.Result, j.CostUSD, j.LimitHit = "", nil, false
-	} else if j.Mode == "diktat" {
-		// Die Punkte der alten Auswertung fallen weg; die neue legt sie wieder an (Projekt-Themen bleiben).
-		items, err := a.DB.ItemsByJob(j.ID)
-		if err != nil {
-			writeErr(w, 500, "speicher", "Datenbankfehler")
-			return
-		}
-		for _, it := range items {
-			if l, err := a.DB.List(it.ListID); err == nil && l.Project != "" {
-				continue
-			}
-			a.DB.DeleteListItem(it.ID)
-			a.listChanged(it.ListID)
-		}
 	}
+	// Notiz: die neue Auswertung ersetzt die Punkte der alten (Liste von Hand und Haken bleiben, siehe dropEvalItems).
 	j.Transcript, j.TranscriptSource, j.State = "", "", store.StateNew
 	j.Failed, j.Empty, j.FailedAt, j.Attempts, j.NextTryAt, j.Error = false, false, 0, 0, 0, ""
 	if err := a.DB.SaveJob(j); err != nil {

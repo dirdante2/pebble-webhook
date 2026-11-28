@@ -132,20 +132,7 @@ func (a *App) handleTranscriptEdit(w http.ResponseWriter, r *http.Request) {
 	j.Transcript, j.TranscriptSource = text, "nutzer"
 	j.Failed, j.Empty, j.FailedAt, j.Attempts, j.NextTryAt, j.Error = false, false, 0, 0, 0, ""
 	if j.Mode == "diktat" {
-		// Die Punkte der alten Auswertung fallen weg; die neue legt sie wieder an (Projekt-Themen bleiben, wie bei Rückfragen).
-		items, err := a.DB.ItemsByJob(j.ID)
-		if err != nil {
-			writeErr(w, 500, "speicher", "Datenbankfehler")
-			return
-		}
-		// Der Erledigt-Stand liegt an der Notiz (erledigt_at); die neue Auswertung übernimmt ihn für neue Punkte.
-		for _, it := range items {
-			if l, err := a.DB.List(it.ListID); err == nil && l.Project != "" {
-				continue
-			}
-			a.DB.DeleteListItem(it.ID)
-			a.listChanged(it.ListID)
-		}
+		// Die neue Auswertung ersetzt die Punkte der alten (Liste von Hand und Haken bleiben, siehe dropEvalItems).
 		j.State = store.StateTranscribed
 	} else if planningID != "" {
 		// Recherche dieser Runde neu, ab dem Stand der Runde davor.

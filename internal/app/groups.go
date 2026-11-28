@@ -41,6 +41,11 @@ func (a *App) listHint() (string, error) {
 	if err != nil {
 		return "", err
 	}
+	return a.listHintOf(lists)
+}
+
+// listHintOf: „Gruppen und Listen“ nur für die genannten Listen (z. B. die vom Entscheidungsmodell gewählte).
+func (a *App) listHintOf(lists []*store.List) (string, error) {
 	if len(lists) == 0 {
 		return "Gruppen und Listen: (noch keine)\n", nil
 	}
@@ -213,6 +218,22 @@ func (a *App) sortPlanning(ctx context.Context, p *store.Planning) error {
 	for _, f := range plan.Eckdaten {
 		facts = append(facts, f.Name+": "+f.Wert)
 	}
+	addAux := func(c *float64) {
+		if rounds, err := a.DB.Rounds(p.ID); err == nil && len(rounds) > 0 && c != nil {
+			last := rounds[len(rounds)-1]
+			addCost(&last.CostAux, c)
+			if err := a.DB.SaveJob(last); err != nil {
+				logf("Planung %s: Kosten: %v", p.ID, err)
+			}
+		}
+	}
+	// Entscheidungsmodell zuerst: wählt es sicher eine vorhandene Liste, entfällt die KI-Anfrage.
+	state := fmt.Sprintf("Titel: %s\nVorhaben: %s\nGesagt: %s\nEckdaten: %s", p.Title, plan.Vorhaben, plan.Notiz, strings.Join(facts, "; "))
+	list, dcost := a.decideList(ctx, "Planung "+p.ID, "diese abgeschlossene Planung (ein Vorhaben, eine Idee oder Aufgabe)", state)
+	addAux(dcost)
+	if list != nil {
+		return a.placePlanning(p, plan, list)
+	}
 	res, err := a.respond(ctx, openai.Request{
 		Area: openai.AreaDictation, Instructions: planSortInstructions, SchemaName: "einsortieren", Schema: planSortSchema,
 		MaxOutputTokens: 1000, ReasoningEffort: a.Cfg.PlanReasoningEffort,
@@ -222,13 +243,7 @@ func (a *App) sortPlanning(ctx context.Context, p *store.Planning) error {
 	if err != nil {
 		return err
 	}
-	if rounds, err := a.DB.Rounds(p.ID); err == nil && len(rounds) > 0 {
-		last := rounds[len(rounds)-1]
-		addCost(&last.CostAux, res.Cost)
-		if err := a.DB.SaveJob(last); err != nil {
-			logf("Planung %s: Kosten: %v", p.ID, err)
-		}
-	}
+	addAux(res.Cost)
 	var out struct {
 		Gruppe string `json:"gruppe"`
 		Liste  string `json:"liste"`
@@ -239,7 +254,7 @@ func (a *App) sortPlanning(ctx context.Context, p *store.Planning) error {
 	if cleanName(out.Liste) == "" {
 		return nil
 	}
-	list, err := a.findList(out.Gruppe, out.Liste)
+	list, err = a.findList(out.Gruppe, out.Liste)
 	var ns errNotSorted
 	if errors.As(err, &ns) {
 		logf("Planung %s nicht einsortiert: %s", p.ID, ns.reason)
@@ -248,6 +263,11 @@ func (a *App) sortPlanning(ctx context.Context, p *store.Planning) error {
 	if err != nil {
 		return err
 	}
+	return a.placePlanning(p, plan, list)
+}
+
+// placePlanning legt die Planung als einen Punkt in list.
+func (a *App) placePlanning(p *store.Planning, plan *Plan, list *store.List) error {
 	text := p.Title
 	if text == "" {
 		text = plan.Titel
@@ -586,6 +606,29 @@ func (a *App) BackfillNoteLists(ctx context.Context) (checked, sorted int, cost 
 	if err != nil {
 		return 0, 0, 0, err
 	}
+	// Zuerst ohne KI: Altbestand, dessen Punkte schon in der Liste standen und still verworfen wurden, als doppelt markieren
+	// (läuft auch, wenn die KI danach scheitert).
+	for _, j := range jobs {
+		if j.State != store.StateDone || j.Failed || j.TerminAt > 0 {
+			continue
+		}
+		d := parseDictation(j.Result)
+		if d == nil || d.Art != "listenpunkt" || len(d.Doppelt) > 0 {
+			continue
+		}
+		if items, err := a.DB.ItemsByJob(j.ID); err != nil {
+			return checked, sorted, cost, err
+		} else if len(items) > 0 {
+			continue
+		}
+		if ok, err := a.markOrphanDuplicate(j, d); err != nil {
+			return checked, sorted, cost, err
+		} else if ok {
+			checked++
+			sorted++
+			fmt.Printf("#%d %s → doppelt\n", j.Nr, shortTitle(j.Title))
+		}
+	}
 	for _, j := range jobs {
 		if ctx.Err() != nil {
 			return checked, sorted, cost, ctx.Err()
@@ -601,6 +644,9 @@ func (a *App) BackfillNoteLists(ctx context.Context) (checked, sorted int, cost 
 			continue
 		}
 		d := parseDictation(j.Result)
+		if d != nil && len(d.Doppelt) > 0 {
+			continue // steht als doppelt markiert ohne eigenen Punkt
+		}
 		if d != nil && d.Art != "notiz" {
 			continue
 		}
@@ -610,7 +656,13 @@ func (a *App) BackfillNoteLists(ctx context.Context) (checked, sorted int, cost 
 		if d != nil {
 			notiz = d.Notiz
 		}
-		{
+		// Entscheidungsmodell zuerst: wählt es sicher eine vorhandene Liste, entfällt die KI-Anfrage.
+		decided, dcost := a.decideList(ctx, fmt.Sprintf("Notiz #%d", j.Nr), "diese Notiz",
+			fmt.Sprintf("Titel: %s\nText: %s\nWortlaut: %s", shortTitle(j.Title), notiz, j.Transcript))
+		if dcost != nil {
+			cost += *dcost
+		}
+		if decided == nil {
 			hint, err := a.listHint()
 			if err != nil {
 				return checked, sorted, cost, err
@@ -635,13 +687,16 @@ func (a *App) BackfillNoteLists(ctx context.Context) (checked, sorted int, cost 
 				group, name = out.Gruppe, out.Liste
 			}
 		}
-		list, err := a.findList(group, name)
-		var ns errNotSorted
-		if errors.As(err, &ns) {
-			list, err = a.findList("", genericList)
-		}
-		if err != nil {
-			return checked, sorted, cost, err
+		list := decided
+		if list == nil {
+			list, err = a.findList(group, name)
+			var ns errNotSorted
+			if errors.As(err, &ns) {
+				list, err = a.findList("", genericList)
+			}
+			if err != nil {
+				return checked, sorted, cost, err
+			}
 		}
 		touched, err := a.placeItems(list, nil, &store.ListItem{JobID: j.ID, Text: store.Preview(shortTitle(j.Title), 120)}, false)
 		if err != nil {
@@ -665,4 +720,50 @@ func (a *App) BackfillNoteLists(ctx context.Context) (checked, sorted int, cost 
 		fmt.Printf("#%d %s → %s\n", j.Nr, shortTitle(j.Title), listLabel(list))
 	}
 	return checked, sorted, cost, nil
+}
+
+// markOrphanDuplicate markiert eine Listenpunkt-Notiz ohne eigenen Punkt als doppelt, wenn ihre Liste alle ihre Punkte
+// schon aus anderen Notizen oder Planungen führt (früher still verworfen). Sie steht danach wieder unter Notizen.
+func (a *App) markOrphanDuplicate(j *store.Job, d *Dictation) (bool, error) {
+	if len(d.Punkte) == 0 || d.Liste == "" {
+		return false, nil
+	}
+	lists, err := a.DB.Lists()
+	if err != nil {
+		return false, err
+	}
+	var list *store.List
+	for _, l := range lists {
+		if strings.EqualFold(l.Name, d.Liste) && strings.EqualFold(l.Project, d.Gruppe) {
+			list = l
+			break
+		}
+	}
+	if list == nil {
+		return false, nil
+	}
+	existing, err := a.DB.ListItems(list.ID)
+	if err != nil {
+		return false, err
+	}
+	var dups []DupRef
+	for _, p := range d.Punkte {
+		for _, e := range existing {
+			if e.JobID != j.ID && strings.EqualFold(strings.TrimSpace(e.Text), strings.TrimSpace(p.Text)) {
+				dups = append(dups, DupRef{Text: e.Text, Nr: e.Nr, Eintrag: e.JobID, Planung: e.PlanningID, Liste: list.Name})
+				break
+			}
+		}
+	}
+	if len(dups) != len(d.Punkte) {
+		return false, nil
+	}
+	d.Doppelt = dups
+	data, _ := json.Marshal(d)
+	j.Result, j.JoplinID = string(data), store.DerivedID("diktat:"+j.ID)
+	if err := a.DB.SaveJob(j); err != nil {
+		return false, err
+	}
+	a.changed(j.ID)
+	return true, nil
 }

@@ -91,7 +91,7 @@ const terminArt = (t) => (t.erinnerung === t.beginn ? tx('Erinnerung') : tx('Ter
 const fragenText = (n) => (n === 1 ? tx('1 Frage') : tx('{0} Fragen', n));
 const frageText = (f) => (typeof f === 'string' ? f : f.frage);
 const ZUORDNUNG = {
-  schluesselwort: tx('per Schlüsselwort „Weiter“ fortgesetzt'), ki: tx('von der KI einer offenen Planung zugeordnet'), neu: tx('als neue Planung angelegt'),
+  schluesselwort: tx('per Schlüsselwort „Weiter“ fortgesetzt'), entscheidung: tx('vom Entscheidungsmodell einer offenen Planung zugeordnet'), ki: tx('von der KI einer offenen Planung zugeordnet'), neu: tx('als neue Planung angelegt'),
   web: tx('Antwort aus der Web-App'), umgehaengt: tx('von Hand umgehängt'), neu_weil_geschlossen: tx('neue Planung, weil das Ziel inzwischen geschlossen war'),
 };
 
@@ -534,6 +534,7 @@ const routen = [
   [/^\/status\/einstellungen$/, 'einstellungen', zeigeEinstellungen],
   [/^\/status\/ki$/, 'ki', zeigeKI],
   [/^\/status\/ki\/([a-z]+)$/, 'kiBereich', zeigeKIBereich],
+  [/^\/status\/ki\/([a-z]+)\/([a-z0-9-]+)$/, 'kiEintrag', zeigeKIEintrag],
   [/^\/status\/update$/, 'update', () => zeigeUpdate('')],
   [/^\/status\/backups$/, 'backups', () => zeigeUpdate('backups')],
   [/^\/status\/update\/backups$/, 'backups', () => geheZu('/status/backups', true)],
@@ -837,7 +838,7 @@ function karte(e) {
   const zu = istErledigt(e);
   const termin = t && !zu ? T`<div class="terminkarte${t.verpasst ? ' verpasst' : ''}"><span>${t.verpasst ? T('<span class="badge alarm">verpasst</span> ') : ''}${t.bestaetigt ? `${erledigtZeichen} ` : ''}${esc(terminZeit(t))}${t.ort ? ` · ${esc(t.ort)}` : ''}</span></div>` : ''; // Bestätigen per Wischen nach rechts
   return T`<a class="karte${neu}${t?.verpasst ? ' alarmkarte' : ''}${zu ? ' erledigt' : ''}" href="${planung ? '/planung/' : '/eintrag/'}${e.id}" ${kartenDaten(e)}>
-    <div class="zeile"><span>${nrHtml(e.nr)}${t ? T`<span class="badge termin">${terminArt(e.termin)}</span>` : T`<span class="badge ${esc(e.modus)}">${esc(MODUS[e.modus] || e.modus)}</span>${runde}`} ${planung && !zu ? planungZeichen(e.planung_status === 'offen') : ''}${e.liste ? T` <span class="badge liste">${esc(listenName(e.liste))}</span>${e.liste.erledigt && !zu ? ` ${erledigtZeichen}` : ''}` : ''}</span>
+    <div class="zeile"><span>${nrHtml(e.nr)}${t ? T`<span class="badge termin">${terminArt(e.termin)}</span>` : T`<span class="badge ${esc(e.modus)}">${esc(MODUS[e.modus] || e.modus)}</span>${runde}`} ${planung && !zu ? planungZeichen(e.planung_status === 'offen') : ''}${e.liste ? T` <span class="badge liste">${esc(listenName(e.liste))}</span>${e.liste.erledigt && !zu ? ` ${erledigtZeichen}` : ''}` : ''}${e.doppelt ? T` <span class="badge doppelt">${e.doppelt.nr ? tx('Doppelt #{0}', e.doppelt.nr) : tx('Doppelt')}</span>` : ''}</span>
       <span class="kartenzeit">${stand}<span class="leise">${kartenZeit(e.aufgenommen)}</span></span></div>
     <div class="titel">${esc(e.titel || tx('Ohne Titel'))}</div>
     ${e.besetzung && !zu ? T`<div class="besetzung klein">${esc(e.besetzung)}</div>` : ''}${zu ? '' : termin}${zu ? '' : vorschau}${!zu && e.tags?.length ? T`<div class="tags">${e.tags.map((t) => T`<span class="tagchip">${esc(t)}</span>`).join('')}</div>` : ''}${fehler}
@@ -1707,6 +1708,10 @@ function analyseHtml(e, aufnahme = '') {
   if (an && e.fragen && an.rueckfragen?.length) {
     html += T`<div class="hinweis warn"><strong>Die KI hat ${fragenText(e.fragen)} zu dieser Notiz:</strong><ul>${an.rueckfragen.map((f) => T`<li>${esc(f.frage)}</li>`).join('')}</ul>
       <div class="leiste"><button class="btn haupt" data-fragen="${e.id}" data-ftyp="eintrag">${tx('{0} beantworten', fragenText(e.fragen))}</button></div></div>`;
+  }
+  // Doppelt: diese Punkte standen schon in der Liste (aus einer anderen Notiz oder Planung) – kein zweiter Punkt, Link aufs Original.
+  if (e.doppelt?.length) {
+    html += T`<div class="hinweis warn doppelt"><strong>Doppelt</strong><ul>${e.doppelt.map((d) => T`<li>${tx('„{0}“ steht schon in {1}:', esc(d.text), esc(d.liste))} ${d.id ? T`<a href="/${d.typ}/${d.id}">#${d.nr || ''} ${esc(d.titel || '')}</a>` : (d.nr ? tx('#{0} (nicht mehr da)', d.nr) : tx('Original nicht mehr da'))}</li>`).join('')}</ul></div>`;
   }
   if (an?.antworten?.length) html += T`<h2>Deine Antworten</h2><dl>${an.antworten.map((x) => T`<dt>${esc(x.frage)}</dt><dd><span class="leise">${x.zeit ? zeit(x.zeit) : tx('Zeit unbekannt')}</span> ${esc(x.antwort)}</dd>`).join('')}</dl>`;
   // Eckdaten zuerst (nur die der Notiz, Listenpunkte tragen keine), darunter getrennt der Listenbezug mit Erledigt-Haken.
@@ -2986,7 +2991,7 @@ async function zeigeStatus() {
 
 const KI_ZWECK = { transkription: tx('Transkription'), diktat: tx('KI-Auswertung'), auswertung: tx('KI-Auswertung'), kurztitel: tx('Kurztitel'), recherche: tx('Recherche'), planung: tx('Recherche'),
   bilder: tx('Bild'), zuordnung: tx('Zuordnung'), einsortieren: tx('Einsortieren'), termin: tx('Termin'), trailer: tx('Trailer'), beschreibungen: tx('Beschreibungen'),
-  lernlauf: tx('Lernlauf'), beobachtungen: tx('Beobachtungen auswerten'), uebertrag: tx('Übertrag (vor dem Protokoll)') };
+  entscheidung: tx('Entscheidung'), lernlauf: tx('Lernlauf'), beobachtungen: tx('Beobachtungen auswerten'), uebertrag: tx('Übertrag (vor dem Protokoll)') };
 const kiZweck = (q) => KI_ZWECK[q.zweck] || KI_ZWECK[q.bereich] || q.zweck || q.bereich;
 const ganz = (n) => Math.round(n).toLocaleString(LOCALE);
 // „OpenAI · gpt-x · 4.210 ein / 380 aus · 2 Suchen · 0,023 $“ – nur was bekannt ist und nicht 0.
@@ -3812,7 +3817,7 @@ async function zeigeErsteinrichtung() {
   }
   function vorgabe(slot, z) {
     const a = art(z) || {}, b = slot === 'ausweich' ? 'transkription' : slot;
-    const vorschlag = a.vorschlag?.[b] || '';
+    const vorschlag = z.vorschlag?.[b] || ''; // OpenRouter: Vorgabe aus dem Katalog, den der Server beim Verbinden abruft
     const e = { zugang: z.id, modell: a.modelle?.[b]?.[0]?.id || vorschlag, websuche: [] };
     if (b === 'auswertung' || b === 'recherche') e.websuche = a.suche ? ['anbieter'] : searx().map((x) => x.id);
     kiPreiseAusKatalog({ zugaenge: ki.zugaenge, arten: d.arten }, b, e);
@@ -3866,9 +3871,10 @@ async function zeigeErsteinrichtung() {
     }
     if (b === 'auswertung' || b === 'recherche') {
       const sx = searx();
-      html += T`<p class="feldname">${tx('Websuche')}</p><div class="mehrfach">
-        ${a?.suche ? T`<label class="schalter"><input type="checkbox" data-slot="${slot}" data-suche="anbieter"${e.websuche?.includes('anbieter') ? ' checked' : ''}> ${tx('Suche des Anbieters')}</label>` : ''}
-        ${sx.map((x) => T`<label class="schalter"><input type="checkbox" data-slot="${slot}" data-suche="${esc(x.id)}"${e.websuche?.includes(x.id) ? ' checked' : ''}> ${esc(x.name)}</label>`).join('')}</div>
+      if (a?.suche && !e.websuche?.includes('anbieter')) e.websuche = ['anbieter', ...(e.websuche || [])]; // Suche des Anbieters immer
+      html += sx.length ? T`<p class="feldname">${a?.suche ? tx('Zusätzliche Websuche') : tx('Websuche')}</p><div class="mehrfach">
+        ${sx.map((x) => T`<label class="schalter"><input type="checkbox" data-slot="${slot}" data-suche="${esc(x.id)}"${e.websuche?.includes(x.id) ? ' checked' : ''}> ${esc(x.name)}</label>`).join('')}</div>` : '';
+      html += T`
         ${!a?.suche && !sx.length ? T`<p class="leise hilfe">${tx('Ein lokales Modell sucht nicht selbst im Web; dafür einen SearXNG-Anbieter hinzufügen.')}</p>` : ''}
         ${a?.cloud && !katalog && !a.preise_optional && e.websuche?.includes('anbieter') ? zahl('preis_suche', 'Preis Websuche (USD je Aufruf)') : ''}`;
     }
@@ -4132,7 +4138,7 @@ async function zeigeErsteinrichtung() {
       male();
     } else if (el.dataset.suche) {
       const e = ki.wahl[el.dataset.slot];
-      e.websuche = [...form.querySelectorAll(T`[data-slot="${el.dataset.slot}"][data-suche]:checked`)].map((c) => c.dataset.suche);
+      e.websuche = [...(e.websuche?.includes('anbieter') ? ['anbieter'] : []), ...[...form.querySelectorAll(T`[data-slot="${el.dataset.slot}"][data-suche]:checked`)].map((c) => c.dataset.suche)];
       kiPreiseAusKatalog(dk, el.dataset.slot === 'ausweich' ? 'transkription' : el.dataset.slot, e);
       male();
     } else if (el.dataset.slot && el.dataset.k === 'modell' && el.tagName === 'SELECT') {
@@ -4203,6 +4209,7 @@ async function zeigeErsteinrichtung() {
       const r = await api('/api/ersteinrichtung/verbinden/openrouter/fertig', { method: 'POST', body: { code, oauth_code: oauthCode, state } });
       if (!neu || neu.state !== state) return;
       neu.schluessel = r.key;
+      neu.vorschlag = r.vorschlag || {};
       try {
         const m = await api('/api/ersteinrichtung/openai', { method: 'POST', body: { code, art: neu.art, base_url: '', key: r.key } });
         if (m.ok && m.modelle) neu.modelle = m.modelle;
@@ -4412,8 +4419,9 @@ const KI_SEITEN = {
   auswertung: { bereich: 'auswertung', titel: 'Auswertung & Sortierung', text: 'Notizen auswerten, in Gruppen und Listen einsortieren, Lernlauf. Braucht strukturierte Ausgabe (JSON-Schema).' },
   webrecherche: { bereich: 'recherche', gruppe: 'Webrecherche', titel: 'Webrecherche', text: 'Planungen mit Antwort und Trailer-Suche.' },
   bilder: { bereich: 'bilder', titel: 'Bilder', text: 'Erklärende Bilder zu Notizen und Planungen. Ohne Eintrag erzeugt die KI keine Bilder.' },
+  entscheidung: { bereich: 'entscheidung', gruppe: 'Entscheidung', titel: 'Entscheidung', text: 'Wählt schnell aus fester Auswahl: Termin oder Notiz, Inhalt, Liste einer Notiz oder Planung, Fortsetzung einer Planung. Nur Entscheidungsmodelle; unsicher oder ohne Eintrag entscheidet die KI wie bisher.' },
 };
-const KI_GRUPPEN = { zugaenge: 'KI-Zugänge', transkription: 'Transkription', webrecherche: 'Webrecherche' };
+const KI_GRUPPEN = { zugaenge: 'KI-Zugänge', transkription: 'Transkription', webrecherche: 'Webrecherche', entscheidung: 'Entscheidung' };
 const CLOUDFELDER = [];
 // Anbieter-Arten kommen vom Server (config.ProviderTypes): Name, Adresse, Schlüssel, Bereiche, Websuche, Modellauswahl.
 const kiArt = (d, z) => d.arten?.find((a) => a.id === z?.art);
@@ -4440,7 +4448,7 @@ async function zeigeKI() {
     const name = erster && (z ? z.name : tx(KI_SONDER[erster.zugang] || erster.zugang));
     return T`<a class="karte kibereich" href="/status/ki/${seiteName}"><span class="kibereichtext"><strong>${esc(tx(s.titel))}</strong>
       ${erster ? T`<span><span class="kimarke">${esc(name)}</span> ${esc(erster.modell || '')}${liste.length > 1 ? T` <span class="leise">${tx('+{0} weitere', liste.length - 1)}</span>` : ''}</span>`
-        : T`<span class="${s.bereich === 'bilder' ? 'leise' : 'schlecht'}">${s.bereich === 'bilder' ? tx('Aus') : tx('Kein Anbieter')}</span>`}
+        : T`<span class="${['bilder', 'entscheidung'].includes(s.bereich) ? 'leise' : 'schlecht'}">${['bilder', 'entscheidung'].includes(s.bereich) ? tx('Aus') : tx('Kein Anbieter')}</span>`}
       <span class="leise">${esc(tx(s.text))}</span></span><span class="kipfeil" aria-hidden="true">›</span></a>`;
   };
   seite.innerHTML = T`${statusReiter('ki')}<h1>KI</h1>
@@ -4583,7 +4591,7 @@ function kiZugangFenster(d, alt) {
   kiFensterRuhig(dlg);
 }
 
-// Felder eines Eintrags im Fenster: Zugang, Modell (Vorschläge aus dem letzten Prüfen), bei Cloud-Anbietern Preise
+// Felder eines Eintrags auf seiner Seite: Zugang, Modell (Vorschläge aus dem letzten Prüfen), bei Cloud-Anbietern Preise
 // und Monatslimit, bei Auswertung und Recherche die Websuche.
 function kiEintragFelder(d, bereich, e) {
   const id = 'ke';
@@ -4596,20 +4604,33 @@ function kiEintragFelder(d, bereich, e) {
   const searx = d.zugaenge.filter((x) => kiArt(d, x)?.api === 'searxng');
   return T`    ${art?.modelle?.[bereich] ? T`<label for="${id}-modell">Modell</label><select id="${id}-modell" data-k="modell">${art.modelle[bereich].map((m) => T`<option value="${esc(m.id)}"${m.id === e.modell ? ' selected' : ''}>${esc(tx(m.name))}${kiPreisText(m) ? ` · ${esc(kiPreisText(m))}` : ''}</option>`).join('')}</select>
       ${art.preise_optional ? '' : T`<p class="leise hilfe">${tx('Ungefähre Preise laut Anbieter; beim Wechsel übernommen, unten anpassbar.')}</p>`}`
-    : z ? T`<label for="${id}-modell">Modell *</label><input type="text" id="${id}-modell" data-k="modell" value="${esc(e.modell || '')}" list="${id}-liste" autocomplete="off" spellcheck="false">
+    : z ? T`${art?.oauth === 'openrouter' ? kiAuswahl(d, bereich, e, suche) : ''}<label for="${id}-modell">${tx('Modell *')}</label><input type="text" id="${id}-modell" data-k="modell" value="${esc(e.modell || '')}" list="${id}-liste" autocomplete="off" spellcheck="false">
       <datalist id="${id}-liste">${(kiModelle(z.id)?.modelle || []).map((m) => T`<option value="${esc(m)}">`).join('')}</datalist>
       ${kiModelle(z.id) ? '' : T`<p class="leise hilfe">${esc(tx('Keine Modelle gemerkt'))} – <a href="/status/ki/zugaenge">${esc(tx('unter Zugänge prüfen'))}</a></p>`}` : ''}
+    ${kiAufwandFeld(d, bereich, e, z)}
     ${e.zugang === 'pebble' ? T`<p class="leise hilfe">${tx('Nur als erster Eintrag; fehlt der Text, übernehmen die folgenden.')}</p>` : ''}
     ${preise && bereich === 'transkription' ? zahl('preis_minute', 'Preis (USD je Minute)') : ''}
     ${preise && bereich === 'bilder' ? zahl('preis_bild', 'Preis (USD je Bild)') : ''}
     ${preise && bereich !== 'transkription' && bereich !== 'bilder' ? T`${zahl('preis_ein', 'Preis Eingabe (USD je 1 Mio. Tokens)')}${zahl('preis_aus', 'Preis Ausgabe (USD je 1 Mio. Tokens)')}` : ''}
-    ${suche && z ? T`<p class="feldname">Websuche</p><div class="mehrfach">
-      ${art?.suche ? T`<label class="schalter"><input type="checkbox" data-suche="anbieter"${e.websuche?.includes('anbieter') ? ' checked' : ''}> ${tx('Suche des Anbieters')}</label>` : ''}
-      ${searx.map((x) => T`<label class="schalter"><input type="checkbox" data-suche="${esc(x.id)}"${e.websuche?.includes(x.id) ? ' checked' : ''}> ${esc(x.name)}</label>`).join('')}</div>
-      ${!art?.suche && !searx.length ? T`<p class="leise hilfe">${tx('Ein lokales Modell sucht nicht selbst im Web; dafür einen SearXNG-Anbieter anlegen.')}</p>` : ''}
-      ${preise && e.websuche?.includes('anbieter') ? zahl('preis_suche', 'Preis Websuche (USD je Aufruf)') : ''}` : ''}
+    ${suche && z && searx.length ? T`<p class="feldname">${art?.suche ? tx('Zusätzliche Websuche') : tx('Websuche')}</p><div class="mehrfach">
+      ${searx.map((x) => T`<label class="schalter"><input type="checkbox" data-suche="${esc(x.id)}"${e.websuche?.includes(x.id) ? ' checked' : ''}> ${esc(x.name)}</label>`).join('')}</div>` : ''}
+    ${suche && z && !art?.suche && !searx.length ? T`<p class="leise hilfe">${tx('Ein lokales Modell sucht nicht selbst im Web; dafür einen SearXNG-Anbieter anlegen.')}</p>` : ''}
+    ${suche && preise && art?.suche ? zahl('preis_suche', 'Preis Websuche (USD je Aufruf)') : ''}
     ${cloud && (preise || art?.meldet_kosten) ? T`<label for="${id}-limit">${tx('Kostenlimit im Monat (USD)')}</label><input type="text" id="${id}-limit" data-k="limit_monat" inputmode="decimal" value="${e.limit_monat || ''}" placeholder="${esc(tx('ohne'))}" autocomplete="off">
       <p class="leise hilfe">${tx('Diesen Monat: {0}. Ist das Limit erreicht, übernimmt der nächste Eintrag.', kiUSD(d.verbrauch[e.id]))}</p>` : ''}`;
+}
+
+// Nachdenken je Eintrag (nur Textbereiche): Vorgabe, aus, wenig, mittel, viel. Bei OpenRouter nur für Modelle, die laut
+// Katalog nachdenken können; ein Modell außerhalb des Katalogs zeigt das Feld (unbekannt).
+const KI_AUFWAND = [['', 'Vorgabe'], ['none', 'Aus'], ['low', 'Wenig'], ['medium', 'Mittel'], ['high', 'Viel']];
+function kiAufwandFeld(d, bereich, e, z) {
+  // Nur wo der Dienst es mitschickt: Responses-API (OpenAI, Grok, Muse), Gemini, OpenRouter.
+  const art = kiArt(d, z);
+  if (!z || bereich === 'transkription' || bereich === 'bilder' || !(art?.api === 'responses' || art?.id === 'gemini' || art?.oauth === 'openrouter')) return '';
+  const m = art.oauth === 'openrouter' ? d.openrouter_katalog?.bereiche?.[bereich]?.find((x) => x.id === e.modell) : null;
+  if (m && !m.denkt) return T`<p class="leise hilfe">${tx('Dieses Modell denkt nicht nach.')}</p>`;
+  return T`<label for="ke-aufwand">${tx('Nachdenken')}</label><select id="ke-aufwand" data-k="aufwand">${KI_AUFWAND.map(([v, n]) => T`<option value="${v}"${(e.aufwand || '') === v ? ' selected' : ''}>${esc(tx(n))}</option>`).join('')}</select>
+    <p class="leise hilfe">${tx('Mehr Nachdenken: genauer, aber langsamer und teurer. Vorgabe = Einstellung des Dienstes bzw. des Modells.')}</p>`;
 }
 
 // Alle Einträge eines Bereichs: gespeicherte und je passendem Zugang, der noch fehlt, ein inaktiver Platzhalter –
@@ -4622,8 +4643,189 @@ function kiAlleEintraege(d, bereich) {
 // Zu speichern: alles außer Platzhaltern, die inaktiv geblieben sind.
 const kiZuSpeichern = (liste) => liste.filter((e) => !(e.neu && e.inaktiv)).map(({ neu, ...e }) => e);
 
+// Modellwahl bei OpenRouter: alle passenden Modelle des Bereichs aus dem Katalog, den der Server bei OpenRouter abruft
+// und ablegt (Preise, Kontext, Datenschutz/ZDR). Ohne Suchtext 5 Modelle über die Preisspanne, mit Suchtext bis zu 10
+// Treffer – gesucht wird nur in den geladenen Daten. Der Schalter Datenschutz zeigt nur Modelle ohne Datenspeicherung
+// und erzwingt das bei den Anfragen. Die Stufe ergibt sich aus dem Preisrang im Bereich.
+const KI_STUFEN = ['Günstig', 'Mittel', 'Teuer'];
+// Schild für „ohne Datenspeicherung“.
+const KI_SCHILD = T('<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7 3v5c0 4.5-3 8.3-7 10-4-1.7-7-5.5-7-10V6z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M8.5 12l2.5 2.5 4.5-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>');
+// Bis zu n Modelle gleichmäßig über die Preisspanne (wie orSpread im Server).
+function kiStreuen(liste, n) {
+  if (liste.length <= n) return liste;
+  return Array.from({ length: n }, (_, i) => liste[Math.floor((i * (liste.length - 1) + (n - 1) / 2) / (n - 1))]);
+}
+// Wie kiStreuen über die ganze Liste, aber stabil beim Filtern: passt ein gestreutes Modell nicht (z. B. speichert
+// Daten), rückt das nächstgelegene passende nach; schon gezeigte passende bleiben. Das gewählte Modell ist immer dabei
+// (es ersetzt das nach Preis nächste).
+function kiStreuenStabil(alle, passt, n, gewaehlt) {
+  const frei = alle.map((m, k) => k).filter((k) => passt(alle[k]));
+  if (frei.length <= n) return frei.map((k) => alle[k]);
+  const plaetze = kiStreuen(alle.map((m, k) => k), n);
+  const genommen = new Set(plaetze.filter((k) => passt(alle[k])));
+  const out = plaetze.map((k) => {
+    if (passt(alle[k])) return k;
+    const naechst = frei.filter((x) => !genommen.has(x)).sort((a, b) => Math.abs(a - k) - Math.abs(b - k))[0];
+    genommen.add(naechst);
+    return naechst;
+  });
+  const g = alle.findIndex((m) => m.id === gewaehlt);
+  if (g >= 0 && passt(alle[g]) && !out.includes(g)) {
+    const i = out.reduce((b, k, j) => (Math.abs(k - g) < Math.abs(out[b] - g) ? j : b), 0);
+    out[i] = g;
+  }
+  return [...new Set(out)].sort((a, b) => a - b).map((k) => alle[k]);
+}
+// Modelle des Bereichs zur Auswahl: gibt es Bewertungen für den Bereich, nur die bewerteten Modelle (das gewählte
+// bleibt dabei, auch ohne Bewertung); sonst der ganze Katalog.
+function kiKatalog(d, bereich, gewaehlt) {
+  const alle = d.openrouter_katalog?.bereiche?.[bereich] || [];
+  if (!d.modell_analyse || !KI_BEWERTUNG[bereich]) return alle;
+  const mit = alle.filter((m) => kiWerte(d, bereich, m.id) || m.id === gewaehlt);
+  return mit.some((m) => kiWerte(d, bereich, m.id)) ? mit : alle;
+}
+const kiNurBewertet = (d, bereich) => kiKatalog(d, bereich).length < (d.openrouter_katalog?.bereiche?.[bereich] || []).length;
+// Vorgabe beim Öffnen ohne Modell: das mittlere der gestreuten Modelle ('' = kein Katalog).
+function kiVorgabe(d, bereich) {
+  const s = kiStreuen(kiKatalog(d, bereich), 5);
+  return s.length ? s[Math.floor(s.length / 2)].id : '';
+}
+function kiAuswahl(d, bereich, e, suche) {
+  return T`<fieldset class="kiauswahl"><legend class="feldname">${tx('Modellwahl')}</legend>
+    <label class="schalter"><input type="checkbox" data-datenschutz="1"${e.datenschutz ? ' checked' : ''}> ${tx('Datenschutz: nur Anbieter ohne Datenspeicherung')}</label>
+    ${d.openrouter_katalog ? T`<div class="kisuchzeile"><input type="search" data-ki-suche="1" value="${esc(e.suche || '')}" placeholder="${esc(tx('Modell suchen …'))}" aria-label="${esc(tx('Modell suchen'))}" autocomplete="off" spellcheck="false">
+      ${kiFilterKennzahlen(d, bereich).length ? T`<button type="button" class="btn kifilterknopf${kiFilterAktiv(e) ? ' aktiv' : ''}" data-ki-filter="1" aria-expanded="${e.filterOffen ? 'true' : 'false'}" aria-controls="ke-filter" aria-label="${esc(tx('Filter'))}" title="${esc(tx('Filter'))}">${KI_FILTER_ICON}${kiFilterAktiv(e) ? T`<span class="kifilterzahl">${kiFilterAktiv(e)}</span>` : ''}</button>` : ''}</div>
+      ${e.filterOffen ? kiFilterFeld(d, bereich, e) : ''}` : ''}
+    <div class="kiauswahlliste">${kiAuswahlListe(d, bereich, e)}</div></fieldset>`;
+}
+// Filter der Modellwahl: je Kennzahl des Bereichs ein Schieber „mindestens n von 5 Punkten“ (0 = alle); Modelle ohne
+// gemessenen Wert fallen bei gesetztem Schieber heraus. Nur auf der Seite, wird nicht gespeichert.
+const kiFilterKennzahlen = (d, bereich) => (d.modell_analyse && KI_BEWERTUNG[bereich] ? KI_BEWERTUNG[bereich][1].filter((k) => kiRang(d, bereich, k).length) : []);
+const kiFilterAktiv = (e) => Object.values(e.filter || {}).filter((n) => n > 0).length;
+// Passt ein Modell zu Datenschutz, Filtern und Suchwörtern?
+function kiPasst(d, bereich, e, mitSuche) {
+  const woerter = mitSuche ? (e.suche || '').toLowerCase().split(/\s+/).filter(Boolean) : [];
+  const filter = Object.entries(e.filter || {}).filter(([, n]) => n > 0);
+  return (m) => (!e.datenschutz || m.zdr)
+    && filter.every(([k, n]) => { const v = kiWerte(d, bereich, m.id)?.[k]; return v != null && kiStufe(d, bereich, k, v) >= n; })
+    && woerter.every((w) => T`${m.name} ${m.id}`.toLowerCase().includes(w));
+}
+const kiFilterTreffer = (d, bereich, e) => tx('{0} Modelle passen', kiKatalog(d, bereich, e.modell).filter(kiPasst(d, bereich, e, true)).length);
+const kiFilterWert = (n) => (n > 0 ? tx('mind. {0} von 5', n) : tx('alle'));
+function kiFilterFeld(d, bereich, e) {
+  return T`<div class="kifilter" id="ke-filter">
+    ${kiFilterKennzahlen(d, bereich).map((k) => { const n = e.filter?.[k] || 0; return T`<div class="kifilterzeile">
+      <label for="ke-min-${k}"><span class="kipunkteicon">${KI_KENNZAHLEN[k].icon}</span>${tx(KI_KENNZAHLEN[k].name)}</label>
+      <input type="range" id="ke-min-${k}" data-ki-min="${k}" min="0" max="5" step="1" value="${n}" aria-valuetext="${esc(kiFilterWert(n))}">
+      <output for="ke-min-${k}" data-ki-min-wert="${k}">${kiFilterWert(n)}</output></div>`; }).join('')}
+    <div class="kifilterfuss"><strong class="kifiltertreffer" aria-live="polite">${kiFilterTreffer(d, bereich, e)}</strong>
+      <button type="button" class="btn" data-ki-filter-weg="1"${kiFilterAktiv(e) ? '' : ' disabled'}>${tx('Zurücksetzen')}</button></div></div>`;
+}
+function kiAuswahlListe(d, bereich, e) {
+  const kat = d.openrouter_katalog;
+  if (!kat) return T`<p class="hinweis warn">${tx('Modelle von OpenRouter noch nicht geladen – unter Anbieter „Prüfen“.')}</p>`;
+  const alle = kiKatalog(d, bereich, e.modell);
+  const rang = new Map(alle.map((m, k) => [m.id, k]));
+  const stufe = (m) => (alle.length > 1 ? KI_STUFEN[Math.min(KI_STUFEN.length - 1, Math.floor((rang.get(m.id) * KI_STUFEN.length) / alle.length))] : '');
+  const kontext = (n) => (n >= 1e6 ? tx('{0} Mio. Tokens Kontext', (n / 1e6).toLocaleString(LOCALE, { maximumFractionDigits: 1 })) : tx('{0} Tsd. Tokens Kontext', Math.round(n / 1000)));
+  const passend = alle.filter(kiPasst(d, bereich, e, false));
+  const woerter = (e.suche || '').toLowerCase().split(/\s+/).filter(Boolean);
+  const gezeigt = woerter.length ? alle.filter(kiPasst(d, bereich, e, true)).slice(0, 10) : kiStreuenStabil(alle, kiPasst(d, bereich, e, false), 5, e.modell);
+  // Karte: Name links, rechts zwei feste Plätze – Schild (ohne Datenspeicherung, sonst leer) und Preisstufe als $ $$ $$$;
+  // darunter Preis und Kontext. Das Optionsfeld ist unsichtbar, die gewählte Karte ist hervorgehoben.
+  const preisIcon = (m) => {
+    const n = KI_STUFEN.indexOf(stufe(m)) + 1;
+    return T`<span class="kistufe" title="${esc(tx(stufe(m)))}" aria-label="${esc(tx(stufe(m)))}">${'<b>$</b>'.repeat(n)}${'<i>$</i>'.repeat(KI_STUFEN.length - n)}</span>`;
+  };
+  const zeile = (m) => T`<label class="kiwahl"><input type="radio" class="kiwahlradio" name="ke-auswahl" data-auswahl="${esc(m.id)}"${m.id === e.modell ? ' checked' : ''}>
+      <strong class="kiwahlname">${esc(m.name)}</strong>
+      <span class="kiwahlicons">${m.zdr ? T`<span class="kischild" title="${esc(tx('ohne Speicherung'))}" aria-label="${esc(tx('ohne Speicherung'))}">${KI_SCHILD}</span>` : '<span class="kischild"></span>'}${preisIcon(m)}</span>
+      <span class="kiwahlinfo leise">${esc(kiPreisText(m))}${m.kontext ? T` · ${esc(kontext(m.kontext))}` : ''}</span>
+      ${kiPunkte(d, bereich, m.id)}</label>`;
+  const gewaehlt = alle.find((m) => m.id === e.modell);
+  return T`${e.datenschutz && e.modell && !gewaehlt?.zdr ? T`<p class="hinweis warn">${tx('Für das gewählte Modell ist keine Datenspeicherung ausgeschlossen – ein Modell unten wählen.')}</p>` : ''}
+    ${gezeigt.length ? gezeigt.map(zeile).join('') : T`<p class="leise">${tx('Kein passendes Modell.')}</p>`}
+    <p class="leise hilfe">${tx('{0} Modelle, laut OpenRouter vom {1}.', passend.length, new Date(kat.zeit).toLocaleDateString(LOCALE))}${kiNurBewertet(d, bereich) ? ` ${tx('Nur Modelle mit Bewertung.')}` : ''}${woerter.length && gezeigt.length === 10 ? ` ${tx('Nur die ersten 10 Treffer.')}` : ''}</p>
+    ${kiPunkteLegende(d, bereich)}`;
+}
+
+// Bewertungen von Artificial Analysis je OpenRouter-Modell (Server: modellanalyse.go, Stand höchstens 24 h alt).
+// Je Bereich bis zu drei Kennzahlen als 1–5 Punkte: Rang unter allen Modellen des Bereichs, die den Wert haben
+// (kein Wert = nicht gemessen, dann fehlt die Kennzahl). Die Zahl steht im Hover; darunter erklärt eine Legende die Symbole.
+const KI_ICON = (pfade) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${pfade}</svg>`;
+const KI_FILTER_ICON = KI_ICON('<path d="M3 5h18l-7 8.5V19l-4 2v-7.5z"/>');
+const KI_KENNZAHLEN = {
+  intelligenz: { name: 'Intelligenz', text: 'Wie gut das Modell schwierige Aufgaben löst.', zahl: (v) => tx('Index {0}', kiZ(v, 1)),
+    icon: KI_ICON('<path d="M12 5.5A3 3 0 0 0 6.6 4.2 3 3 0 0 0 4 8.5a3.2 3.2 0 0 0 .6 5.6A3 3 0 0 0 7 18.6 3 3 0 0 0 12 19.5z"/><path d="M12 5.5a3 3 0 0 1 5.4-1.3A3 3 0 0 1 20 8.5a3.2 3.2 0 0 1-.6 5.6 3 3 0 0 1-2.4 4.5 3 3 0 0 1-5 .9"/><path d="M12 5.5v14"/><path d="M8.5 9.5c1 0 2 .6 2 2"/><path d="M15.5 13c-1 0-2 .6-2 2"/>') },
+  token_je_s: { name: 'Tempo', text: 'Wie schnell der Text erscheint (Token je Sekunde).', zahl: (v) => tx('{0} Token/s', kiZ(v)),
+    icon: KI_ICON('<circle cx="15.5" cy="3.8" r="1.8"/><path d="M14 7.5l-3 5.5"/><path d="M11 13l3.5 3-1.2 5"/><path d="M11 13l-3.5 2.2-2.5 3.8"/><path d="M13.6 8.2l3.4 2.6 3-.8"/><path d="M13.6 8.2L9.5 8.6 7.5 11"/><path d="M1.5 9h3"/><path d="M1 13h2.5"/>') },
+  erste_antwort_s: { name: 'Antwortzeit', text: 'Wartezeit bis zur ersten Antwort, inklusive Nachdenken – kürzer ist besser.', zahl: (v) => tx('Antwort nach {0} s', kiZ(v, 1)), weniger: true,
+    icon: KI_ICON('<circle cx="12" cy="14" r="7"/><path d="M12 14v-3.5"/><path d="M10 2.5h4"/><path d="M12 2.5V7"/><path d="M18.2 7.8l1.5-1.5"/>') },
+  entscheidung_index: { name: 'Treffsicherheit', text: 'Wie oft das Modell richtig entscheidet.', zahl: (v) => tx('Index {0}', kiZ(v, 1)),
+    icon: KI_ICON('<path d="M12 3v18"/><path d="M5 5h10.5L18 7.5 15.5 10H5z"/><path d="M19 12H8.5L6 14.5 8.5 17H19z"/>') },
+  zeit_je_aufgabe_s: { name: 'Antwortzeit', text: 'Zeit je Entscheidung – kürzer ist besser.', zahl: (v) => tx('{0} s je Entscheidung', kiZ(v, 1)), weniger: true,
+    icon: KI_ICON('<circle cx="12" cy="14" r="7"/><path d="M12 14v-3.5"/><path d="M10 2.5h4"/><path d="M12 2.5V7"/><path d="M18.2 7.8l1.5-1.5"/>') },
+  elo: { name: 'Bildqualität', text: 'Wie oft Menschen das Bild im Vergleich vorziehen (Elo).', zahl: (v) => tx('Elo {0}', kiZ(v)),
+    icon: KI_ICON('<path d="M8 21h8"/><path d="M12 17v4"/><path d="M7 4h10v5a5 5 0 0 1-10 0z"/><path d="M17 5h3v2a3 3 0 0 1-3 3"/><path d="M7 5H4v2a3 3 0 0 0 3 3"/>') },
+  wer_index: { name: 'Genauigkeit', text: 'Wie wenige Wörter falsch erkannt werden – weniger Fehler ist besser.', zahl: (v) => tx('Fehlerquote {0} %', kiZ(v, 1)), weniger: true,
+    icon: KI_ICON('<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1"/>') },
+};
+const KI_BEWERTUNG = {
+  kurztitel: ['text', ['intelligenz', 'token_je_s', 'erste_antwort_s']], auswertung: ['text', ['intelligenz', 'token_je_s', 'erste_antwort_s']],
+  recherche: ['text', ['intelligenz', 'token_je_s', 'erste_antwort_s']], entscheidung: ['entscheidung', ['entscheidung_index', 'zeit_je_aufgabe_s']],
+  bilder: ['bild', ['elo']], transkription: ['transkription', ['wer_index']],
+};
+const kiZ = (v, n = 0) => Number(v).toLocaleString(LOCALE, { maximumFractionDigits: n });
+const kiWerte = (d, bereich, id) => d.modell_analyse?.modelle?.[id]?.[KI_BEWERTUNG[bereich]?.[0]];
+// Rangliste je Bereich und Kennzahl (gemerkt je geladenem Katalog): sortierte Werte aller Modelle des Bereichs.
+const kiRangCache = new WeakMap();
+function kiRang(d, bereich, k) {
+  let c = kiRangCache.get(d);
+  if (!c) kiRangCache.set(d, (c = {}));
+  const schluessel = `${bereich}|${k}`;
+  if (!c[schluessel]) {
+    const werte = kiKatalog(d, bereich).map((m) => kiWerte(d, bereich, m.id)?.[k]).filter((v) => v != null);
+    c[schluessel] = werte.sort((a, b) => (KI_KENNZAHLEN[k].weniger ? b - a : a - b)); // aufsteigend nach „besser“
+  }
+  return c[schluessel];
+}
+// Punkte 1–5: Anteil der Modelle, die schlechter oder gleich sind.
+function kiStufe(d, bereich, k, v) {
+  const liste = kiRang(d, bereich, k);
+  if (liste.length < 2) return 3;
+  const besser = (a, b) => (KI_KENNZAHLEN[k].weniger ? a <= b : a >= b);
+  const n = liste.filter((x) => besser(v, x)).length;
+  return Math.max(1, Math.min(5, Math.ceil((n / liste.length) * 5)));
+}
+function kiPunkte(d, bereich, id) {
+  const w = kiWerte(d, bereich, id);
+  if (!w) return '';
+  const teile = KI_BEWERTUNG[bereich][1].filter((k) => w[k] != null).map((k) => {
+    const z = KI_KENNZAHLEN[k], n = kiStufe(d, bereich, k, w[k]), titel = `${tx(z.name)}: ${z.zahl(w[k])} – ${tx('{0} von 5', n)}`;
+    return T`<span class="kipunkte" title="${esc(titel)}" aria-label="${esc(titel)}"><span class="kipunkteicon">${z.icon}</span><span class="kipunktereihe">${'<i class="an"></i>'.repeat(n)}${'<i></i>'.repeat(5 - n)}</span></span>`;
+  });
+  return teile.length ? T`<span class="kiwahlwerte">${teile.join('')}</span>` : '';
+}
+// Kurzer Text des ersten Werts (Bereichsseite, am Eintrag).
+function kiBewertungText(d, bereich, id) {
+  const w = kiWerte(d, bereich, id);
+  const k = w && KI_BEWERTUNG[bereich][1].find((x) => w[x] != null);
+  return k ? `${tx(KI_KENNZAHLEN[k].name)} ${tx('{0} von 5', kiStufe(d, bereich, k, w[k]))}` : '';
+}
+// Legende unter der Liste: je Symbol des Bereichs eine Erklärung, dazu die Quelle (Namensnennung ist Pflicht).
+function kiPunkteLegende(d, bereich) {
+  const a = d.modell_analyse;
+  if (!a || !KI_BEWERTUNG[bereich]) return '';
+  return T`<div class="kilegende leise">
+    ${KI_BEWERTUNG[bereich][1].map((k) => T`<p><span class="kipunkteicon">${KI_KENNZAHLEN[k].icon}</span><span><strong>${tx(KI_KENNZAHLEN[k].name)}</strong> – ${tx(KI_KENNZAHLEN[k].text)}</span></p>`).join('')}
+    <p class="hilfe">${tx('Punkte: Rang unter den Modellen dieses Bereichs (5 = beste). Zahl beim Darüberfahren; ohne Punkte = nicht gemessen.')}</p>
+    <p class="hilfe">${tx('Bewertungen: {0}, Stand {1}.', T`<a href="${esc(a.quelle_url)}" target="_blank" rel="noopener">${esc(a.quelle)}</a>`, new Date(a.stand).toLocaleDateString(LOCALE))}</p></div>`;
+}
+
 // Preise eines Modells der OpenAI-Auswahl als kurzer Text.
 function kiPreisText(m) {
+  if (m.preis_bild_mio) return tx('{0} $ je 1 Mio. Bild-Tokens', m.preis_bild_mio);
+  if (m.preis_ein && !m.preis_aus && !m.preis_minute && !m.preis_bild) return tx('{0} $ je 1 Mio. Eingabe-Tokens', m.preis_ein);
   if (!m.preis_minute && !m.preis_bild && !m.preis_ein && !m.preis_aus) return '';
   if (m.preis_minute) return tx('ca. {0} $/Min', m.preis_minute);
   if (m.preis_bild) return tx('ca. {0} $/Bild', m.preis_bild);
@@ -4640,7 +4842,7 @@ function kiPreiseAusKatalog(d, bereich, e) {
 // Name eines Eintrags (Zugang oder Sondereintrag).
 const kiEintragName = (d, e) => { const z = d.zugaenge.find((x) => x.id === e.zugang); return z ? z.name : tx(KI_SONDER[e.zugang] || e.zugang || 'Neuer Eintrag'); };
 
-// Schreibt die Einträge eines Bereichs (ganz) und startet den Dienst neu; Fehler zeigt das Fenster selbst.
+// Schreibt die Einträge eines Bereichs (ganz) und startet den Dienst neu; Fehler zeigt die aufrufende Seite.
 async function kiSpeichereBereich(d, bereich, liste, werte = {}) {
   const r = await api('/api/ki', { method: 'PUT', body: { zugaenge: d.zugaenge.map((z) => ({ id: z.id, name: z.name, art: z.art, adresse: z.adresse })),
     bereiche: { ...d.bereiche, [bereich]: liste }, werte } });
@@ -4654,67 +4856,80 @@ async function kiNachSpeichern(r) {
   await warteAufNeustart();
 }
 
-// Gemeinsames Fenster: Inhalt malen, Fehler zeigen, Speichern sperrt die Knöpfe.
-function kiFenster(titel, inhalt, { speichern, entfernen } = {}) {
-  const dlg = document.createElement('dialog');
-  dlg.className = 'tagdialog';
-  dlg.tabIndex = -1; // Fokus aufs Fenster, nicht aufs erste Feld (sonst springt die Tastatur auf)
-  dlg.autofocus = true;
-  dlg.innerHTML = T`<form class="einstellungen" novalidate><div class="kikopf"><h2>${esc(titel)}</h2><button type="button" class="kizu" data-zu="1" aria-label="${esc(tx('Schließen'))}">×</button></div><div class="kifensterinhalt"></div>
-    <p class="hinweis schlecht" hidden></p>
-    <div class="leiste"><button type="submit" class="btn haupt">Speichern</button><button type="button" class="btn" data-zu="1">Abbrechen</button></div>
-    ${entfernen ? T`<div class="leiste"><button type="button" class="btn gefahr" data-weg="1">Entfernen</button></div>` : ''}</form>`;
-  const koerper = dlg.querySelector('.kifensterinhalt'), fehler = dlg.querySelector('.hinweis');
-  const male = () => { koerper.innerHTML = inhalt(); };
-  const laufe = async (fn) => {
-    fehler.hidden = true;
-    dlg.querySelectorAll('button').forEach((b) => { b.disabled = true; });
-    try {
-      await fn();
-      dlg.close();
-      if (aktuell?.name === 'kiBereich') zeigeKIBereich(aktuell.arg);
-    } catch (f) {
-      fehler.textContent = f.message;
-      fehler.hidden = false;
-      dlg.querySelectorAll('button').forEach((b) => { b.disabled = false; });
-      male();
-    }
-  };
-  dlg.querySelector('form').onsubmit = (ev) => { ev.preventDefault(); laufe(speichern); };
-  dlg.addEventListener('click', (ev) => {
-    const b = ev.target.closest('button[type=button]');
-    if (b?.dataset.zu) dlg.close();
-    else if (b?.dataset.weg && confirm(tx('Eintrag entfernen?'))) laufe(entfernen);
-  });
-  dlg.onclose = () => dlg.remove();
-  male();
-  document.body.append(dlg);
-  dlg.showModal();
-  kiFensterRuhig(dlg);
-  return { dlg, male };
-}
-
-// Fenster eines Eintrags: bearbeiten oder neu (kommt ans Ende der aktiven).
-function kiEintragFenster(d, bereich, alle, alt) {
+// Seite eines Eintrags (/status/ki/<bereich>/<zugang>): jeder Zugang steht genau einmal je Bereich. Speichern schreibt
+// den ganzen Bereich und führt zurück zur Bereichsseite.
+async function zeigeKIEintrag(seiteName, zugangId) {
+  const s = KI_SEITEN[seiteName];
+  seite.innerHTML = T`${statusReiter('ki')}<p class="leer">Lädt …</p>`;
+  if (!s || !istAdmin()) { seite.innerHTML = T`${statusReiter('ki')}<div class="hinweis schlecht">Unbekannter Bereich.</div>`; return; }
+  const d = await ladeKI();
+  if (aktuell?.name !== 'kiEintrag') return;
+  const bereich = s.bereich, zurueck = T`/status/ki/${seiteName}`;
+  // Reihenfolge wie auf der Bereichsseite: aktive vor inaktiven.
+  const roh = kiAlleEintraege(d, bereich);
+  const alle = [...roh.filter((x) => !x.inaktiv), ...roh.filter((x) => x.inaktiv)];
+  const alt = alle.find((x) => x.zugang === zugangId);
+  if (!alt) { seite.innerHTML = T`${statusReiter('ki')}<div class="hinweis schlecht">${tx('Unbekannter Eintrag.')}</div><div class="leiste"><a class="btn" href="${zurueck}">Zurück</a></div>`; return; }
   const e = { ...alt, websuche: [...(alt.websuche || [])] };
-  // OpenAI ohne Modell der Auswahl: Vorgabe des Bereichs samt Preisen.
-  const auswahl = kiArt(d, d.zugaenge.find((x) => x.id === e.zugang))?.modelle?.[bereich];
+  const art = kiArt(d, d.zugaenge.find((x) => x.id === e.zugang));
+  // Feste Auswahl ohne passendes Modell: Vorgabe des Bereichs samt Preisen.
+  const auswahl = art?.modelle?.[bereich];
   if (auswahl && !auswahl.some((m) => m.id === e.modell)) { e.modell = auswahl[0].id; kiPreiseAusKatalog(d, bereich, e); }
   // Freie Modellwahl: Vorschlag des Anbieters vorbelegen.
-  const vorschlag = kiArt(d, d.zugaenge.find((x) => x.id === e.zugang))?.vorschlag?.[bereich];
-  if (!auswahl && !e.modell && vorschlag) e.modell = vorschlag;
-  // Whisper: Modell (mit Tabelle der Mittel, geladene löschen) und RAM-Haltezeit im selben Fenster.
+  if (!auswahl && !e.modell && art?.oauth === 'openrouter') e.modell = kiVorgabe(d, bereich);
+  // Auswertung und Recherche nutzen die Websuche des Anbieters immer, wenn er eine hat (kein Schalter).
+  if ((bereich === 'recherche' || bereich === 'auswertung') && art?.suche && !e.websuche.includes('anbieter')) { e.websuche.push('anbieter'); if (auswahl) kiPreiseAusKatalog(d, bereich, e); }
+  // Whisper: Modell (mit Tabelle der Mittel, geladene löschen) und RAM-Haltezeit auf derselben Seite.
   const whisper = e.zugang === 'whisper';
   const whisperFelder = () => {
     const tmp = document.createElement('div');
     tmp.innerHTML = einstellungsFormular(d.felder.filter((x) => x.key.startsWith('WHISPER_')), { assistent: false, whisper: d.whisper, whisperLoeschen: true });
     return [...tmp.querySelectorAll('form > fieldset > *:not(legend)')].map((x) => x.outerHTML).join('');
   };
-  const { dlg, male } = kiFenster(kiEintragName(d, alt), () => (whisper ? whisperFelder() : '') + kiEintragFelder(d, bereich, e), {
-    speichern: () => kiSpeichereBereich(d, bereich, kiZuSpeichern(alle.map((x) => (x.id === e.id ? { ...e, neu: false } : x))),
-      whisper ? einstellungsWerte(dlg.querySelector('form')) : {}),
+  seite.innerHTML = T`${statusReiter('ki')}${krumen([[tx('KI'), '/status/ki'], [tx(s.titel), zurueck], [kiEintragName(d, alt)]])}<h1>${esc(kiEintragName(d, alt))}</h1>
+    <form class="einstellungen" novalidate><div class="kiseiteinhalt"></div>
+      <p class="hinweis schlecht" hidden></p>
+      <div class="leiste"><button type="submit" class="btn haupt">Speichern</button><a class="btn" href="${zurueck}">Abbrechen</a></div></form>`;
+  const form = seite.querySelector('form'), koerper = form.querySelector('.kiseiteinhalt'), fehler = form.querySelector('.hinweis');
+  const male = () => { koerper.innerHTML = (whisper ? whisperFelder() : '') + kiEintragFelder(d, bereich, e); };
+  male();
+  form.addEventListener('input', (ev) => {
+    const k = ev.target.dataset.k;
+    if (k) e[k] = ['preis_ein', 'preis_aus', 'preis_minute', 'preis_suche', 'preis_bild', 'limit_monat'].includes(k) ? kiZahl(ev.target.value) : ev.target.value;
   });
-  dlg.addEventListener('click', async (ev) => {
+  form.addEventListener('change', (ev) => {
+    const t = ev.target;
+    if (t.dataset.suche) { e.websuche = [...(e.websuche.includes('anbieter') ? ['anbieter'] : []), ...[...form.querySelectorAll('[data-suche]:checked')].map((c) => c.dataset.suche)]; male(); }
+    else if (t.dataset.auswahl) { e.modell = t.dataset.auswahl; male(); }
+    else if (t.dataset.datenschutz) { e.datenschutz = t.checked; male(); }
+  });
+  // Suche und Filter der Modellwahl: nur Liste und Trefferzahl neu malen (Fokus bleibt), offline in den geladenen Daten.
+  const neuListe = () => {
+    const l = form.querySelector('.kiauswahlliste');
+    if (l) l.innerHTML = kiAuswahlListe(d, bereich, e);
+    const z = form.querySelector('.kifiltertreffer');
+    if (z) z.textContent = kiFilterTreffer(d, bereich, e);
+    return l;
+  };
+  form.addEventListener('input', (ev) => {
+    const t = ev.target;
+    if (t.dataset.kiMin) {
+      e.filter = { ...(e.filter || {}), [t.dataset.kiMin]: Number(t.value) };
+      const w = form.querySelector(`[data-ki-min-wert="${t.dataset.kiMin}"]`);
+      if (w) w.textContent = kiFilterWert(Number(t.value));
+      t.setAttribute('aria-valuetext', kiFilterWert(Number(t.value)));
+      neuListe();
+      return;
+    }
+    if (!t.dataset.kiSuche) return;
+    e.suche = t.value;
+    const l = neuListe();
+    if (l) return;
+    else if (t.dataset.k === 'modell') { e.modell = t.value.trim(); if (auswahl) kiPreiseAusKatalog(d, bereich, e); male(); }
+  });
+  form.addEventListener('click', async (ev) => {
+    if (ev.target.closest('[data-ki-filter]')) { e.filterOffen = !e.filterOffen; male(); form.querySelector('[data-ki-filter]')?.focus(); return; }
+    if (ev.target.closest('[data-ki-filter-weg]')) { e.filter = {}; male(); return; }
     const b = ev.target.closest('[data-whisper-loeschen]');
     if (!b || !confirm(tx('Modell {0} löschen? Es lässt sich später wieder laden.', b.dataset.whisperLoeschen))) return;
     b.disabled = true;
@@ -4724,14 +4939,21 @@ function kiEintragFenster(d, bereich, alle, alt) {
       male();
     } catch (f) { b.disabled = false; melde(f.message); }
   });
-  dlg.addEventListener('input', (ev) => {
-    const k = ev.target.dataset.k;
-    if (k) e[k] = ['preis_ein', 'preis_aus', 'preis_minute', 'preis_suche', 'preis_bild', 'limit_monat'].includes(k) ? kiZahl(ev.target.value) : ev.target.value;
-  });
-  dlg.addEventListener('change', (ev) => {
-    if (ev.target.dataset.suche) { e.websuche = [...dlg.querySelectorAll('[data-suche]:checked')].map((c) => c.dataset.suche); if (auswahl) kiPreiseAusKatalog(d, bereich, e); male(); }
-    else if (auswahl && ev.target.dataset.k === 'modell') { e.modell = ev.target.value; kiPreiseAusKatalog(d, bereich, e); male(); }
-  });
+  form.onsubmit = async (ev) => {
+    ev.preventDefault();
+    const knopf = form.querySelector('[type=submit]');
+    fehler.hidden = true;
+    knopf.disabled = true;
+    try {
+      const { suche: _, filter: _f, filterOffen: _o, ...eintrag } = e;
+      await kiSpeichereBereich(d, bereich, kiZuSpeichern(alle.map((x) => (x.id === e.id ? { ...eintrag, neu: false } : x))), whisper ? einstellungsWerte(form) : {});
+      geheZu(zurueck, true);
+    } catch (f) {
+      fehler.textContent = f.message;
+      fehler.hidden = false;
+      knopf.disabled = false;
+    }
+  };
 }
 
 // Ziehbare Liste: Einträge mit Maus oder Finger verschieben (Finger: am Griff sofort, sonst nach kurzem Halten, damit
@@ -4763,7 +4985,7 @@ function kiZiehbar(liste, { antippen, geaendert }) {
   });
   // Während des Ziehens darf der Finger die Seite nicht scrollen.
   liste.addEventListener('touchmove', (ev) => { if (zug?.aktiv) ev.preventDefault(); }, { passive: false });
-  // Geöffnet wird erst beim click, nicht schon beim Loslassen: sonst landet der click danach im neuen Fenster
+  // Geöffnet wird erst beim click, nicht schon beim Loslassen: sonst landet der click danach auf der neuen Seite
   // (auf dem Feld unter dem Finger) und öffnet Tastatur und Modellauswahl. Nach einem Zug wird der click verschluckt.
   let nachZug = false;
   const los = (ev) => {
@@ -4796,7 +5018,7 @@ function kiZiehbar(liste, { antippen, geaendert }) {
   });
 }
 
-// Bereichsseite: je Eintrag eine Zeile (Tippen öffnet das Fenster), Knopf Reihenfolge, übrige Werte als Zeilen mit ✎.
+// Bereichsseite: je Eintrag eine Zeile (Tippen öffnet seine Seite), Knopf Reihenfolge, übrige Werte als Zeilen mit ✎.
 async function zeigeKIBereich(seiteName) {
   const s = KI_SEITEN[seiteName];
   seite.innerHTML = T`${statusReiter('ki')}<p class="leer">Lädt …</p>`;
@@ -4811,7 +5033,7 @@ async function zeigeKIBereich(seiteName) {
     const z = d.zugaenge.find((x) => x.id === e.zugang);
     const voll = e.limit_monat && d.verbrauch[e.id] >= e.limit_monat;
     const whisperName = e.zugang === 'whisper' && (d.whisper?.modelle.find((m) => m.id === d.felder.find((x) => x.key === 'WHISPER_MODEL')?.wert)?.name);
-    const info = [whisperName || e.modell || (e.neu && KI_SONDER[e.zugang] === undefined ? tx('nicht eingerichtet') : ''), !e.neu && kiCloud(d, z) && T`${kiUSD(d.verbrauch[e.id])}${e.limit_monat ? T` ${tx('von')} ${kiUSD(e.limit_monat)}` : ''} ${tx('im Monat')}`].filter(Boolean).join(' · ');
+    const info = [whisperName || e.modell || (e.neu && KI_SONDER[e.zugang] === undefined ? tx('nicht eingerichtet') : ''), kiArt(d, z)?.oauth === 'openrouter' && e.modell && kiBewertungText(d, s.bereich, e.modell), !e.neu && kiCloud(d, z) && T`${kiUSD(d.verbrauch[e.id])}${e.limit_monat ? T` ${tx('von')} ${kiUSD(e.limit_monat)}` : ''} ${tx('im Monat')}`].filter(Boolean).join(' · ');
     return T`<li class="kireihezeile${nr ? '' : ' kiaus'}" data-i="${i}" tabindex="0" aria-label="${esc(tx('{0} – Enter öffnet, Pfeil hoch/runter verschiebt', kiEintragName(d, e)))}">
       <span class="kigriff" aria-hidden="true">⠿</span><span class="kireihetext"><span class="kizeilename">${nr ? `${nr}. ` : ''}${esc(kiEintragName(d, e))}${voll ? T` <span class="badge fehler">${tx('Limit erreicht')}</span>` : ''}</span><span class="leise">${esc(info)}</span></span>
       <span class="kizeilestift" aria-hidden="true">${STIFT}</span></li>`;
@@ -4826,6 +5048,11 @@ async function zeigeKIBereich(seiteName) {
     <p class="leise">${esc(tx(s.text))} ${tx('Der erste erledigt es; scheitert er oder ist sein Monatslimit erreicht, übernimmt der nächste. Einträge ziehen, um sie zu ordnen oder unter „Inaktiv“ abzuschalten; tippen öffnet sie.')}</p>
     ${alle.length ? T`<ol class="kireihe" id="ki-reihe">${maleReihe()}</ol>`
       : T`<p class="leise">${tx('Kein passender Anbieter')} – <a href="/status/ki/zugaenge">${tx('Anbieter anlegen')}</a></p>`}
+    ${s.bereich === 'entscheidung' && d.entscheidung_fragen ? T`<h3>${tx('Fragen an das Modell')}</h3><div class="karte konfliste">
+      <div class="konfzeile ohnehilfe"><span class="konfname">${tx('Typ')}</span><span></span><span class="konfwert">${esc(d.entscheidung_fragen.typ.map((o) => tx(o.name)).join(', '))}</span></div>
+      <div class="konfzeile ohnehilfe"><span class="konfname">${tx('Inhalt (bei Notizen)')}</span><span></span><span class="konfwert">${esc(d.entscheidung_fragen.inhalt.map((o) => tx(o.name)).join(', '))}</span></div>
+      <div class="konfzeile ohnehilfe"><span class="konfname">${tx('Liste (Notizen, Planungen)')}</span><span></span><span class="konfwert">${tx('Passt eine vorhandene Liste? Welche?')}</span></div>
+      <div class="konfzeile ohnehilfe"><span class="konfname">${tx('Planung')}</span><span></span><span class="konfwert">${tx('Setzt die Notiz eine offene Planung fort? Welche?')}</span></div></div>` : ''}
     ${felder.length ? T`<div class="karte konfliste">${felder.map((f) => T`<div class="konfzeile ohnehilfe"><span class="konfname">${esc(tx(f.name))}</span>
       <a class="konfedit" href="/status/einstellungen/${f.key}?zurueck=/status/ki/${seiteName}" aria-label="${esc(tx('{0} bearbeiten', tx(f.name)))}">${STIFT}</a><span class="konfwert">${wert(f)}</span></div>`).join('')}</div>` : ''}
     <div class="leiste"><a class="btn" href="/status/ki">Zurück</a></div>`;
@@ -4836,7 +5063,7 @@ async function zeigeKIBereich(seiteName) {
   const ol = document.getElementById('ki-reihe');
   if (ol) {
     kiZiehbar(ol, {
-      antippen: (li) => { const e = reihe[Number(li.dataset.i)]; if (e && !e.trenner) { const alle2 = stand(); kiEintragFenster(d, s.bereich, alle2, alle2.find((x) => x.id === e.id)); } },
+      antippen: (li) => { const e = reihe[Number(li.dataset.i)]; if (e && !e.trenner) geheZu(T`/status/ki/${seiteName}/${e.zugang}`); },
       geaendert: (folge) => {
         reihe.splice(0, reihe.length, ...folge.map((i) => reihe[i]));
         ol.innerHTML = maleReihe();
@@ -5859,7 +6086,7 @@ async function zeigeKosten() {
       <div class="leise">${s.anzahl} ${s.anzahl === 1 ? tx('Auftrag') : tx('Aufträge')}${s.anzahl ? ` · Ø ${usd(s.usd / s.anzahl)}` : ''}</div>
       ${s.ohne_kosten ? T`<div class="leise">${s.ohne_kosten} ohne vollständigen Betrag</div>` : ''}</div>`;
     const legende = T('<div class="legende"><span><i class="s1"></i>Notizen</span><span><i class="s2"></i>Aufgaben (Planungen)</span></div>');
-    const arten = [[tx('Recherche'), k.arten.recherche], [tx('Transkription'), k.arten.transkription], [tx('Kurztitel und Zuordnung'), k.arten.titel_zuordnung]];
+    const arten = [[tx('Auswertung der Notizen'), k.arten.auswertung], [tx('Recherche (Planungen)'), k.arten.recherche], [tx('Transkription'), k.arten.transkription], [tx('Kurztitel und Zuordnung'), k.arten.titel_zuordnung]];
     const artMax = Math.max(...arten.map((a) => a[1]), 1e-9);
     const tabelle = (tage) => T`<details><summary>Als Tabelle</summary><table class="werte"><thead><tr><th>Tag</th><th>Notizen</th><th>Aufgaben</th><th>Summe</th></tr></thead><tbody>${tage.map((t) => T`<tr><td>${esc(kurzTag(t.tag, true))}</td><td>${usd(t.diktat)}</td><td>${usd(t.planung)}</td><td>${usd(t.diktat + t.planung)}</td></tr>`).join('')}</tbody></table></details>`;
     seite.innerHTML = T`<h1>KI-Kosten</h1>
@@ -5872,6 +6099,7 @@ async function zeigeKosten() {
       <div class="karte">${legende}${saeulen(k.tage, 'd30', false)}<div class="ablesen" id="d30-wert">Säule antippen für die Werte des Tages.</div>${tabelle(k.tage.filter((t) => t.diktat + t.planung > 0))}</div>
       <h2>Wofür – 30 Tage</h2>
       <div class="karte">${arten.map(([name, v]) => T`<div class="balkenzeile"><span>${esc(name)}</span><span class="balken"><i class="${v > 0 ? '' : 'leer'}" data-anteil="${Math.round((v / artMax) * 100)}"></i></span><span class="wert">${usd(v)}</span></div>`).join('')}
+        ${k.entscheidung_usd > 0 ? T`<p class="leise">${tx('Davon Entscheidungsmodell: {0}', usd(k.entscheidung_usd))}</p>` : ''}
         <p class="leise">Kostenlimit je Rechercheauftrag: ${usd(k.limit_usd)}.</p></div>
       <h2>Je Anbieter – 30 Tage</h2>
       <p class="leise">Alle KI-Anfragen aus dem Protokoll, auch Lernlauf und Einsortieren: rohe Tokens und Kosten nach den Preisen, die bei der Anfrage galten.</p>

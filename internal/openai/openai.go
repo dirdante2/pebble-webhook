@@ -34,6 +34,16 @@ type Client struct {
 	// (Websuche, Denkaufwand, Bilder, Transkription, gemeldete Kosten).
 	Dialect string
 	Name    string // Name des Zugangs für Meldungen
+	// ZDR: nur Anbieter ohne Datenspeicherung (OpenRouter-Routing provider.zdr und data_collection deny).
+	ZDR bool
+}
+
+// zdrProvider: Routing-Vorgabe für OpenRouter bei ZDR (nil = keine).
+func (c *Client) zdrProvider() map[string]any {
+	if !c.ZDR || c.Dialect != "openrouter" {
+		return nil
+	}
+	return map[string]any{"zdr": true, "data_collection": "deny"}
 }
 
 // label: Name des Gegenübers in Fehlermeldungen.
@@ -187,6 +197,9 @@ func (c *Client) Image(ctx context.Context, model, prompt, size, quality string)
 	case "openrouter":
 		path = "/images"
 		body["response_format"], body["aspect_ratio"] = "b64_json", aspectRatio(size)
+		if p := c.zdrProvider(); p != nil {
+			body["provider"] = p
+		}
 	default:
 		return nil, nil, i18n.Errorf("%s erzeugt keine Bilder", c.label())
 	}
